@@ -6,7 +6,6 @@ export const PI_TOOL_NAMES = {
 	history: "history_*",
 	historyWindows: "history_windows",
 	historyList: "history_list",
-	historySearch: "history_search",
 	historyRead: "history_read",
 	remaining: "get_context_remaining",
 	wipe: "clear_memory",

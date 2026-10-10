@@ -18,7 +18,7 @@ const RESET_INSTRUCTIONS = "notesoup: reset to a fresh notes-only context window
 const BOOT_TOOLS = {
   notes: `${PREFIX}notes_*`, notesList: `${PREFIX}notes_list`,
   history: "history_* (unavailable in Claude)", historyWindows: "history_windows (unavailable in Claude)", historyList: "history_list (unavailable in Claude)",
-  historySearch: "history_search (unavailable in Claude)", historyRead: "history_read (unavailable in Claude)",
+  historyRead: "history_read (unavailable in Claude)",
   remaining: "get_context_remaining (unavailable in Claude)", wipe: "/clear-memory (user command; no model reset tool in Claude)",
 }
 

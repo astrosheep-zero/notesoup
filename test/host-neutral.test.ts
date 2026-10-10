@@ -12,7 +12,7 @@ import { HistoryPageItemSchema, HistoryRoleSchema, projectHistory } from "../src
 import { createNotesStore } from "../src/notes/store.js";
 import type { NotesIdentity } from "../src/notes/identity.js";
 import { notesWrite, notesUpdate, notesRead } from "../src/tools/notes.js";
-import { historyWindows, historyList, historyRead, historySearch } from "../src/tools/history.js";
+import { historyWindows, historyList, historyRead } from "../src/tools/history.js";
 import { historyRoles } from "../src/tools/schema.js";
 import { MAX_READ_WINDOW_CHARS, TOOL_OUTPUT_MAX_BYTES } from "../src/tools/output.js";
 import {
@@ -68,13 +68,13 @@ test("shared boot uses only explicit identity, loader, captured time and logical
 	});
 	assert.deepEqual(scopes, ["session", "project", "human", "agent", "model"]);
 	assert.equal(snapshot.openedAt, openedAt);
-	const tools = { notes: "memo_*", notesList: "memo_list", history: "archive_*", historyWindows: "archive_windows", historyList: "archive_list", historySearch: "archive_search", historyRead: "archive_read", remaining: "room", wipe: "forget" };
+	const tools = { notes: "memo_*", notesList: "memo_list", history: "archive_*", historyWindows: "archive_windows", historyList: "archive_list", historyRead: "archive_read", remaining: "room", wipe: "forget" };
 	const block = { agentName: notesIdentity.agent, modelName: notesIdentity.model, firstWindowId: "root", currentWindowId: "next", notes: snapshot, tools };
 	const rendered = renderBootBlock(block);
 	assert.equal(renderBootBlock(block), rendered);
 	assert.ok(rendered.includes("😀\n  checkpoint.md · 1m ago"), "a feed entry is the note's own first line over its locator");
-	assert.ok(rendered.includes("ask memo_list to try again"));
-	assert.equal(/notes_\*|notes_list|history_\*|history_list|history_search|history_read|get_context_remaining|clear_memory/.test(rendered), false);
+	assert.ok(rendered.includes("ask `memo_list` to try again"));
+	assert.equal(/notes_\*|notes_list|history_\*|history_list|history_read|get_context_remaining|clear_memory/.test(rendered), false);
 });
 
 test("the shared result module bounds both surfaces and names what a window withheld", () => {
@@ -328,11 +328,11 @@ test("shared history operations read typed events through the addresses the adap
 	assert.match(full.text, /needle output/, "the document carries the result");
 	assert.equal(full.next_offset_chars, null);
 
-	// A search offset addresses that same document, so reading from it resumes inside the result.
-	const searched = data(await historySearch.execute({ query: "NEEDLE", roles: ["tool"] }, projection));
+	// A query offset addresses that same document, so reading from it resumes inside the result.
+	const searched = data(await historyList.execute({ query: "NEEDLE", roles: ["tool"] }, projection));
 	assert.equal(searched.items.length, 1);
 	const hit = searched.items[0]!;
-	assert.ok(!('folded' in hit));
+	if ("folded" in hit) assert.fail("a query returns event rows only");
 	assert.equal(hit.seq, seq);
 	assert.ok((hit.offset_chars ?? 0) > 0);
 	const fromMatch = data(await historyRead.execute({ seq: hit.seq, offset_chars: hit.offset_chars }, projection));

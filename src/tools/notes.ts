@@ -377,7 +377,7 @@ function fitSearchFile(file: SearchFile, fits: (candidate: SearchFile) => boolea
 
 export const notesSearch = {
 	name: "notes_search", label: "Notes search",
-	description: `Search note bodies for case-insensitive literal queries (OR). Returns matching lines and body code-point offsets for notes_read. Snapshot, not pageable: more counts omitted files; matches_total is before per-file capping. pattern globs full addresses across the session and the four @ homes. ${ADDRESS_DESCRIPTION}`,
+	description: `Search note bodies for case-insensitive literal queries (OR). Returns matching lines and body code-point offsets for \`notes_read\`. Snapshot, not pageable: more counts omitted files; matches_total is before per-file capping. pattern globs full addresses across the session and the four @ homes. ${ADDRESS_DESCRIPTION}`,
 	parameters: notesSearchParameters, outputSchema: resultSchema(NotesSearchDataSchema),
 	async execute(params: Static<typeof notesSearchParameters>, identity: NotesIdentity): Promise<Outcome<NotesSearchData>> {
 		try {

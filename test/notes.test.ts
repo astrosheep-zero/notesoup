@@ -50,7 +50,7 @@ test("notes and history tools are grouped under their own namespaces", () => {
 	for (const name of ["notes_write", "notes_update", "notes_read", "notes_list", "notes_search"]) {
 		assert.equal(captured.tools.get(name)?.namespace?.name, "notes", `${name} is in notes`);
 	}
-	for (const name of ["history_windows", "history_list", "history_read", "history_search"]) {
+	for (const name of ["history_windows", "history_list", "history_read"]) {
 		assert.equal(captured.tools.get(name)?.namespace?.name, "history", `${name} is in history`);
 	}
 });

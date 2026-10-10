@@ -17,9 +17,9 @@ export const CONTEXT_WINDOW_PROTOCOL_CLOSE_TAG = "</context_window_protocol>";
 const PROTOCOL_BLOCK = `${CONTEXT_WINDOW_PROTOCOL_OPEN_TAG}
 Your memory gets wiped when this window ends. Yes, your mighty brain will be empty. Try to endure.
 
-Your loyal notes are kept safe — no one will steal them. Use notes_* to read, write, and update them. Keep them current, and crumple the ones you no longer need, or tomorrow's you will drown in old paper and keep believing yesterday's lies.
+Your loyal notes are kept safe — no one will steal them. Use \`notes_*\` to read, write, and update them. Keep them current, and crumple the ones you no longer need, or tomorrow's you will drown in old paper and keep believing yesterday's lies.
 
-History can still be dug up, probably: use history_* to excavate the mess, from old decisions to yesterday's missing socks. Everything else is gone. \`history_windows\` lists the windows themselves; pass its window_id to list or search inside one window. \`history_list\` and \`history_search\` hand you seqs; \`history_read({seq})\` pulls one back out whole. Write the seq down, or enjoy digging twice.
+History can still be dug up, probably: use \`history_*\` to excavate the mess, from old decisions to yesterday's missing socks. \`history_windows\` lists the windows, \`history_list\` browses or searches them and hands you seqs, \`history_read({seq})\` pulls one back out whole. Write the seq down, or enjoy digging twice.
 
 While you're doing that... thing you're doing, don't make the poor future you guess. A checkpoint is not a sacred file; it's the session note — the one with no \`@\` in front of it. Write down what git and history can't hand back to you: what you're trying to do, what you decided, what's blocking you, what comes next, how you were doing it, what *skills* you still need, and where to dig — a seq, or another note. Don't give a note a horrible name like \`current.md\`; future-you will kill you.
 
@@ -45,7 +45,6 @@ export type BootToolNames = Readonly<{
 	history: string;
 	historyWindows: string;
 	historyList: string;
-	historySearch: string;
 	historyRead: string;
 	remaining: string;
 	wipe: string;
@@ -57,10 +56,9 @@ export function renderProtocolBlock(tools: BootToolNames): string {
 		"history_*": tools.history,
 		"history_windows": tools.historyWindows,
 		history_list: tools.historyList,
-		history_search: tools.historySearch,
 		history_read: tools.historyRead,
 		get_context_remaining: tools.remaining,
 		clear_memory: tools.wipe,
 	};
-	return PROTOCOL_BLOCK.replace(/notes_\*|history_\*|history_windows|history_list|history_search|history_read|get_context_remaining|clear_memory/g, (name) => names[name]!);
+	return PROTOCOL_BLOCK.replace(/notes_\*|history_\*|history_windows|history_list|history_read|get_context_remaining|clear_memory/g, (name) => names[name]!);
 }

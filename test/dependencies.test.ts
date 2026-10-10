@@ -101,7 +101,7 @@ test("configured extension source and moved dream CLI are executable current ent
 		registerTool(tool: ToolDefinition) { tools.push(tool); },
 		registerCommand(name: string) { commands.push(name); },
 	} as unknown as ExtensionAPI);
-	assert.deepEqual(tools.map((tool) => tool.name).sort(), ["clear_memory", "get_context_remaining", "history_list", "history_read", "history_search", "history_windows", "notes_list", "notes_read", "notes_search", "notes_update", "notes_write"]);
+	assert.deepEqual(tools.map((tool) => tool.name).sort(), ["clear_memory", "get_context_remaining", "history_list", "history_read", "history_windows", "notes_list", "notes_read", "notes_search", "notes_update", "notes_write"]);
 	assert.deepEqual(commands.sort(), ["clear-memory", "cm", "notesoup"]);
 	const help = execFileSync(process.execPath, [resolve(root, manifest.bin.dream), "--help"], { cwd: root, encoding: "utf8" });
 	assert.ok(help.startsWith("dream doctor [--notes-home <dir>]"));

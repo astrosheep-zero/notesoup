@@ -60,7 +60,7 @@ function notesIndex(snapshot: NotesSnapshot, tools: BootToolNames): string {
 	const shelves: string[] = [];
 	for (const home of homes) {
 		if (snapshot.unavailable.some((failed) => failed.scope === home.scope)) {
-			shelves.push(section(home.label, indent(`This drawer wouldn't open — ask ${tools.notesList} to try again.`)));
+			shelves.push(section(home.label, indent(`This drawer wouldn't open — ask \`${tools.notesList}\` to try again.`)));
 			continue;
 		}
 		const rows = rowsFor(snapshot, home.scope).filter((row) => row.meta.crumpledAt === undefined);

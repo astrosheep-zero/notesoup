@@ -1,6 +1,6 @@
 ---
 name: memory
-description: How notesoup's notes_* and history_* tools fit together — note addresses and homes, finding things again, and saving recovery state. Use when the context-window protocol is missing or unclear, or when unsure where a note belongs or how to find something again.
+description: How notesoup's `notes_*` and `history_*` tools fit together — note addresses and homes, finding things again, and saving recovery state. Use when the context-window protocol is missing or unclear, or when unsure where a note belongs or how to find something again.
 ---
 
 # Memory
@@ -35,8 +35,8 @@ Write only what git and history cannot give back. Crumple notes that are no long
 ## Finding things again
 
 - **A note**: `notes_list` with a `pattern` when you know roughly where it lives, `notes_search` when you know a phrase; then `notes_read` the address.
-- **Something that happened**: `history_search` for a phrase, or `history_list` to browse recent events; then `history_read` the seq for the whole event.
-- **An earlier window**: `history_windows` gives window ids; pass one as `window_id` to list or search inside it.
+- **Something that happened**: `history_list` to browse or search this session's events; `history_read` the seq for the whole event.
+- **An earlier window**: `history_windows` gives window ids; pass one as `window_id` to `history_list`.
 
 Seqs are stable. Write the useful ones into a note so they need not be found twice.
 
@@ -50,7 +50,7 @@ Before a long or risky step, or when room runs low, keep one session note named 
 - how the work was being done, and which skills are still needed
 - where to dig: seqs, note addresses, files
 
-`get_context_remaining` reports the room left. `wipe_memory` starts a fresh window, so save the note first.
+`get_context_remaining` reports the room left. `clear_memory` starts a fresh window, so save the note first.
 
 ## When a tool is missing or refuses
 

@@ -31,20 +31,22 @@ pi -e npm:notesoup
 - **Durable context windows.** `/clear-memory` (alias `/cm`) clears and stops; `/cm Continue reviewing the implementation` clears and continues. The model can also request a window itself with `clear_memory`, and a budget close-out fires automatically before the window runs out. Abort and ordinary errors never count as completion; the raw conversation stays in the session, just out of the next context.
 - **A boot block at every window head.** Static once-per-window content (cache-stable) with the window identity, the recent-notes index, and a short protocol teaching the model how to recover: notes for its own bookkeeping, history tools for everything before the reset.
 - **`get_context_remaining`** — the live countdown to the close-out line, so the agent can see the cliff before it drives off it.
-- **Nine history/notes tools**, flattened from the original Codex actions:
+- **Eight history/notes tools**, flattened from the original Codex actions:
 
 | Codex action | Pi tool |
 | --- | --- |
 | `history.list_windows` | `history_windows` |
 | `history.list_items` | `history_list` |
 | `history.read_item` | `history_read` |
-| `history.search_contents` | `history_search` |
+| `history.search_contents` | `history_list` (`query`) |
 | `notes.write` | `notes_write` |
 | `notes.update` | `notes_update` |
 | `notes.rename` | `notes_update` (`rename_to`) |
 | `notes.read` | `notes_read` |
 | `notes.list` | `notes_list` |
 | `notes.search` | `notes_search` |
+
+- **Migration**: `history_search` is gone; pass `query` to `history_list`.
 
 - **Runtime toggle** — `/notesoup off` stops new automatic resets; `/notesoup on` re-enables them; bare `/notesoup` reports the state.
 

@@ -260,11 +260,11 @@ export function unknownWindowId(projection: HistoryProjection, params: HistoryFi
 	return known.includes(params.window_id) ? undefined : { message: `unknown window_id "${params.window_id}"`, known };
 }
 
-/** Default list is a conversation; explicit roles and search show the requested events. */
-export function filteredItems(projection: HistoryProjection, params: HistoryFilter, mode: "list" | "search"): HistoryEvent[] {
+/** Without roles or query a call shows the conversation; either one shows the requested events. */
+export function filteredItems(projection: HistoryProjection, params: HistoryFilter, conversation: boolean): HistoryEvent[] {
 	let items = allItems(projection);
 	if (typeof params.window_id === "string") items = items.filter((item) => item.windowId === params.window_id);
 	if (params.roles) items = items.filter((item) => params.roles!.includes(item.role));
-	if (!params.roles && mode === "list") items = items.filter((item) => (item.role === "user" || item.role === "assistant") && eventDocument(item) !== "");
+	if (!params.roles && conversation) items = items.filter((item) => (item.role === "user" || item.role === "assistant") && eventDocument(item) !== "");
 	return items.sort((a, b) => a.seq - b.seq);
 }

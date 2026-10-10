@@ -70,7 +70,7 @@ test("custom reset marker removes old provider context while history remains sea
 	assert.ok(oldSeq);
 	const read = resultRead(await call(captured, "history_read", { seq: oldSeq }, ctx));
 	assert.match(read.content, /OLD-UNIQUE-TRANSCRIPT/);
-	const found = resultData<{ items: Array<{ seq: number }> }>(await call(captured, "history_search", { query: "needle" }, ctx));
+	const found = resultData<{ items: Array<{ seq: number }> }>(await call(captured, "history_list", { query: "needle" }, ctx));
 	assert.equal(found.items.length, 1);
 	assert.equal(found.items[0]?.seq, oldSeq);
 });

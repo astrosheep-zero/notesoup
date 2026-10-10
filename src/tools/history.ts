@@ -1,23 +1,10 @@
 /** Host-neutral history operations: one bounded payload for text and structured results. */
 import { Type, type Static } from "typebox";
-import { DEFAULT_READ_WINDOW_CHARS, MAX_READ_WINDOW_CHARS, earliestMatchOffsetChars, HISTORY_PREVIEW_CHARS } from "./output.js";
+import { DEFAULT_READ_WINDOW_CHARS, MAX_READ_WINDOW_CHARS, HISTORY_PREVIEW_CHARS } from "./output.js";
 import { failure, fitsResult, resultSchema, readTextWindow, renderOutcome, renderTextWindow, success, TextWindowSchema, type Operation, type Outcome } from "./result.js";
-import { historyRoles, InvalidQueryError, searchQueries, searchQuery } from "./schema.js";
-import { HistoryPageSchema, HistorySearchPageSchema, isConversationView, selectPage, type HistoryPage } from "../history/query.js";
-import { allItems, eventDocument, toolSummary, filteredItems, HistoryRoleSchema, ToolSummarySchema, type HistoryFilter, type HistoryFoldedRow, type HistoryPageItem, type HistoryProjection, unknownWindowId } from "../history/history.js";
-
-const HistoryWindowsDataSchema = Type.Object({
-	session_id: Type.String(),
-	windows: Type.Array(Type.Object({
-		window_id: Type.String(),
-		created_at: Type.Union([Type.String(), Type.Null()]),
-		first_seq: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),
-		last_seq: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),
-		item_count: Type.Integer({ minimum: 0 }),
-	}, { additionalProperties: false }), { description: "Oldest first." }),
-	more: Type.Integer({ minimum: 0, description: "Omitted windows; history_list also supplies window ids." }),
-}, { additionalProperties: false });
-type HistoryWindowsData = Static<typeof HistoryWindowsDataSchema>;
+import { historyRoles, searchQuery } from "./schema.js";
+import { HistoryPageSchema, selectPage, type HistoryPage } from "../history/query.js";
+import { allItems, eventDocument, toolSummary, HistoryRoleSchema, ToolSummarySchema, type HistoryFilter, type HistoryFoldedRow, type HistoryPageItem, type HistoryProjection, unknownWindowId } from "../history/history.js";
 
 /** One read: identity, tool summary and a flat document slice. */
 const HistoryReadDataSchema = Type.Object({
@@ -29,6 +16,19 @@ const HistoryReadDataSchema = Type.Object({
 	...TextWindowSchema.properties,
 }, { additionalProperties: false });
 type HistoryReadData = Static<typeof HistoryReadDataSchema>;
+
+const HistoryWindowsDataSchema = Type.Object({
+	session_id: Type.String(),
+	windows: Type.Array(Type.Object({
+		window_id: Type.String(),
+		created_at: Type.Union([Type.String(), Type.Null()]),
+		first_seq: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),
+		last_seq: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),
+		item_count: Type.Integer({ minimum: 0 }),
+	}, { additionalProperties: false }), { description: "Oldest first." }),
+	more: Type.Integer({ minimum: 0, description: "Omitted windows; `history_list` also supplies window ids." }),
+}, { additionalProperties: false });
+type HistoryWindowsData = Static<typeof HistoryWindowsDataSchema>;
 
 /* ------------------------------------------------------------------ rendering */
 
@@ -61,7 +61,7 @@ function isFoldedRow(item: HistoryPageItem | HistoryFoldedRow): item is HistoryF
 function renderFoldedRow(row: HistoryFoldedRow): string {
 	const tools = Object.entries(row.tools).map(([name, count]) => `${name} ${count}`).join(", ");
 	const omitted = row.omitted_tools ? ` | ${row.omitted_tools} distinct tool names omitted` : "";
-	const expand = `\n\t→ expand: {"after":${row.first_seq - 1},"before":${row.last_seq + 1},"roles":["tool","context"]}`;
+	const expand = `\n\t→ expand: {"after":${row.first_seq - 1},"before":${row.last_seq + 1},"order":"oldest","roles":["tool","context"]}`;
 	return `seqs ${row.first_seq}-${row.last_seq} | folded ${row.count} events${tools ? ` | ${tools}` : ""}${omitted}${expand}`;
 }
 
@@ -70,15 +70,16 @@ function renderPage(page: HistoryPage): string {
 	if (page.items.length === 0) return "no events match this selection";
 	const body = page.items.map((item) => (isFoldedRow(item) ? renderFoldedRow(item) : renderPageItem(item))).join("\n\n");
 	const cursors = [
-		page.older_before === null ? "" : `→ older: {"before":${page.older_before}}`,
-		page.newer_after === null ? "" : `→ newer: {"after":${page.newer_after}}`,
+		page.page_older === null ? "" : `→ older: ${JSON.stringify(page.page_older)}`,
+		page.page_newer === null ? "" : `→ newer: ${JSON.stringify(page.page_newer)}`,
 	].filter((line) => line !== "");
 	return cursors.length === 0 ? body : `${body}\n\n${cursors.join(" | ")}`;
 }
 
 function renderRead(data: HistoryReadData): string {
 	const tool = toolHeader(data);
-	const neighborhood = `neighborhood → history_list({"after":${Math.max(0, data.seq - 10)},"before":${data.seq + 10}})`;
+	const after = data.seq - 10;
+	const neighborhood = `neighborhood → \`history_list\`(${JSON.stringify({ ...(after >= 1 ? { after } : {}), before: data.seq + 10 })})`;
 	return [header(data), ...(tool ? [tool] : []), neighborhood, "", renderTextWindow(data)].join("\n");
 }
 
@@ -139,32 +140,34 @@ export const historyWindows: Operation<typeof historyWindowsParameters, HistoryW
 			data.windows.push(row);
 			data.more--;
 		}
-		return fits(data) ? success(data) : failure("output_too_large", "The session identity does not fit one history_windows response.");
+		return fits(data) ? success(data) : failure("output_too_large", "The session identity does not fit one `history_windows` response.");
 	},
 	render: (result) => renderOutcome(result, renderWindows),
 };
 
 function renderWindows(data: HistoryWindowsData): string {
 	const lines = [`session ${data.session_id}`, ...data.windows.map((window) => `window ${window.window_id} | seqs ${window.first_seq ?? "-"}-${window.last_seq ?? "-"} | ${window.item_count} events`)];
-	if (data.more > 0) lines.push(`${data.more} more windows not shown; history_list also reports window ids on events`);
+	if (data.more > 0) lines.push(`${data.more} more windows not shown; \`history_list\` also reports window ids on events`);
 	return lines.join("\n");
 }
 
 /* ------------------------------------------------------------------ history_list */
 
 export const historyListParameters = Type.Object({
-	limit: Type.Optional(Type.Integer({ description: "Optional. Maximum visible items per page; folded rows do not count. Default 20." })),
+	query: Type.Optional(searchQuery("Optional. Case-insensitive literal, or an array of literals (OR), matched across all roles including tool arguments and output. Returns only hits; each preview starts at its match.")),
 	roles: historyRoles(),
-	before: Type.Optional(Type.Integer({ description: "Optional. Upper bound: only events with seq strictly below this. Together with after, selects the events strictly between the two." })),
-	after: Type.Optional(Type.Integer({ description: "Optional. Lower bound: only events with seq strictly above this. Together with before, selects the events strictly between the two." })),
-	window_id: Type.Optional(Type.String({ minLength: 1, description: `Optional. Limit to one context window. Values come from history_windows or any event; "${PREVIOUS_WINDOW}" names the window before the current one.` })),
-	max_chars_per_item: Type.Optional(Type.Integer({ description: `Optional. Maximum preview characters per item (default ${HISTORY_PREVIEW_CHARS}); use history_read for full content.` })),
+	before: Type.Optional(Type.Integer({ minimum: 1, description: "Optional. Upper bound: only events with seq strictly below this." })),
+	after: Type.Optional(Type.Integer({ minimum: 1, description: "Optional. Lower bound: only events with seq strictly above this." })),
+	order: Type.Optional(Type.Union([Type.Literal("newest"), Type.Literal("oldest")], { description: "Optional. Which end limit counts from: newest (default) or oldest. Items are always ascending by seq." })),
+	window_id: Type.Optional(Type.String({ minLength: 1, description: `Optional. Limit to one context window. Values come from \`history_windows\` or any event; "${PREVIOUS_WINDOW}" names the window before the current one.` })),
+	limit: Type.Optional(Type.Integer({ description: "Optional. Maximum visible items per page; folded rows do not count. Default 20." })),
+	max_chars_per_item: Type.Optional(Type.Integer({ description: `Optional. Maximum preview characters per item (default ${HISTORY_PREVIEW_CHARS}); use \`history_read\` for full content.` })),
 }, { additionalProperties: false });
 
 export const historyList: Operation<typeof historyListParameters, HistoryPage, [HistoryProjection]> = {
 	name: "history_list",
 	label: "History list items",
-	description: "List session-history events in pages, ascending within a page. With no before/after, returns the newest page (the last `limit` events). before/after are strict bounds; together they select the events strictly between. Omit roles for the conversation view: user/assistant shown, tool/context folded into rows that print their own expand recipe. The footer prints the exact calls to page older or newer. Read full events by seq with history_read.",
+	description: "Browse or search this session's events a page at a time. The footer prints the next call; read one event in full with `history_read`.",
 	parameters: historyListParameters,
 	outputSchema: resultSchema(HistoryPageSchema),
 	async execute(params, projection) {
@@ -173,8 +176,7 @@ export const historyList: Operation<typeof historyListParameters, HistoryPage, [
 		const scoped = { ...params, window_id: resolved.window_id };
 		const badWindow = badWindowId(projection, scoped);
 		if (badWindow) return badWindow;
-		const items = filteredItems(projection, scoped, "list");
-		return selectPage(projection, scoped, items.map((event) => ({ event })), isConversationView(scoped), pageFits, scoped.max_chars_per_item ?? HISTORY_PREVIEW_CHARS);
+		return selectPage(projection, scoped, pageFits, scoped.max_chars_per_item ?? HISTORY_PREVIEW_CHARS);
 	},
 	render: (result) => renderOutcome(result, renderPage),
 };
@@ -182,7 +184,7 @@ export const historyList: Operation<typeof historyListParameters, HistoryPage, [
 /* ------------------------------------------------------------------ history_read */
 
 export const historyReadParameters = Type.Object({
-	seq: Type.Integer({ minimum: 1, description: "Event address from history_list/search." }),
+	seq: Type.Integer({ minimum: 1, description: "Event address from `history_list`." }),
 	offset_chars: Type.Optional(Type.Integer({ description: "Code-point offset (default 0); negative counts from EOF." })),
 	limit_chars: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_READ_WINDOW_CHARS, description: `Max code points (default ${DEFAULT_READ_WINDOW_CHARS}); also bounded by output bytes.` })),
 }, { additionalProperties: false });
@@ -190,7 +192,7 @@ export const historyReadParameters = Type.Object({
 export const historyRead: Operation<typeof historyReadParameters, HistoryReadData, [HistoryProjection]> = {
 	name: "history_read",
 	label: "History read item",
-	description: "Read an event document by seq with a tool summary. Arguments, output and nested-call evidence are in the pageable text. Pass next_offset_chars as offset_chars until null. The footer prints a history_list call for the surrounding events.",
+	description: "Read an event document by seq with a tool summary. Arguments, output and nested-call evidence are in the pageable text. Pass next_offset_chars as offset_chars until null. The footer prints a `history_list` call for the surrounding events.",
 	parameters: historyReadParameters,
 	outputSchema: resultSchema(HistoryReadDataSchema),
 	async execute(params, projection) {
@@ -231,43 +233,4 @@ export const historyRead: Operation<typeof historyReadParameters, HistoryReadDat
 		);
 	},
 	render: (result) => renderOutcome(result, renderRead),
-};
-
-/* ------------------------------------------------------------------ history_search */
-
-export const historySearchParameters = Type.Object({
-	query: searchQuery(),
-	limit: Type.Optional(Type.Integer({ description: "Optional. Maximum matching items returned." })),
-	roles: historyRoles(),
-	before: Type.Optional(Type.Integer({ description: "Optional. Upper bound: only events with seq strictly below this. Together with after, selects the events strictly between the two." })),
-	after: Type.Optional(Type.Integer({ description: "Optional. Lower bound: only events with seq strictly above this. Together with before, selects the events strictly between the two." })),
-	window_id: Type.Optional(Type.String({ minLength: 1, description: `Optional. Limit to one context window. Values come from history_windows or any event; "${PREVIOUS_WINDOW}" names the window before the current one.` })),
-	max_chars_per_item: Type.Optional(Type.Integer({ description: `Optional. Maximum preview characters per item (default ${HISTORY_PREVIEW_CHARS}); use history_read for full content.` })),
-}, { additionalProperties: false });
-
-export const historySearch: Operation<typeof historySearchParameters, HistoryPage, [HistoryProjection]> = {
-	name: "history_search",
-	label: "History search",
-	description: "Search session events for case-insensitive literal queries (OR), including tool arguments/output and nested calls. Defaults to all roles; no folded rows. Read a hit with its seq and offset_chars. before/after are strict bounds; the footer prints the exact calls to page older or newer.",
-	parameters: historySearchParameters,
-	outputSchema: resultSchema(HistorySearchPageSchema),
-	async execute(params, projection) {
-		const resolved = resolveWindowId(projection, params.window_id);
-		if (!resolved.ok) return resolved.outcome;
-		const scoped = { ...params, window_id: resolved.window_id };
-		const badWindow = badWindowId(projection, scoped);
-		if (badWindow) return badWindow;
-		let queries: string[];
-		try {
-			queries = searchQueries(scoped.query);
-		} catch (error) {
-			if (error instanceof InvalidQueryError) return failure("invalid_query", error.message);
-			throw error;
-		}
-		const matches = filteredItems(projection, scoped, "search")
-			.map((event) => ({ event, matchOffset: earliestMatchOffsetChars(eventDocument(event), queries) }))
-			.filter((candidate) => candidate.matchOffset >= 0);
-		return selectPage(projection, scoped, matches, false, pageFits, scoped.max_chars_per_item ?? HISTORY_PREVIEW_CHARS);
-	},
-	render: (result) => renderOutcome(result, renderPage),
 };

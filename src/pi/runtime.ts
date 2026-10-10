@@ -56,7 +56,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 		if (snapshot.unavailable.length === 0 || incompleteNotesNotified.has(windowId)) return;
 		incompleteNotesNotified.add(windowId);
 		const homes = snapshot.unavailable.map((home) => home.label).join(", ");
-		ctx.ui.notify(`notesoup: notes index incomplete for ${homes}; notes_list can retry after recovery.`, "warning");
+		ctx.ui.notify(`notesoup: notes index incomplete for ${homes}; \`notes_list\` can retry after recovery.`, "warning");
 	};
 	const budget = registerBudget(pi, () => enabled, settingsManager, (windowId) => resets.closeOut(windowId, "automatic"));
 
