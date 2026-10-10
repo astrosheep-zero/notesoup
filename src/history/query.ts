@@ -3,7 +3,7 @@ import { Type, type Static } from "typebox";
 import { failure, success, type Outcome } from "../tools/result.js";
 import { earliestMatchOffsetChars, prefixFit } from "../tools/output.js";
 import { InvalidQueryError, searchQueries } from "../tools/schema.js";
-import { allItems, eventDocument, filteredItems, visibleItem, HistoryFoldedRowSchema, HistoryPageItemSchema, MAX_FOLD_TOOL_NAMES, MAX_FOLD_TOOL_NAME_CHARS, type HistoryEvent, type HistoryFilter, type HistoryFoldedRow, type HistoryPageItem, type HistoryProjection } from "./history.js";
+import { allItems, eventDocument, filteredItems, inSelection, visibleItem, HistoryFoldedRowSchema, HistoryPageItemSchema, MAX_FOLD_TOOL_NAMES, MAX_FOLD_TOOL_NAME_CHARS, type HistoryEvent, type HistoryFilter, type HistoryFoldedRow, type HistoryPageItem, type HistoryProjection } from "./history.js";
 
 type PageRow = HistoryPageItem | HistoryFoldedRow;
 type Candidate = { event: HistoryEvent; matchOffset?: number; preview?: HistoryPageItem };
@@ -12,17 +12,48 @@ type Candidate = { event: HistoryEvent; matchOffset?: number; preview?: HistoryP
 export type HistoryOrder = "newest" | "oldest";
 
 /**
- * What one list call selects. Bounds choose a range; `order` chooses the end `limit` counts from;
- * a `query` keeps only matching events, across every role, with no folded rows.
+ * What one list call selects. `before`/`after` choose a seq range and `since`/`until` a time range;
+ * `order` chooses the end `limit` counts from; a `query` keeps only matching events, across every
+ * role, with no folded rows.
  */
 export type HistorySelection = HistoryFilter & {
-	before?: number;
-	after?: number;
 	order?: HistoryOrder;
 	limit?: number;
 	query?: string | string[];
+	since?: string;
+	until?: string;
 	max_chars_per_item?: number;
 };
+
+/** ISO 8601 date or date-time; the offset is optional (group 1) and a missing one is read as UTC. */
+const ISO_8601 = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?(Z|[+-]\d{2}:?\d{2})?$/;
+
+/** Epoch ms for one ISO 8601 value, with a missing offset read as UTC. */
+function isoUtcMs(value: string): number | undefined {
+	const match = ISO_8601.exec(value);
+	if (match === null) return undefined;
+	const at = Date.parse(match[1] === undefined ? `${value}Z` : value);
+	return Number.isNaN(at) ? undefined : at;
+}
+
+/** Epoch ms for one optional time param, or a refusal naming it. */
+function timeBound(name: "since" | "until", value: string | undefined): Outcome<number | undefined> {
+	if (value === undefined) return success(undefined);
+	const at = isoUtcMs(value);
+	return at === undefined ? failure("invalid_time", `${name} is not an ISO 8601 timestamp: "${value}"`, { [name]: value }) : success(at);
+}
+
+/** Parse `since`/`until`; a malformed or inverted pair refuses here. */
+function resolveTimeBounds(params: HistorySelection): Outcome<{ sinceMs?: number; untilMs?: number }> {
+	const since = timeBound("since", params.since);
+	if (!since.ok) return since;
+	const until = timeBound("until", params.until);
+	if (!until.ok) return until;
+	if (since.data !== undefined && until.data !== undefined && since.data >= until.data) {
+		return failure("invalid_time", "since must be earlier than until", { since: params.since, until: params.until });
+	}
+	return success({ ...(since.data === undefined ? {} : { sinceMs: since.data }), ...(until.data === undefined ? {} : { untilMs: until.data }) });
+}
 
 /** The params to merge into the previous call to continue toward older events. */
 export const HistoryOlderSchema = Type.Object({
@@ -101,16 +132,11 @@ function pageCursors(vis: HistoryEvent[], selected: HistoryEvent[], before: numb
 }
 
 function foldRows(projection: HistoryProjection, params: HistorySelection, selected: HistoryEvent[], cursors: Pick<HistoryPage, "page_older" | "page_newer">): HistoryFoldedRow[] {
-	const lower = params.after ?? 0;
-	const upper = params.before ?? Number.POSITIVE_INFINITY;
 	if (selected.length === 0) {
 		// Even a range with no conversation can contain tool/context events.
-		const hidden = allItems(projection).filter((event) => (typeof params.window_id !== "string" || params.window_id === event.windowId) && event.seq > lower && event.seq < upper && isFoldableEvent(event));
-		return foldedRuns(hidden);
+		return foldedRuns(allItems(projection).filter((event) => inSelection(event, params) && isFoldableEvent(event)));
 	}
-	const windowEvents = allItems(projection)
-		.filter((event) => (typeof params.window_id !== "string" || params.window_id === event.windowId) && event.seq > lower && event.seq < upper)
-		.sort((a, b) => a.seq - b.seq);
+	const windowEvents = allItems(projection).filter((event) => inSelection(event, params)).sort((a, b) => a.seq - b.seq);
 	const folded: HistoryFoldedRow[] = [];
 	const firstSeq = selected[0]!.seq;
 	const lastSeq = selected.at(-1)!.seq;
@@ -159,37 +185,41 @@ function selectionCandidates(projection: HistoryProjection, params: HistorySelec
 
 /**
  * Take the limit from the end `order` names, starting there so a budget for one row keeps the most
- * important row. Bounds select a range; they never state a direction.
+ * important row. The selection is already filtered to its range; `order` never states a direction.
  */
 function orderedCandidates(vis: Candidate[], params: HistorySelection, limit: number): Candidate[] {
-	const ascending = [...vis]
-		.sort((a, b) => a.event.seq - b.event.seq)
-		.filter((candidate) => (params.after === undefined || candidate.event.seq > params.after) && (params.before === undefined || candidate.event.seq < params.before));
+	const ascending = [...vis].sort((a, b) => a.event.seq - b.event.seq);
 	const selected = params.order === "oldest" ? ascending.slice(0, limit) : ascending.slice(-limit);
 	return params.order === "oldest" ? selected : selected.reverse();
 }
 
-/** Grow the page in selection order; shorten the first preview only when no full row fits. */
+/**
+ * Resolve the time bounds once, then filter and fold against the same [sinceMs, untilMs) window.
+ * Grow the page in selection order; shorten the first preview only when no full row fits.
+ */
 export function selectPage(projection: HistoryProjection, params: HistorySelection, fits: (page: HistoryPage) => boolean, maxChars: number): Outcome<HistoryPage> {
-	const candidates = selectionCandidates(projection, params);
+	const bounds = resolveTimeBounds(params);
+	if (!bounds.ok) return bounds;
+	const scoped = { ...params, ...bounds.data };
+	const candidates = selectionCandidates(projection, scoped);
 	if (!candidates.ok) return candidates;
 	const vis = candidates.data;
-	const limit = params.limit ?? 20;
-	const folds = foldsRuns(params);
-	const ordered = orderedCandidates(vis, params, limit);
+	const limit = scoped.limit ?? 20;
+	const folds = foldsRuns(scoped);
+	const ordered = orderedCandidates(vis, scoped, limit);
 	const allVisible = vis.map((candidate) => candidate.event).sort((a, b) => a.seq - b.seq);
 	const kept: Candidate[] = [];
 	for (const candidate of ordered) {
-		if (fits(pageData(projection, params, allVisible, [...kept, candidate], maxChars, folds))) {
+		if (fits(pageData(projection, scoped, allVisible, [...kept, candidate], maxChars, folds))) {
 			kept.push(candidate);
 			continue;
 		}
-		if (kept.length === 0) kept.push({ ...candidate, preview: truncateHistoryItem(visibleItem(candidate.event, maxChars, candidate.matchOffset), (preview) => fits(pageData(projection, params, allVisible, [{ ...candidate, preview }], maxChars, folds))) });
+		if (kept.length === 0) kept.push({ ...candidate, preview: truncateHistoryItem(visibleItem(candidate.event, maxChars, candidate.matchOffset), (preview) => fits(pageData(projection, scoped, allVisible, [{ ...candidate, preview }], maxChars, folds))) });
 		break;
 	}
-	const page = pageData(projection, params, allVisible, kept, maxChars, folds);
+	const page = pageData(projection, scoped, allVisible, kept, maxChars, folds);
 	if (!fits(page)) {
-		return failure("page_too_large", `${page.items.length} history rows and their fold summary do not fit one response even at their smallest; narrow the range with before/after or read one seq`, { rows: page.items.length });
+		return failure("page_too_large", `${page.items.length} history rows and their fold summary do not fit one response even at their smallest; narrow with before/after or since/until, or read one seq`, { rows: page.items.length });
 	}
 	return success(page);
 }

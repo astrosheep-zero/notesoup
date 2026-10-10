@@ -45,7 +45,8 @@ export type HistoryWindow = { windowId: string; createdAt?: string; items: Histo
 
 /** Paired result seqs stay on the branch but redirect readers to the call's event. */
 export type HistoryProjection = { windows: HistoryWindow[]; highestSeq: number; branchSeqs: Set<number>; pairedResults: Map<number, number> };
-export type HistoryFilter = { window_id?: string | null; roles?: HistoryRole[] | null };
+/** The filters one selection applies before paging: as-given window and roles, seq bounds, and parsed epoch-ms time bounds. */
+export type HistoryFilter = { window_id?: string | null; roles?: HistoryRole[] | null; after?: number; before?: number; sinceMs?: number; untilMs?: number };
 
 /** Native entries after the adapter allocates seqs and selects the active branch. */
 export type DecodedHistoryItem = {
@@ -260,10 +261,24 @@ export function unknownWindowId(projection: HistoryProjection, params: HistoryFi
 	return known.includes(params.window_id) ? undefined : { message: `unknown window_id "${params.window_id}"`, known };
 }
 
+/**
+ * Whether one event is inside the selection: its window, its seq bounds, and a half-open
+ * [sinceMs, untilMs) window on created_at. A bounded time window drops events with no recorded
+ * time or a time that cannot be read.
+ */
+export function inSelection(event: HistoryEvent, params: HistoryFilter): boolean {
+	if (typeof params.window_id === "string" && params.window_id !== event.windowId) return false;
+	if (params.after !== undefined && event.seq <= params.after) return false;
+	if (params.before !== undefined && event.seq >= params.before) return false;
+	if (params.sinceMs === undefined && params.untilMs === undefined) return true;
+	if (event.createdAt === undefined) return false;
+	const at = Date.parse(event.createdAt);
+	return !Number.isNaN(at) && (params.sinceMs === undefined || at >= params.sinceMs) && (params.untilMs === undefined || at < params.untilMs);
+}
+
 /** Without roles or query a call shows the conversation; either one shows the requested events. */
 export function filteredItems(projection: HistoryProjection, params: HistoryFilter, conversation: boolean): HistoryEvent[] {
-	let items = allItems(projection);
-	if (typeof params.window_id === "string") items = items.filter((item) => item.windowId === params.window_id);
+	let items = allItems(projection).filter((item) => inSelection(item, params));
 	if (params.roles) items = items.filter((item) => params.roles!.includes(item.role));
 	if (!params.roles && conversation) items = items.filter((item) => (item.role === "user" || item.role === "assistant") && eventDocument(item) !== "");
 	return items.sort((a, b) => a.seq - b.seq);

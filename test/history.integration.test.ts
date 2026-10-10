@@ -73,6 +73,10 @@ test("history_list exposes bounded paging, order and a literal query, while note
 	assert.equal(properties.custom_type, undefined);
 	assert.equal(properties.cursor, undefined);
 	assert.deepEqual(properties.roles?.items?.anyOf?.map((item) => item.const), ["user", "assistant", "tool", "context"], "the role filter carries the four public roles");
+	assert.ok(properties.since, "the time filter has a since param");
+	assert.ok(properties.until, "the time filter has an until param");
+	assert.equal(Check(listSchema, { since: "2026-10-10", until: "2026-10-10T06:00:00Z" }), true);
+	assert.equal(Check(listSchema, { since: "" }), false, "an empty time value is refused by the schema");
 	assert.equal(Check(listSchema, { query: "needle", order: "oldest", roles: ["tool"] }), true);
 	assert.equal(Check(listSchema, { order: "recent" }), false);
 	assert.equal(Check(listSchema, { query: "" }), true, "an empty literal is schema-valid; the operation refuses it as invalid_query");
@@ -200,6 +204,55 @@ test("a one-row page budget admits the newest candidate first", () => {
 	assert.deepEqual(keptSeqs(1), [3], "a budget for one row admits the newest candidate, not the oldest");
 	assert.deepEqual(keptSeqs(2), [2, 3], "a truncated prefix is the newest rows, delivered in chronological order");
 	assert.deepEqual(keptSeqs(1, "oldest"), [1], "order oldest keeps the other end when the budget is short");
+});
+
+test("since and until select a half-open time range, compose with query and paging, and refuse bad bounds", async () => {
+	const items: DecodedHistoryItem[] = [
+		{ seq: 1, windowId: "w1", role: "user", text: "first needle", createdAt: "2026-10-10T00:00:00.000Z" },
+		{ seq: 2, windowId: "w1", role: "assistant", text: "second", createdAt: "2026-10-10T06:00:00.000Z" },
+		{ seq: 3, windowId: "w1", role: "user", text: "third needle", createdAt: "2026-10-10T12:00:00.000Z" },
+		{ seq: 4, windowId: "w1", role: "assistant", text: "fourth", createdAt: "2026-10-10T18:00:00.000Z" },
+		{ seq: 5, windowId: "w1", role: "user", text: "fifth needle", createdAt: undefined },
+	];
+	const projection = projectHistory([{ windowId: "w1", items }], 5, new Set([1, 2, 3, 4, 5]));
+	const selected = async (params: Parameters<typeof historyList.execute>[0]): Promise<number[]> => {
+		const outcome = await historyList.execute(params, projection);
+		assert.equal(outcome.ok, true, JSON.stringify(outcome));
+		return outcome.ok ? outcome.data.items.map((item) => ("folded" in item ? item.first_seq : item.seq)) : [];
+	};
+
+	assert.deepEqual(await selected({ roles: ["user", "assistant"], order: "oldest", since: "2026-10-10T06:00:00Z" }), [2, 3, 4], "since keeps later events and drops one with no time");
+	assert.deepEqual(await selected({ roles: ["user", "assistant"], order: "oldest", until: "2026-10-10T12:00:00Z" }), [1, 2], "until is exclusive");
+	assert.deepEqual(await selected({ roles: ["user", "assistant"], order: "oldest", since: "2026-10-10T06:00:00Z", until: "2026-10-10T18:00:00Z" }), [2, 3], "both bounds make a half-open range");
+	assert.deepEqual(await selected({ query: "needle", order: "oldest", since: "2026-10-10T06:00:00Z" }), [3], "a query composes with the time range");
+	assert.deepEqual(await selected({ roles: ["user", "assistant"], order: "oldest", since: "2026-10-10T00:00:00Z", until: "2026-10-10T18:00:00Z", after: 1, before: 4 }), [2, 3], "seq paging composes with the time range");
+	assert.deepEqual(await selected({ roles: ["user", "assistant"], order: "oldest", since: "2026-10-10" }), [1, 2, 3, 4], "a date-only since is inclusive UTC midnight, not local midnight");
+	assert.deepEqual(await selected({ roles: ["user", "assistant"], order: "oldest", until: "2026-10-10T12:00" }), [1, 2], "a time without an offset is UTC");
+
+	const malformed = await historyList.execute({ since: "yesterday" }, projection);
+	assert.equal(malformed.ok, false);
+	if (!malformed.ok) {
+		assert.equal(malformed.error.code, "invalid_time");
+		assert.deepEqual(malformed.error.details, { since: "yesterday" }, "the refusal names the offending param");
+	}
+	const inverted = await historyList.execute({ since: "2026-10-11", until: "2026-10-10" }, projection);
+	assert.equal(inverted.ok, false);
+	if (!inverted.ok) assert.equal(inverted.error.code, "invalid_time");
+});
+
+test("time bounds also keep untimed events out of the folded conversation view", async () => {
+	const items: DecodedHistoryItem[] = [
+		{ seq: 1, windowId: "w1", role: "user", text: "before", createdAt: "2026-10-10T00:00:00.000Z" },
+		{ seq: 2, windowId: "w1", role: "tool", text: "output", createdAt: undefined },
+		{ seq: 3, windowId: "w1", role: "user", text: "after", createdAt: "2026-10-10T12:00:00.000Z" },
+	];
+	const projection = projectHistory([{ windowId: "w1", items }], 3, new Set([1, 2, 3]));
+	const bounded = await historyList.execute({ since: "2026-10-10T00:00:00Z" }, projection);
+	assert.equal(bounded.ok, true);
+	if (bounded.ok) assert.deepEqual(bounded.data.items.map((item) => ("folded" in item ? `folded ${item.count}` : `seq ${item.seq}`)), ["seq 1", "seq 3"], "an untimed tool event is not folded into a bounded selection");
+	const unbounded = await historyList.execute({}, projection);
+	assert.equal(unbounded.ok, true);
+	if (unbounded.ok) assert.equal(unbounded.data.items.some((item) => "folded" in item), true, "without bounds the untimed run still folds");
 });
 
 test("conversation view folds tools and injected messages, while explicit roles expand them", async () => {

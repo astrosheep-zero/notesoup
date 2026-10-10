@@ -158,6 +158,8 @@ export const historyListParameters = Type.Object({
 	roles: historyRoles(),
 	before: Type.Optional(Type.Integer({ minimum: 1, description: "Optional. Upper bound: only events with seq strictly below this." })),
 	after: Type.Optional(Type.Integer({ minimum: 1, description: "Optional. Lower bound: only events with seq strictly above this." })),
+	since: Type.Optional(Type.String({ minLength: 1, description: "Optional. ISO 8601 time; only events at or after it. No offset means UTC; untimed events are dropped." })),
+	until: Type.Optional(Type.String({ minLength: 1, description: "Optional. ISO 8601 time; only events before it. No offset means UTC; untimed events are dropped." })),
 	order: Type.Optional(Type.Union([Type.Literal("newest"), Type.Literal("oldest")], { description: "Optional. Which end limit counts from: newest (default) or oldest. Items are always ascending by seq." })),
 	window_id: Type.Optional(Type.String({ minLength: 1, description: `Optional. Limit to one context window. Values come from \`history_windows\` or any event; "${PREVIOUS_WINDOW}" names the window before the current one.` })),
 	limit: Type.Optional(Type.Integer({ description: "Optional. Maximum visible items per page; folded rows do not count. Default 20." })),
