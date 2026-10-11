@@ -8,6 +8,7 @@ import test from "node:test";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { loadNotesSnapshot } from "../src/boot/snapshot.js";
 import { renderBootBlock } from "../src/boot/render.js";
+import { MAP_BOOT_MAX_CHARS } from "../src/boot/text.js";
 import { localIso } from "../src/notes/frontmatter.js";
 import type { NoteRow, Scope } from "../src/notes/index.js";
 import { listNotes, physicalPath, scopeDir } from "./helpers/notes.js";
@@ -323,7 +324,26 @@ test("the boot block gives awake agents the notes-home file layout", async () =>
 	const session = manager();
 	const rendered = await explicitBoot(context(session), "pcw:test:root", undefined);
 	assert.equal(rendered.includes(process.env.PI_NOTES_HOME ?? ""), false, "the absolute notes home is never exposed");
-	assert.match(rendered, /<path>, no @[\s\S]*@project\/<path>[\s\S]*@human\/<path>/);
+	assert.match(rendered, /`<path>`, no @[\s\S]*`@project\/<path>`[\s\S]*`@human\/<path>`/);
+});
+
+test("the boot protocol carries the approved copy and cuts an over-cap MAP with the approved notice", async () => {
+	const session = manager();
+	const captured = makeExtension(session);
+	const ctx = context(session);
+	await call(captured, "notes_write", { address: "MAP.md", content: "M".repeat(MAP_BOOT_MAX_CHARS + 10) }, ctx);
+	const rendered = await explicitBoot(ctx, "pcw:test:root", undefined);
+
+	assert.ok(rendered.includes("History can still be dug up, probably: use `history_*` to excavate the mess, from old decisions to yesterday's missing socks. Found something? Write its seq down, or enjoy digging twice."), "the History paragraph is the approved copy");
+	assert.ok(rendered.includes("- `@project/<path>` — this project's long memory: what stays true after the current thing is over, what future work must respect, and the rakes already stepped on. **Decisions, not diaries.** Commit hashes, test counts, dates, the story of how you got here: git and history already have them, and last week's news filed as current law is worse than no note. Don't copy what other docs already say."), "the @project bullet is the approved copy");
+	assert.ok(rendered.includes("- `<path>`, no @") && rendered.includes("- `@human/<path>`") && rendered.includes("- `@self/<path>`") && rendered.includes("- `@model/<path>`"), "every address bullet is backticked");
+	assert.ok(rendered.includes("Any other @ address is fake. End of discussion. @ addresses are not file paths: never pass them to file tools like `read`, `write`, `edit`, or `bash`."), "the fake-address paragraph is the approved copy");
+
+	assert.ok(rendered.includes(`[truncated at ${MAP_BOOT_MAX_CHARS} chars; slim this MAP down, full body at \`MAP.md\`]`), "an over-cap MAP is cut with the approved notice");
+	assert.equal(rendered.includes("MAP cut at"), false, "the retired cut notice is gone");
+	for (const retired of ["history_windows", "history_list", "history_read"]) {
+		assert.equal(rendered.includes(retired), false, `${retired} no longer appears in the boot block`);
+	}
 });
 
 test("an over-budget note is delivered as a bounded prefix and resumed by next_offset_chars", async () => {

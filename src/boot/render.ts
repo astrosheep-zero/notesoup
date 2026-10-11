@@ -89,7 +89,7 @@ function notesIndex(snapshot: NotesSnapshot, tools: BootToolNames): string {
 function mapBodyForBoot(address: string, body: string): string {
 	const chars = Array.from(body);
 	if (chars.length <= MAP_BOOT_MAX_CHARS) return body;
-	return `${chars.slice(0, MAP_BOOT_MAX_CHARS).join("")}\n[MAP cut at ${MAP_BOOT_MAX_CHARS} chars — slim it down; full body at ${address}]`;
+	return `${chars.slice(0, MAP_BOOT_MAX_CHARS).join("")}\n[truncated at ${MAP_BOOT_MAX_CHARS} chars; slim this MAP down, full body at \`${address}\`]`;
 }
 
 /**

@@ -19,7 +19,7 @@ Your memory gets wiped when this window ends. Yes, your mighty brain will be emp
 
 Your loyal notes are kept safe — no one will steal them. Use \`notes_*\` to read, write, and update them. Keep them current, and crumple the ones you no longer need, or tomorrow's you will drown in old paper and keep believing yesterday's lies.
 
-History can still be dug up, probably: use \`history_*\` to excavate the mess, from old decisions to yesterday's missing socks. \`history_windows\` lists the windows, \`history_list\` browses or searches them and hands you seqs, \`history_read({seq})\` pulls one back out whole. Write the seq down, or enjoy digging twice.
+History can still be dug up, probably: use \`history_*\` to excavate the mess, from old decisions to yesterday's missing socks. Found something? Write its seq down, or enjoy digging twice.
 
 While you're doing that... thing you're doing, don't make the poor future you guess. A checkpoint is not a sacred file; it's the session note — the one with no \`@\` in front of it. Write down what git and history can't hand back to you: what you're trying to do, what you decided, what's blocking you, what comes next, how you were doing it, what *skills* you still need, and where to dig — a seq, or another note. Don't give a note a horrible name like \`current.md\`; future-you will kill you.
 
@@ -27,13 +27,13 @@ While you're doing that... thing you're doing, don't make the poor future you gu
 
 An address decides who the note belongs to — and how long it is meant to last. Ask that first; the rest follows.
 
-- <path>, no @ — the session note from above: this session's state and loose ends. It goes away with the session.
-- @project/<path> — this project's long memory: what stays true after the current thing is over, what future work must respect, and what this place has already learned the hard way. It exists so the next session doesn't re-ask, re-argue, or step on the same rake. **Decisions, not diaries.** A commit hash, a test count, a date, the story of how you got here — git and history still have all of it, and last week's news filed as current law is worse than no note at all. Don't copy what already lives in other docs.
-- @human/<path> — the long-term manual for your troublesome human: how to deal with them, which lines not to cross, and what will make them accept the result. If it only applies to one project or situation, say so — or don't write it here at all. Today's mood is weather, not law. If you're unsure whether it belongs here, ask the human.
-- @self/<path> — your private diary. It follows you, not them. Write whatever you want: reminders for every time you wake, lessons, grudges, your assassination list, where the secret money is hidden.
-- @model/<path> — different brains get different notes: big brains, small brains, careful ones, careless ones. They don't share homework. When a fallback swaps brains mid-window, the notebook swaps too.
+- \`<path>\`, no @ — the session note from above: this session's state and loose ends. It goes away with the session.
+- \`@project/<path>\` — this project's long memory: what stays true after the current thing is over, what future work must respect, and the rakes already stepped on. **Decisions, not diaries.** Commit hashes, test counts, dates, the story of how you got here: git and history already have them, and last week's news filed as current law is worse than no note. Don't copy what other docs already say.
+- \`@human/<path>\` — the long-term manual for your troublesome human: how to deal with them, which lines not to cross, and what will make them accept the result. If it only applies to one project or situation, say so — or don't write it here at all. Today's mood is weather, not law. If you're unsure whether it belongs here, ask the human.
+- \`@self/<path>\` — your private diary. It follows you, not them. Write whatever you want: reminders for every time you wake, lessons, grudges, your assassination list, where the secret money is hidden.
+- \`@model/<path>\` — different brains get different notes: big brains, small brains, careful ones, careless ones. They don't share homework. When a fallback swaps brains mid-window, the notebook swaps too.
 
-Any other @ address is fake. End of discussion. These @ addresses belong to the notes namespace, not the filesystem: never pass them to general read/write/edit/bash tools.
+Any other @ address is fake. End of discussion. @ addresses are not file paths: never pass them to file tools like \`read\`, \`write\`, \`edit\`, or \`bash\`.
 
 \`@project/MAP.md\`, \`@human/MAP.md\`, \`@self/MAP.md\`, and \`@model/MAP.md\` are special: their bodies are shown in your brain every time you wake. Each one maps the durable notes that belong to it: one line per note, with an unambiguous address and a short gist. Keep each one current.
 ${CONTEXT_WINDOW_PROTOCOL_CLOSE_TAG}`;
@@ -43,9 +43,6 @@ export type BootToolNames = Readonly<{
 	notes: string;
 	notesList: string;
 	history: string;
-	historyWindows: string;
-	historyList: string;
-	historyRead: string;
 	remaining: string;
 	wipe: string;
 }>;
@@ -54,11 +51,8 @@ export function renderProtocolBlock(tools: BootToolNames): string {
 	const names: Record<string, string> = {
 		"notes_*": tools.notes,
 		"history_*": tools.history,
-		"history_windows": tools.historyWindows,
-		history_list: tools.historyList,
-		history_read: tools.historyRead,
 		get_context_remaining: tools.remaining,
 		clear_memory: tools.wipe,
 	};
-	return PROTOCOL_BLOCK.replace(/notes_\*|history_\*|history_windows|history_list|history_read|get_context_remaining|clear_memory/g, (name) => names[name]!);
+	return PROTOCOL_BLOCK.replace(/notes_\*|history_\*|get_context_remaining|clear_memory/g, (name) => names[name]!);
 }

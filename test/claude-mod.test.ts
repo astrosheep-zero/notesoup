@@ -132,7 +132,7 @@ test("Claude helper refuses schema-invalid parameters before any operation runs"
 test("Claude helper boot uses actual Claude note tool bindings and a fresh snapshot", async () => {
   const boot = await dispatch({ op: "boot", identity, openedAt: 1700000000000, tools: {
     notes: "mcp__notesoup__notes_*", notesList: "mcp__notesoup__notes_list",
-    history: "history unavailable", historyWindows: "history_windows unavailable", historyList: "history_list unavailable", historyRead: "history_read unavailable",
+    history: "history unavailable",
     remaining: "remaining unavailable", wipe: "wipe unavailable",
   } }) as string;
   assert.match(boot, /mcp__notesoup__notes_\*/);
