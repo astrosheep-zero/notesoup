@@ -40,7 +40,7 @@ export type NoteChange =
 	| { kind: "body" | "metadata" | "file"; before: string; after: string };
 export type NoteEditResult = { meta: NoteMeta; applied: number; resolvedScope: Scope; change: NoteChange };
 export type NoteRenameResult = { meta: NoteMeta; replacedCrumpledTarget: boolean };
-export type NoteQueryStatus = { crumpledExcluded: number; homesUnavailable: string[] };
+export type NoteQueryStatus = { homesUnavailable: string[] };
 export type NoteQueryResult<T> = { rows: T[]; status: NoteQueryStatus };
 
 /** Public identity resolved for an operation, never a filesystem path. */
@@ -419,7 +419,6 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 			const scope = home.scope;
 			const root = scopeDir(scope, identity, home.who);
 			const homeRows: Array<Omit<NoteRow, "sizeBytes">> = [];
-			let excluded = 0;
 			try {
 				for (const path of await walkMarkdown(root)) {
 					if (matcher && !matcher.test(canonicalAddressFor(identity, scope, path, home.who))) continue;
@@ -428,10 +427,7 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 					const raw = await withPathQueue(fullPath, () => readFile(fullPath, "utf8"));
 					const { meta, body } = parseNote(raw);
 					meta.scope = scope;
-					if ((meta.crumpledAt !== undefined) !== (options.wastebasket === true)) {
-						if (meta.crumpledAt !== undefined) excluded++;
-						continue;
-					}
+					if ((meta.crumpledAt !== undefined) !== (options.wastebasket === true)) continue;
 					homeRows.push({ address, scope, path, meta, body });
 				}
 			} catch (error) {
@@ -439,7 +435,6 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 				status.homesUnavailable.push(addressFor(identity, scope, "", home.who).replace(/\/$/, "") || "session");
 				continue;
 			}
-			if (status) status.crumpledExcluded += excluded;
 			for (const row of homeRows) yield row;
 		}
 	}
@@ -455,11 +450,11 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 			rows.push({ ...row, sizeBytes: Buffer.byteLength(row.body, "utf8") });
 		}
 		rows.sort((a, b) => b.meta.updatedAt - a.meta.updatedAt || a.address.localeCompare(b.address));
-		return { rows, status: status ?? { crumpledExcluded: 0, homesUnavailable: [] } };
+		return { rows, status: status ?? { homesUnavailable: [] } };
 	}
 
 	function listWithStatus(options: NotesQuery = {}): Promise<NoteQueryResult<NoteRow>> {
-		return listRows(options, { crumpledExcluded: 0, homesUnavailable: [] });
+		return listRows(options, { homesUnavailable: [] });
 	}
 
 	async function search(queries: string[], options: NotesQuery = {}): Promise<NoteSearchRow[]> {
@@ -486,11 +481,11 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 			if (matches.length > 0) rows.push({ address, path, scope, meta, matches });
 		}
 		rows.sort((a, b) => a.address.localeCompare(b.address));
-		return { rows, status: status ?? { crumpledExcluded: 0, homesUnavailable: [] } };
+		return { rows, status: status ?? { homesUnavailable: [] } };
 	}
 
 	function searchWithStatus(queries: string[], options: NotesQuery = {}): Promise<NoteQueryResult<NoteSearchRow>> {
-		return searchRows(queries, options, { crumpledExcluded: 0, homesUnavailable: [] });
+		return searchRows(queries, options, { homesUnavailable: [] });
 	}
 
 	return { write, read, update, rename, list, search, listWithStatus, searchWithStatus };

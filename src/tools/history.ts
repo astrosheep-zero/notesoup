@@ -4,7 +4,7 @@ import { DEFAULT_READ_WINDOW_CHARS, MAX_READ_WINDOW_CHARS, HISTORY_PREVIEW_CHARS
 import { failure, fitsResult, resultSchema, readTextWindow, renderOutcome, renderTextWindow, success, TextWindowSchema, type Operation, type Outcome } from "./result.js";
 import { historyRoles, searchQuery } from "./schema.js";
 import { HistoryPageSchema, selectPage, type HistoryPage } from "../history/query.js";
-import { allItems, eventDocument, toolSummary, HistoryRoleSchema, ToolSummarySchema, type HistoryFilter, type HistoryFoldedRow, type HistoryPageItem, type HistoryProjection, unknownWindowId } from "../history/history.js";
+import { allItems, eventDocument, nestedCallSummary, toolSummary, HistoryRoleSchema, NestedCallSummarySchema, ToolSummarySchema, type HistoryFilter, type HistoryFoldedRow, type HistoryPageItem, type HistoryProjection, unknownWindowId } from "../history/history.js";
 
 /** One read: identity, tool summary and a flat document slice. */
 const HistoryReadDataSchema = Type.Object({
@@ -13,6 +13,7 @@ const HistoryReadDataSchema = Type.Object({
 	role: HistoryRoleSchema,
 	created_at: Type.Union([Type.String(), Type.Null()]),
 	...ToolSummarySchema.properties,
+	nested_calls: Type.Optional(NestedCallSummarySchema),
 	...TextWindowSchema.properties,
 }, { additionalProperties: false });
 type HistoryReadData = Static<typeof HistoryReadDataSchema>;
@@ -24,7 +25,6 @@ const HistoryWindowsDataSchema = Type.Object({
 		created_at: Type.Union([Type.String(), Type.Null()]),
 		first_seq: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),
 		last_seq: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),
-		item_count: Type.Integer({ minimum: 0 }),
 	}, { additionalProperties: false }), { description: "Oldest first." }),
 	more: Type.Integer({ minimum: 0, description: "Omitted windows; `history_list` also supplies window ids." }),
 }, { additionalProperties: false });
@@ -36,9 +36,9 @@ function header(item: { seq: number; window_id: string; role: string }): string 
 	return `seq ${item.seq} | window ${item.window_id} | ${item.role}`;
 }
 
-function toolHeader(item: { role: string; tool?: string; tool_name_omitted?: boolean; tool_status?: string; output_truncated?: boolean; full_output_path?: string; nested_calls?: { call_count: number; complete: boolean } }): string | undefined {
+function toolHeader(item: { role: string; tool?: string; tool_status?: string; output_truncated?: true; full_output_path?: string; nested_calls?: { call_count: number; complete: boolean } }): string | undefined {
 	if (item.role !== "tool") return undefined;
-	const parts = [item.tool_name_omitted ? "tool name omitted" : `tool ${item.tool}`, `status ${item.tool_status}`];
+	const parts = [`tool ${item.tool}`, `status ${item.tool_status}`];
 	if (item.output_truncated) parts.push(`output truncated${item.full_output_path ? `, full text at ${item.full_output_path}` : ""}`);
 	if (item.nested_calls) {
 		parts.push(`nested calls ${item.nested_calls.call_count} recorded, ${item.nested_calls.complete ? "complete" : "incomplete"}`);
@@ -49,7 +49,7 @@ function toolHeader(item: { role: string; tool?: string; tool_name_omitted?: boo
 function renderPageItem(item: HistoryPageItem): string {
 	const tool = toolHeader(item);
 	const lines = tool === undefined ? [header(item)] : [header(item), tool];
-	if (item.truncated) lines.push(`[preview of ${item.total_chars} chars from offset ${item.offset_chars ?? 0}; read this seq for the rest]`);
+	if (item.truncated) lines.push(`[truncated; from offset ${item.offset_chars ?? 0}]`);
 	lines.push(item.content);
 	return lines.join("\n");
 }
@@ -60,9 +60,8 @@ function isFoldedRow(item: HistoryPageItem | HistoryFoldedRow): item is HistoryF
 
 function renderFoldedRow(row: HistoryFoldedRow): string {
 	const tools = Object.entries(row.tools).map(([name, count]) => `${name} ${count}`).join(", ");
-	const omitted = row.omitted_tools ? ` | ${row.omitted_tools} distinct tool names omitted` : "";
 	const expand = `\n\t→ expand: {"after":${row.first_seq - 1},"before":${row.last_seq + 1},"order":"oldest","roles":["tool","context"]}`;
-	return `seqs ${row.first_seq}-${row.last_seq} | folded ${row.count} events${tools ? ` | ${tools}` : ""}${omitted}${expand}`;
+	return `seqs ${row.first_seq}-${row.last_seq} | folded ${row.count} events${tools ? ` | ${tools}` : ""}${expand}`;
 }
 
 function renderPage(page: HistoryPage): string {
@@ -90,8 +89,13 @@ function pageFits(page: HistoryPage): boolean {
 	return fitsResult(success(page), (result) => renderOutcome(result, renderPage));
 }
 
-// Sample known ids on errors without turning the refusal into a second listing.
-const MAX_REPORTED_WINDOWS = 25;
+// Sample known ids in the refusal message itself, never as a second listing.
+const MAX_REPORTED_WINDOWS = 5;
+
+/** At most `MAX_REPORTED_WINDOWS` known ids, appended to an unknown_window_id message. */
+function knownWindowSuffix(known: string[]): string {
+	return known.length === 0 ? "" : `; known: ${known.slice(0, MAX_REPORTED_WINDOWS).join(", ")}`;
+}
 
 export const PREVIOUS_WINDOW = "@previous";
 
@@ -101,18 +105,13 @@ function resolveWindowId(projection: HistoryProjection, windowId: string | undef
 	const previous = projection.windows.at(-2);
 	if (previous !== undefined) return { ok: true, window_id: previous.windowId };
 	const known = projection.windows.map((current) => current.windowId);
-	return { ok: false, outcome: failure("unknown_window_id", `unknown window_id "${PREVIOUS_WINDOW}": this session has no window before the current one`, { window_id: windowId, known_windows: known.slice(0, MAX_REPORTED_WINDOWS) }) };
+	return { ok: false, outcome: failure("unknown_window_id", `unknown window_id "${PREVIOUS_WINDOW}": this session has no window before the current one${knownWindowSuffix(known)}`) };
 }
 
 function badWindowId(projection: HistoryProjection, params: HistoryFilter): Outcome<never> | undefined {
 	const badWindow = unknownWindowId(projection, params);
 	if (!badWindow) return undefined;
-	const known = badWindow.known;
-	return failure("unknown_window_id", badWindow.message, {
-		window_id: params.window_id,
-		known_windows: known.slice(0, MAX_REPORTED_WINDOWS),
-		...(known.length > MAX_REPORTED_WINDOWS ? { known_windows_omitted: known.length - MAX_REPORTED_WINDOWS } : {}),
-	});
+	return failure("unknown_window_id", `${badWindow.message}${knownWindowSuffix(badWindow.known)}`);
 }
 
 /* ------------------------------------------------------------------ history_windows */
@@ -135,7 +134,7 @@ export const historyWindows: Operation<typeof historyWindowsParameters, HistoryW
 				first = first === null ? event.seq : Math.min(first, event.seq);
 				last = last === null ? event.seq : Math.max(last, event.seq);
 			}
-			const row = { window_id: window.windowId, created_at: window.createdAt ?? null, first_seq: first, last_seq: last, item_count: window.items.length };
+			const row = { window_id: window.windowId, created_at: window.createdAt ?? null, first_seq: first, last_seq: last };
 			if (!fits({ ...data, windows: [...data.windows, row], more: data.more - 1 })) break;
 			data.windows.push(row);
 			data.more--;
@@ -146,7 +145,7 @@ export const historyWindows: Operation<typeof historyWindowsParameters, HistoryW
 };
 
 function renderWindows(data: HistoryWindowsData): string {
-	const lines = [`session ${data.session_id}`, ...data.windows.map((window) => `window ${window.window_id} | seqs ${window.first_seq ?? "-"}-${window.last_seq ?? "-"} | ${window.item_count} events`)];
+	const lines = [`session ${data.session_id}`, ...data.windows.map((window) => `window ${window.window_id} | seqs ${window.first_seq ?? "-"}-${window.last_seq ?? "-"}`)];
 	if (data.more > 0) lines.push(`${data.more} more windows not shown; \`history_list\` also reports window ids on events`);
 	return lines.join("\n");
 }
@@ -202,22 +201,22 @@ export const historyRead: Operation<typeof historyReadParameters, HistoryReadDat
 		// Address checks run in one order: past the end of the file, off this branch, then
 		// consumed by a pairing. Only the last two can mention what is at the address.
 		if (item === undefined && params.seq > projection.highestSeq) {
-			return failure("unknown_seq", `unknown seq ${params.seq}: this session's items run 1..${projection.highestSeq}`, { seq: params.seq, highest_seq: projection.highestSeq });
+			return failure("unknown_seq", `unknown seq ${params.seq}: this session's items run 1..${projection.highestSeq}`);
 		}
 		if (!projection.branchSeqs.has(params.seq)) {
-			return failure("not_on_branch", `seq ${params.seq} is on another branch and is not readable here`, { seq: params.seq });
+			return failure("not_on_branch", `seq ${params.seq} is on another branch and is not readable here`);
 		}
 		if (item === undefined) {
 			const callSeq = projection.pairedResults.get(params.seq);
 			if (callSeq !== undefined) {
-				return failure("not_an_event", `seq ${params.seq} is a tool result already shown inside the call at seq ${callSeq}; read that seq instead`, { seq: params.seq, read_seq: callSeq });
+				return failure("not_an_event", `seq ${params.seq} is a tool result already shown inside the call at seq ${callSeq}; read that seq instead`);
 			}
-			return failure("unknown_seq", `seq ${params.seq} is on this branch but carries no readable event`, { seq: params.seq });
+			return failure("unknown_seq", `seq ${params.seq} is on this branch but carries no readable event`);
 		}
 		const document = eventDocument(item);
 		const totalChars = Array.from(document).length;
 		if (typeof params.offset_chars === "number" && params.offset_chars > totalChars) {
-			return failure("invalid_offset", `offset_chars ${params.offset_chars} is past the end: the item has ${totalChars} chars; the largest legal offset is ${totalChars} (an empty end-read)`, { seq: item.seq, window_id: item.windowId, offset_chars: params.offset_chars, total_chars: totalChars });
+			return failure("invalid_offset", `offset_chars ${params.offset_chars} is past the end: the item has ${totalChars} chars; the largest legal offset is ${totalChars} (an empty end-read)`);
 		}
 		return readTextWindow(
 			document,
@@ -229,6 +228,7 @@ export const historyRead: Operation<typeof historyReadParameters, HistoryReadDat
 				role: item.role,
 				created_at: item.createdAt ?? null,
 				...toolSummary(item),
+				...nestedCallSummary(item),
 				...window,
 			}),
 			(result) => renderOutcome(result, renderRead),

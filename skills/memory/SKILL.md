@@ -54,6 +54,6 @@ Before a long or risky step, or when room runs low, keep one session note named 
 
 ## When a tool is missing or refuses
 
-A refusal returns `{ error, code, details? }`; read `error` before retrying.
+A refusal returns `{ error, code }`; read `error` before retrying.
 
 If a `notes_*` or `history_*` tool is absent or fails at the host level, do not imitate it: no filesystem tools on `@` addresses, and no reading or editing note storage or session files directly. Use the tools that remain, tell the human which one is missing, and keep essential state in the reply.

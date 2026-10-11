@@ -154,7 +154,6 @@ test("a result address consumed by a pairing names its call instead of serving a
 	const consumed = resultError(await call(captured, "history_read", { seq: 3 }, ctx));
 	assert.equal(consumed.code, "not_an_event");
 	assert.match(consumed.message, /already shown inside the call at seq 2/);
-	assert.equal(consumed.details?.read_seq, 2, "the refusal names the address to read instead");
 
 	const callSeq = resultRead<{ seq: number; window_id: string }>(await call(captured, "history_read", { seq: 2 }, ctx));
 	assert.equal(callSeq.seq, 2);
@@ -233,7 +232,7 @@ test("since and until select a half-open time range, compose with query and pagi
 	assert.equal(malformed.ok, false);
 	if (!malformed.ok) {
 		assert.equal(malformed.error.code, "invalid_time");
-		assert.deepEqual(malformed.error.details, { since: "yesterday" }, "the refusal names the offending param");
+		assert.match(malformed.error.message, /"yesterday"/, "the refusal names the offending param and value");
 	}
 	const inverted = await historyList.execute({ since: "2026-10-11", until: "2026-10-10" }, projection);
 	assert.equal(inverted.ok, false);
@@ -280,7 +279,7 @@ test("conversation view folds tools and injected messages, while explicit roles 
 	assert.equal(conversation.items.some((item) => item.folded === true), true);
 	assert.equal(conversation.items.some((item) => item.role === "developer"), false);
 	assert.equal(conversation.items.some((item) => item.role === "tool"), false);
-	assert.equal(conversation.items.some((item) => item.role === "assistant" && item.total_chars === 0), false);
+	assert.equal(conversation.items.some((item) => item.role === "assistant" && item.content === ""), false);
 	assert.equal(conversation.items.every((item) => legacyItemKey in item === false), true);
 	const folded = conversation.items.find((item) => item.folded === true)!;
 	assert.equal(folded.count, 3, "two tool events and one injected context are folded, not the empty assistant message");
@@ -322,7 +321,6 @@ test("tool summaries and documents preserve pending, errored, and orphan runs", 
 	assert.equal(events.items[0]!.content, 'edit {"path":"😀.md","oldText":"before"}\n--- output ---\nreplacement OK');
 	assert.equal(events.items[1]!.content, 'edit {"path":"pending.md"}', "an unfinished call claims no output");
 	assert.equal(events.items[2]!.content, 'edit (arguments not recorded)\n--- output ---\norphan output\n--- nested calls (complete, 1 recorded) ---\n- orphan/1 read [ok] {"path":"orphan-nested.md"}', "an orphan result invents no arguments, and keeps the nested evidence the host recorded");
-	assert.deepEqual(events.items[2]!.nested_calls, { call_count: 1, complete: true }, "an orphan's nested records are counted on its row like any other run's");
 
 	const errored = resultRead<{ tool: string; tool_status: string }>(await call(captured, "history_read", { seq: 2 }, ctx));
 	assert.equal(errored.tool, "edit");
@@ -361,8 +359,6 @@ test("native nested-call records are searchable, readable, and never gain a resu
 
 	const found = page(await call(captured, "history_list", { query: "nested-needle" }, ctx));
 	assert.deepEqual(found.items.map((item) => item.seq), [2], "nested arguments are part of the searchable document");
-	const row = found.items[0]!;
-	assert.deepEqual(row.nested_calls, { call_count: 3, complete: false }, "the list row reports counts and the host's own completeness flag");
 
 	const read = resultRead<{ nested_calls: { call_count: number; complete: boolean } }>(await call(captured, "history_read", { seq: 2 }, ctx));
 	assert.deepEqual(read.nested_calls, { call_count: 3, complete: false }, "the host's completeness flag stays unchanged");
@@ -382,7 +378,7 @@ test("absent nested calls mean unavailable, not a known-empty record", async () 
 	toolCall(session, "plain", "read", { path: "a.md" });
 	toolResult(session, "plain", "read", "contents");
 	const listed = page(await call(captured, "history_list", { roles: ["tool"] }, ctx));
-	assert.equal("nested_calls" in listed.items[0]!, false, "no record is reported as empty when none was recorded");
+	assert.equal("nested_calls" in listed.items[0]!, false, "a page row never carries nested-call evidence; one read does");
 	const read = resultRead(await call(captured, "history_read", { seq: 2 }, ctx));
 	assert.equal("nested_calls" in read, false);
 	assert.equal(read.content.includes("nested calls"), false);
@@ -401,18 +397,14 @@ test("oversized arguments and long nested records remain fully pageable and sear
 		},
 	});
 
-	const listed = page(await call(captured, "history_list", { roles: ["tool"] }, ctx));
-	assert.deepEqual(listed.items[0]!.nested_calls, { call_count: 400, complete: true }, "the page row counts every recorded call, not only the records one read can carry");
 	let read = resultRead<{ nested_calls: { call_count: number; complete: boolean } }>(await call(captured, "history_read", { seq: 2, limit_chars: 50_000 }, ctx));
-	assert.deepEqual(read.nested_calls, { call_count: 400, complete: true });
-	assert.equal(read.limited_by, "bytes");
+	assert.deepEqual(read.nested_calls, { call_count: 400, complete: true }, "the read counts every recorded call, not only the records one page can carry");
 	let document = read.text;
 	while (read.next_offset_chars !== null) {
 		const next = read.next_offset_chars;
 		const result = await call(captured, "history_read", { seq: 2, offset_chars: next, limit_chars: 50_000 }, ctx);
 		assertWithinBudget(result, "bounded document page");
 		read = resultRead(result);
-		assert.equal(read.offset_chars, next);
 		assert.ok(read.text.length > 0, "every continuation makes progress");
 		document += read.text;
 	}
@@ -434,7 +426,8 @@ test("standalone bash execution retains command, output, and truncation path", a
 	const captured = makeExtension(session);
 	const ctx = context(session);
 	append(session, { role: "bashExecution", command: "echo needle", output: "needle output", exitCode: 0, cancelled: false, truncated: true, fullOutputPath: "/tmp/bash-output.txt", timestamp: Date.now() });
-	const found = page(await call(captured, "history_list", { roles: ["tool"] }, ctx));
+	const raw = await call(captured, "history_list", { roles: ["tool"] }, ctx);
+	const found = page(raw);
 	assert.equal(found.items.length, 1);
 	assert.deepEqual(found.items[0], {
 		seq: 1,
@@ -446,14 +439,32 @@ test("standalone bash execution retains command, output, and truncation path", a
 		output_truncated: true,
 		full_output_path: "/tmp/bash-output.txt",
 		truncated: false,
-		total_chars: 59,
 		content: 'bash {"command":"echo needle"}\n--- output ---\nneedle output',
 	});
+	assert.match(rendered(raw), /output truncated, full text at \/tmp\/bash-output\.txt/, "a truncation with a path names both");
 	const query = page(await call(captured, "history_list", { roles: ["tool"], query: "NEEDLE OUTPUT" }, ctx));
 	assert.deepEqual(query.items.map((item) => item.seq), [1]);
 	const read = resultRead<{ seq: number }>(await call(captured, "history_read", { seq: 1, offset_chars: query.items[0]!.offset_chars as number }, ctx));
 	assert.equal(read.content, "needle output");
 	assert.equal(read.seq, 1);
+});
+
+test("a truncated tool run without a recorded path still reports output_truncated", async () => {
+	const session = manager();
+	const captured = makeExtension(session);
+	const ctx = context(session);
+	append(session, { role: "bashExecution", command: "echo big", output: "big output", exitCode: 0, cancelled: false, truncated: true, timestamp: Date.now() });
+	const raw = await call(captured, "history_list", { roles: ["tool"] }, ctx);
+	const found = page(raw);
+	assert.equal(found.items.length, 1);
+	const item = found.items[0]!;
+	assert.equal(item.output_truncated, true, "the truncation is reported even with no path");
+	assert.equal("full_output_path" in item, false, "no path is invented");
+	assert.match(rendered(raw), /output truncated/, "the header still says the output was truncated");
+	assert.equal(rendered(raw).includes("full text at"), false, "the header claims no path");
+	const read = resultRead<{ output_truncated?: true; full_output_path?: string }>(await call(captured, "history_read", { seq: 1 }, ctx));
+	assert.equal(read.output_truncated, true, "the read reports the same truncation");
+	assert.equal("full_output_path" in read, false);
 });
 
 test("list renders paging and fold recipes, read renders a neighborhood call, and @previous resolves", async () => {
@@ -488,9 +499,11 @@ test("list renders paging and fold recipes, read renders a neighborhood call, an
 	const solo = manager();
 	const soloCaptured = makeExtension(solo);
 	appendText(solo, "user", "only window");
+	const soloWindows = resultData<{ windows: Array<{ window_id: string }> }>(await call(soloCaptured, "history_windows", {}, context(solo)));
 	const noPrevious = resultError(await call(soloCaptured, "history_list", { window_id: "@previous" }, context(solo)));
 	assert.equal(noPrevious.code, "unknown_window_id");
 	assert.match(noPrevious.message, /@previous/);
+	assert.match(noPrevious.message, new RegExp(`; known: ${soloWindows.windows[0]!.window_id}$`), "the refusal names the window the session does have");
 });
 
 test("compaction summary becomes context and is folded in the default list", async () => {
@@ -579,7 +592,6 @@ test("query previews start at case-insensitive literal matches and offsets read 
 	assert.equal("match_offset_chars" in hit, false);
 	assert.equal(hit.content, "NeEdLe.*");
 	assert.equal(hit.truncated, true);
-	assert.equal(hit.total_chars, 2017);
 	const read = resultRead<{ seq: number }>(await call(captured, "history_read", { seq: hit.seq as number, offset_chars: hit.offset_chars as number, limit_chars: 8 }, ctx));
 	assert.equal(read.content, hit.content);
 	const listed = page(await call(captured, "history_list", { max_chars_per_item: 8 }, ctx));
@@ -590,7 +602,6 @@ test("query previews start at case-insensitive literal matches and offsets read 
 	assert.equal(zero.offset_chars, 0, "a match at the document start reports an explicit zero offset");
 	assert.equal(zero.content, "😀İ😀İ", "an explicit zero offset still previews from the document start");
 	assert.equal(zero.truncated, true);
-	assert.equal(zero.total_chars, 2017);
 	assert.deepEqual(page(await call(captured, "history_list", { query: "needle.+" }, ctx)).items, []);
 });
 
@@ -614,26 +625,24 @@ test("history_read paginates one document with an accurate limit and a bounded b
 	assert.equal(read.next_offset_chars !== null, true);
 	const text = full.content[0]!;
 	assert.equal(text.type === "text" && text.text.includes("READ WINDOW"), false, "no READ WINDOW block survives");
-	assert.match(text.type === "text" ? text.text : "", /\(32KB limit\)\. Use offset_chars=\d+ to continue\.\]$/, "the byte cap is stated as a continuation suffix");
+	assert.match(text.type === "text" ? text.text : "", /\[truncated; continue at offset_chars=\d+\]$/, "a byte-capped window states where to continue");
 
 	const next = resultRead(await call(captured, "history_read", { seq, offset_chars: read.next_offset_chars!, limit_chars: 50_000 }, ctx));
 	assert.equal(read.content + next.content, content.slice(0, read.content.length + next.content.length));
-	assert.equal(read.next_offset_chars, next.offset_chars, "the cursor addresses the first undelivered character");
+	assert.equal(Array.from(read.content).length, read.next_offset_chars, "the cursor addresses the first undelivered character");
 
 	const limited = resultRead(await call(captured, "history_read", { seq, limit_chars: 10 }, ctx));
-	assert.equal(limited.limited_by, "limit", "a window inside the budget stops at the requested count");
 	assert.equal(limited.content, "z".repeat(10));
 	const limitedText = (await call(captured, "history_read", { seq, limit_chars: 10 }, ctx)).content[0]!;
-	const limitedSuffix = `\n\n[${content.length - 10} more characters. Use offset_chars=10 to continue.]`;
-	assert.equal(limitedText.type === "text" && limitedText.text.endsWith(limitedSuffix), true, "a count-limited window states what remains and where to resume");
+	const limitedSuffix = "\n\n[truncated; continue at offset_chars=10]";
+	assert.equal(limitedText.type === "text" && limitedText.text.endsWith(limitedSuffix), true, "a count-limited window states where to resume");
 
 	const tail = resultRead(await call(captured, "history_read", { seq, offset_chars: -10 }, ctx));
-	assert.equal(tail.offset_chars, content.length - 10);
 	assert.equal(tail.content, "z".repeat(10));
 	assert.equal(tail.next_offset_chars, null, "the true end has no continuation");
 	const past = resultError(await call(captured, "history_read", { seq, offset_chars: content.length + 1 }, ctx));
 	assert.equal(past.code, "invalid_offset");
-	assert.equal(past.details?.total_chars, content.length);
+	assert.match(past.message, new RegExp(`${content.length} chars`), "the refusal names the real length");
 });
 
 test("history windows expose stable ranges and session identity", async () => {
@@ -641,10 +650,10 @@ test("history windows expose stable ranges and session identity", async () => {
 	const captured = makeExtension(session);
 	const ctx = context(session);
 	appendText(session, "user", "before");
-	const windows = resultData<{ session_id: string; windows: Array<{ window_id: string; first_seq: number | null; last_seq: number | null; item_count: number }> }>(await call(captured, "history_windows", {}, ctx));
+	const windows = resultData<{ session_id: string; windows: Array<{ window_id: string; first_seq: number | null; last_seq: number | null }> }>(await call(captured, "history_windows", {}, ctx));
 	assert.equal(windows.session_id, session.getSessionId());
 	assert.equal(windows.windows.length, 1);
-	assert.deepEqual(windows.windows[0], { window_id: windows.windows[0]!.window_id, created_at: null, first_seq: 1, last_seq: 1, item_count: 1 });
+	assert.deepEqual(windows.windows[0], { window_id: windows.windows[0]!.window_id, created_at: null, first_seq: 1, last_seq: 1 });
 });
 
 test("historyDocument is one deterministic projection of the facts, with no UI header or continuation suffix", async () => {

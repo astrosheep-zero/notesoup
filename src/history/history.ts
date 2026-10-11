@@ -180,12 +180,12 @@ export const NestedCallSummarySchema = Type.Object({
 	complete: Type.Boolean({ description: "Whether the host recorded all nested calls." }),
 }, { additionalProperties: false });
 
+/** Tool-run facts shared by list rows and reads; full arguments and calls live in the document. */
 export const ToolSummarySchema = Type.Object({
 	tool: Type.Optional(Type.String()),
 	tool_status: Type.Optional(ToolCallStatusSchema),
-	output_truncated: Type.Optional(Type.Boolean()),
+	output_truncated: Type.Optional(Type.Literal(true)),
 	full_output_path: Type.Optional(Type.String()),
-	nested_calls: Type.Optional(NestedCallSummarySchema),
 }, { additionalProperties: false });
 
 export function toolSummary(event: HistoryEvent): Static<typeof ToolSummarySchema> {
@@ -196,8 +196,13 @@ export function toolSummary(event: HistoryEvent): Static<typeof ToolSummarySchem
 		tool_status: execution.status,
 		...(execution.outputTruncated ? { output_truncated: true } : {}),
 		...(execution.fullOutputPath ? { full_output_path: execution.fullOutputPath } : {}),
-		...(execution.nestedCalls ? { nested_calls: { call_count: execution.nestedCalls.calls.length, complete: execution.nestedCalls.complete } } : {}),
 	};
+}
+
+/** Nested-call evidence is read with one event, not listed on every page row. */
+export function nestedCallSummary(event: HistoryEvent): { nested_calls?: Static<typeof NestedCallSummarySchema> } {
+	const nested = event.execution?.nestedCalls;
+	return nested === undefined ? {} : { nested_calls: { call_count: nested.calls.length, complete: nested.complete } };
 }
 
 /** Stable identity and a verbatim preview, starting at the search match when present. */
@@ -207,10 +212,8 @@ export const HistoryPageItemSchema = Type.Object({
 	role: HistoryRoleSchema,
 	created_at: Type.Union([Type.String(), Type.Null()]),
 	...ToolSummarySchema.properties,
-	tool_name_omitted: Type.Optional(Type.Boolean({ description: "Name omitted to fit; read this seq." })),
-	truncated: Type.Boolean({ description: "Preview is partial; read this seq for more." }),
-	total_chars: Type.Integer({ minimum: 0 }),
 	content: Type.String(),
+	truncated: Type.Boolean({ description: "Preview is partial; read this seq for more." }),
 	offset_chars: Type.Optional(Type.Integer({ minimum: 0, description: "Search match/preview start, in code points." })),
 }, { additionalProperties: false });
 export type HistoryPageItem = Static<typeof HistoryPageItemSchema>;
@@ -222,14 +225,13 @@ export const HistoryFoldedRowSchema = Type.Object({
 	last_seq: Type.Integer({ minimum: 1 }),
 	count: Type.Integer({ minimum: 1 }),
 	tools: Type.Record(Type.String(), Type.Integer({ minimum: 1 }), { description: "Counts by tool name." }),
-	omitted_tools: Type.Optional(Type.Integer({ minimum: 1, description: "Number of omitted tool names." })),
 }, { additionalProperties: false });
 export type HistoryFoldedRow = Static<typeof HistoryFoldedRowSchema>;
 
-/** Bound fold summaries while preserving exact counts in count/omitted_tools. */
+/** Bound fold summaries; `count` stays exact even when some tool names do not fit. */
 export const MAX_FOLD_TOOL_NAMES = 20;
 
-/** Longest tool name a fold row lists; longer names are counted in `omitted_tools` instead. */
+/** Longest tool name a fold row lists. */
 export const MAX_FOLD_TOOL_NAME_CHARS = 120;
 
 /** A bounded preview of one event from `matchOffset` on, plus its identity facts. */
@@ -244,9 +246,8 @@ export function visibleItem(event: HistoryEvent, maxChars: number, matchOffset?:
 		role: event.role,
 		created_at: event.createdAt ?? null,
 		...toolSummary(event),
-		truncated,
-		total_chars: chars.length,
 		content: truncated ? chars.slice(start, start + maxChars).join("") : document,
+		truncated,
 		...(matchOffset === undefined ? {} : { offset_chars: matchOffset }),
 	};
 }

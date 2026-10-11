@@ -257,14 +257,13 @@ test("edit is body-scoped with named failures and a replace_all escape hatch", a
 	const ambiguous = resultError(await call(captured, "notes_update", { address: "edit.md", edits: [{ oldText: "beta", newText: "B" }] }, ctx));
 	assert.match(ambiguous.message, /occurs 2 times/);
 	assert.equal(ambiguous.code, "ambiguous_edit");
-	assert.deepEqual(ambiguous.details?.line_numbers, [2, 3], "the multi-match error carries every match line number");
+	assert.match(ambiguous.message, /edit 0: oldText occurs 2 times \(lines 2, 3\)/, "the message names the failing edit index and every match line");
 
 	const missing = resultError(await call(captured, "notes_update", { address: "edit.md", edits: [{ oldText: "absent", newText: "x" }] }, ctx));
 	assert.equal(missing.code, "no_match");
-	assert.equal(missing.details?.edit_index, 0, "a zero-match anchor names the failing edit index");
+	assert.match(missing.message, /^edit 0:/, "a zero-match anchor names the failing edit index");
 
 	const all = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "edit.md", edits: [{ oldText: "beta", newText: "B" }], replace_all: true }, ctx));
-	assert.equal(all.applied, 1);
 	assert.equal(all.address, "edit.md");
 	assertReceiptIdentity(all, "edit.md", "session", ctx);
 	assert.equal(all.change_kind, "body");
@@ -272,7 +271,7 @@ test("edit is body-scoped with named failures and a replace_all escape hatch", a
 
 	// An anchor that occurs only in frontmatter is not matched: edits are body-only.
 	const frontmatterOnly = resultError(await call(captured, "notes_update", { address: "edit.md", edits: [{ oldText: "origin", newText: "x" }] }, ctx));
-	assert.equal(frontmatterOnly.details?.edit_index, 0, "a frontmatter-only anchor is not a body match");
+	assert.match(frontmatterOnly.message, /^edit 0:/, "a frontmatter-only anchor is not a body match");
 });
 
 test("nothing-to-do, not-found, atomic batches, and replace_all zero-match are named", async () => {
@@ -293,20 +292,20 @@ test("nothing-to-do, not-found, atomic batches, and replace_all zero-match are n
 	const readMissing = resultError(await call(captured, "notes_read", { address: "missing.md" }, ctx));
 	assert.equal(readMissing.message, "note not found");
 	assert.equal(readMissing.code, "not_found");
-	assert.equal(readMissing.details, undefined, "a plain refusal carries no edit details");
+	assert.deepEqual(Object.keys(readMissing).sort(), ["code", "message"], "a plain refusal carries only a code and message");
 
 	const file = physicalPath("session", "edit.md", ctx);
 	const before = readFileSync(file, "utf8");
 	const failed = resultError(await call(captured, "notes_update", { address: "edit.md", edits: [{ oldText: "alpha", newText: "A" }, { oldText: "absent", newText: "x" }] }, ctx));
-	assert.equal(failed.details?.edit_index, 1, "the failing edit is named");
+	assert.match(failed.message, /^edit 1:/, "the failing edit is named");
 	assert.equal(readFileSync(file, "utf8"), before, "a failing batch leaves the file byte-identical, frontmatter included");
 
 	const applied = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "edit.md", edits: [{ oldText: "alpha", newText: "A" }, { oldText: "beta", newText: "B" }] }, ctx));
-	assert.equal(applied.applied, 2);
+	assert.equal(applied.change_kind, "body");
 	assert.equal(resultRead(await call(captured, "notes_read", { address: "edit.md" }, ctx)).content, "A\nB");
 
 	const zero = resultError(await call(captured, "notes_update", { address: "edit.md", edits: [{ oldText: "zzz", newText: "y" }], replace_all: true }, ctx));
-	assert.equal(zero.details?.edit_index, 0, "replace_all with zero matches is the same zero-match error, not a silent no-op");
+	assert.match(zero.message, /^edit 0:/, "replace_all with zero matches is the same zero-match error, not a silent no-op");
 });
 
 test("notes_update rename_to moves a note and refuses combinations and live targets", async () => {
@@ -328,7 +327,6 @@ test("notes_update rename_to moves a note and refuses combinations and live targ
 	assert.equal(renamed.rename_from, "move-me.md");
 	assert.equal(renamed.change_kind, "file");
 	assert.equal(renamed.address, "moved.md");
-	assert.equal(renamed.replaced_crumpled_target, false);
 
 	const gone = resultError(await call(captured, "notes_read", { address: "move-me.md" }, ctx));
 	assert.equal(gone.message, "note not found", "the old address is gone");
@@ -359,9 +357,9 @@ test("write and update receipts distinguish outcomes and no-op edits", async () 
 	await call(captured, "notes_update", { address: "@self/alias", crumpled: true }, ctx);
 	assert.equal(resultData<NotesWriteData>(await call(captured, "notes_write", { address: "@self/alias", content: "restored" }, ctx)).outcome, "uncrumpled");
 	const noChange = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "@self/alias", edits: [{ oldText: "restored", newText: "restored" }], crumpled: false }, ctx));
-	assert.deepEqual([noChange.applied, noChange.change_kind, noChange.diff], [0, "none", ""]);
+	assert.deepEqual([noChange.change_kind, noChange.diff], ["none", ""]);
 	const mixed = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "@self/alias", edits: [{ oldText: "restored", newText: "restored" }, { oldText: "restored", newText: "changed" }] }, ctx));
-	assert.equal(mixed.applied, 1);
+	assert.equal(mixed.change_kind, "body");
 	assert.equal(mixed.change_kind, "body");
 });
 
@@ -371,11 +369,11 @@ test("empty results distinguish hidden notes and unavailable homes", async () =>
 	const captured = makeExtension(session);
 	const ctx = context(session);
 	const empty = resultData<NotesListData>(await call(captured, "notes_list", { pattern: "@human/**" }, ctx));
-	assert.deepEqual(empty, { files: [], more: 0, crumpled_excluded: 0, homes_unavailable: [] });
+	assert.deepEqual(empty, { files: [], more: 0, homes_unavailable: [] });
 	await call(captured, "notes_write", { address: "@human/hidden.md", content: "needle" }, ctx);
 	await call(captured, "notes_update", { address: "@human/hidden.md", crumpled: true }, ctx);
 	const hidden = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle", pattern: "@human/**" }, ctx));
-	assert.equal(hidden.crumpled_excluded, 1);
+	assert.deepEqual(hidden.files, [], "a crumpled note is hidden from search");
 	const broken = scopeDir("project", ctx);
 	mkdirSync(join(broken, ".."), { recursive: true });
 	writeFileSync(broken, "not a directory");
@@ -447,12 +445,11 @@ test("list and search merge scopes and carry addresses; the path jail rejects es
 	assert.equal(searched.files.length, 3, "literal search finds matches in every scope");
 	assert.deepEqual([...searched.files].map((file) => file.address).sort(), ["@human/three.md", "@project/two.md", "one.md"]);
 	for (const row of [...listed.files, ...searched.files]) assert.equal("scope" in row, false, "scope is derivable from the address and never echoed");
-	assert.equal(searched.files.every((file) => file.matches_total === 1), true);
+	assert.equal(searched.files.every((file) => file.matches.length === 1), true);
 	const hit = searched.files[0]!.matches[0]!;
 	assert.equal(hit.line, 1);
 	assert.equal(hit.offset_chars, 0, "the offset counts into the note body, so it does not include serialized frontmatter");
-	assert.equal(hit.truncated, false);
-	assert.deepEqual(Object.keys(hit).sort(), ["line", "offset_chars", "text", "truncated"]);
+	assert.deepEqual(Object.keys(hit).sort(), ["line", "offset_chars", "text"]);
 	assert.equal(resultRead(await call(captured, "notes_read", { address: searched.files[0]!.address, offset_chars: hit.offset_chars }, ctx)).content.startsWith("needle"), true, "the search offset starts a read at the match");
 
 	const escaped = ["../evil", "/abs", "a\\b"];
@@ -479,18 +476,15 @@ test("a read offsets the body in code points, not bytes or frontmatter", async (
 	assert.equal(match.line, 2);
 	assert.equal(match.offset_chars, 3, "the emoji and CJK line above contribute two code points plus the newline, not their bytes");
 	const atMatch = resultRead(await call(captured, "notes_read", { address: "emoji.md", offset_chars: match.offset_chars }, ctx));
-	assert.equal(atMatch.offset_chars, match.offset_chars);
 	assert.equal(atMatch.text.startsWith("needle"), true, "the offset lands on the match even with multi-byte characters above it");
 	assert.equal(atMatch.total_chars, Array.from("🐑字\nneedle tail").length);
 
 	const negative = resultRead(await call(captured, "notes_read", { address: "emoji.md", offset_chars: -4 }, ctx));
 	assert.equal(negative.text, "tail", "a negative offset counts back from the end of the body");
 	assert.equal(negative.next_offset_chars, null, "a tail read has no continuation");
-	assert.equal(negative.limited_by, null);
 	const start = resultRead(await call(captured, "notes_read", { address: "emoji.md", limit_chars: 3 }, ctx));
 	assert.equal(start.text, "🐑字\n");
 	assert.equal(start.next_offset_chars, 3);
-	assert.equal(start.limited_by, "limit", "the requested count is what stopped this window");
 	assert.equal(resultRead(await call(captured, "notes_read", { address: "emoji.md", offset_chars: 14 }, ctx)).text, "", "the exact end is an empty window, not a refusal");
 });
 
@@ -505,7 +499,7 @@ test("a read keeps its body window verbatim under the new presentation", async (
 	const text = limited.content[0]!.type === "text" ? limited.content[0]!.text : "";
 	assert.equal(text.includes("READ WINDOW"), false, "the old READ WINDOW block is gone");
 	assert.equal(text.includes("chars: ["), false, "no parsed range block stands between the header and the body");
-	assert.equal(text.endsWith("\n\n[6 more characters. Use offset_chars=4 to continue.]"), true, "a limit-stopped window names the resume cursor");
+	assert.equal(text.endsWith("\n\n[truncated; continue at offset_chars=4]"), true, "a limit-stopped window names the resume cursor");
 	const header = text.slice(0, text.indexOf("\n\n"));
 	assert.match(header, /^present\.md\norigin self \| created \d{4}-/, "identity and metadata lead, body first in the window itself");
 

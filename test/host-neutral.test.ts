@@ -16,7 +16,6 @@ import { historyWindows, historyList, historyRead } from "../src/tools/history.j
 import { historyRoles } from "../src/tools/schema.js";
 import { MAX_READ_WINDOW_CHARS, TOOL_OUTPUT_MAX_BYTES } from "../src/tools/output.js";
 import {
-	ERROR_DETAILS_MAX_BYTES,
 	ERROR_MESSAGE_MAX_CHARS,
 	failure,
 	fitsResult,
@@ -77,29 +76,25 @@ test("shared boot uses only explicit identity, loader, captured time and logical
 	assert.equal(/notes_\*|notes_list|history_\*|history_list|history_read|get_context_remaining|clear_memory/.test(rendered), false);
 });
 
-test("the shared result module bounds both surfaces and names what a window withheld", () => {
+test("the shared result module bounds both surfaces and resumes by offset", () => {
 	const text = `${"a".repeat(120)}😀${"b".repeat(30)}`;
 	const chars = Array.from(text);
 
-	// The requested count stops the read, and the footer says only that.
+	// The requested count stops the read, and the footer says only where to continue.
 	const first = data(read(text, 0, 10));
 	assert.equal(first.window.text, chars.slice(0, 10).join(""));
-	assert.equal(first.window.limited_by, "limit");
 	assert.equal(first.window.next_offset_chars, 10);
 	assert.equal(first.window.total_chars, chars.length);
-	assert.match(renderData(success(first)), /\[141 more characters\. Use offset_chars=10 to continue\.\]$/);
+	assert.match(renderData(success(first)), /\[truncated; continue at offset_chars=10\]$/);
 
 	// Concatenating windows by their cursors reproduces the source, marker-free.
 	const second = data(read(text, first.window.next_offset_chars ?? 0, 10));
-	assert.equal(second.window.offset_chars, 10);
 	assert.equal(`${first.window.text}${second.window.text}`, chars.slice(0, 20).join(""));
 
 	// A negative offset counts back from the end and reaches a complete window: no footer at all.
 	const tail = data(read(text, -4));
 	assert.equal(tail.window.text, "bbbb");
-	assert.equal(tail.window.offset_chars, chars.length - 4);
 	assert.equal(tail.window.next_offset_chars, null);
-	assert.equal(tail.window.limited_by, null);
 	assert.equal(renderTextWindow(tail.window), "bbbb");
 
 	// The byte cap, not the requested count, is what stops an oversized read, and the rendered
@@ -107,13 +102,12 @@ test("the shared result module bounds both surfaces and names what a window with
 	const huge = "b".repeat(4 * MAX_READ_WINDOW_CHARS);
 	const capped = data(read(huge, 0, MAX_READ_WINDOW_CHARS));
 	const cappedEnd = capped.window.next_offset_chars ?? 0;
-	assert.equal(capped.window.limited_by, "bytes");
 	assert.ok(cappedEnd < MAX_READ_WINDOW_CHARS, "the byte cap cut the requested window short");
 	assert.equal(fitsResult(success(capped), renderData), true);
 	assert.ok(Buffer.byteLength(renderData(success(capped)), "utf8") <= TOOL_OUTPUT_MAX_BYTES, "the model text fits");
 	assert.ok(Buffer.byteLength(JSON.stringify(wireResult(success(capped))), "utf8") <= TOOL_OUTPUT_MAX_BYTES, "the structured outcome fits");
 	assert.equal(capped.window.text, huge.slice(0, cappedEnd), "the delivered slice is a verbatim prefix");
-	assert.match(renderData(success(capped)), new RegExp(`\\[Showing chars \\[0, ${cappedEnd}\\) of ${huge.length} \\(32KB limit\\)\\. Use offset_chars=${cappedEnd} to continue\\.\\]$`));
+	assert.match(renderData(success(capped)), new RegExp(`\\[truncated; continue at offset_chars=${cappedEnd}\\]$`));
 
 	// Code points, not UTF-16 units.
 	const emoji = data(read("😀😀😀", 1, 1));
@@ -129,7 +123,7 @@ test("the shared result module bounds both surfaces and names what a window with
 
 	assert.equal(renderOutcome(success(first), () => "model text"), "model text");
 	assert.equal(renderOutcome(failure("not_found", "note not found"), () => "never"), "error: not_found: note not found");
-	assert.equal(renderOutcome(failure("ambiguous_edit", "occurs 2 times", { line_numbers: [2, 7] }), () => "never"), 'error: ambiguous_edit: occurs 2 times {"line_numbers":[2,7]}');
+	assert.equal(renderOutcome(failure("ambiguous_edit", "edit 0: occurs 2 times"), () => "never"), "error: ambiguous_edit: edit 0: occurs 2 times");
 
 	const schema = resultSchema(Type.Object({ name: Type.String() }));
 	assert.equal(Check(schema, wireResult(success({ name: "test" }))), true);
@@ -150,8 +144,6 @@ test("an envelope that cannot fit is refused rather than resumed forever", () =>
 	const refusing = readTextWindow(text, 0, undefined, oversized.makeData, oversized.render);
 	const error = refusal(refusing);
 	assert.equal(error.code, "output_too_large");
-	assert.equal(error.details?.offset_chars, 0);
-	assert.equal(error.details?.budget_bytes, TOOL_OUTPUT_MAX_BYTES);
 	assert.ok(structuredBytes(wireResult(refusing)) <= TOOL_OUTPUT_MAX_BYTES, "the refusal that replaces an unresumable window is itself bounded");
 	assert.equal(fitsResult(refusing, oversized.render), true);
 
@@ -179,22 +171,18 @@ test("every resumed window advances the cursor and reconstructs the source exact
 	for (let offset = 0; offset < chars.length;) {
 		const window = data(read(text, offset, MAX_READ_WINDOW_CHARS)).window;
 		assert.equal(window.total_chars, chars.length, "one source, one length");
-		assert.equal(window.offset_chars, offset, "each window starts where the last one stopped");
 		if (window.next_offset_chars === null) {
-			assert.equal(window.offset_chars + Array.from(window.text).length, window.total_chars, "the last window reaches the true end");
+			assert.equal(offset + Array.from(window.text).length, window.total_chars, "the last window reaches the true end");
 			windows.push(window);
 			break;
 		}
-		assert.ok(window.next_offset_chars > window.offset_chars, "a window with text left always advances the cursor");
+		assert.ok(window.next_offset_chars > offset, "a window with text left always advances the cursor");
 		windows.push(window);
 		offset = window.next_offset_chars;
 	}
 	assert.ok(windows.length > 1, "the fixture needed more than one window");
-	assert.equal(windows.slice(0, -1).every((window) => window.limited_by === "bytes"), true, "the byte cap, not the count, split this read");
-	assert.equal(windows.at(-1)?.limited_by, null, "the last window withholds nothing");
 	assert.equal(windows.map((window) => window.text).join(""), text, "concatenating the windows reproduces the source code point for code point");
 	for (const window of windows) {
-		assert.equal(Array.from(window.text).length, (window.next_offset_chars ?? window.total_chars) - window.offset_chars, "the delivered length matches the cursor");
 		assert.ok(structuredBytes(wireResult(success({ window }))) <= TOOL_OUTPUT_MAX_BYTES, "each window fits the structured surface");
 	}
 });
@@ -211,7 +199,6 @@ test("window offsets count code points, not UTF-16 units or graphemes", () => {
 	for (const { name, text, cursor } of cases) {
 		const chars = Array.from(text);
 		const window = data(read(text, cursor, undefined)).window;
-		assert.equal(window.offset_chars, cursor, `${name}: the resolved offset is echoed`);
 		assert.equal(window.total_chars, chars.length, `${name}: totals count code points`);
 		assert.equal(window.text, chars.slice(cursor).join(""), `${name}: the slice starts on a code-point boundary`);
 		assert.equal(window.text.includes("�"), false, `${name}: no surrogate is split`);
@@ -221,44 +208,17 @@ test("window offsets count code points, not UTF-16 units or graphemes", () => {
 	const emoji = "😀".repeat(3);
 	const tail = data(read(emoji, -1)).window;
 	assert.equal(tail.text, "😀");
-	assert.equal(tail.offset_chars, 2, "the last code point is at 2, not at 5 UTF-16 units");
 	assert.equal(tail.next_offset_chars, null);
 });
 
-test("the dynamic parts of a refusal are bounded by construction", () => {
-	// A note edit that matched a million lines is the realistic unbounded case.
-	const huge: Outcome<never> = failure("ambiguous_edit", `edit 0: oldText occurs ${"9".repeat(7)} times`, { line_numbers: Array.from({ length: 1_000_000 }, (_, index) => index + 1) });
-	const error = refusal(huge);
-	assert.equal(error.code, "ambiguous_edit");
-	assert.deepEqual(Object.keys(error.details ?? {}).sort(), ["details_bytes", "truncated"], "oversized context is named, never partially serialized");
-	assert.equal(error.details?.truncated, true);
-	assert.ok((error.details?.details_bytes as number) > ERROR_DETAILS_MAX_BYTES, "the lost size is reported");
-	assert.ok(structuredBytes(wireResult(huge)) <= TOOL_OUTPUT_MAX_BYTES, "even a pathological refusal fits the budget");
-	assert.equal(fitsResult(huge, () => renderOutcome(huge, () => "")), true);
-
-	const small = refusal(failure("no_match", "edit 0: oldText does not occur in the note body", { edit_index: 0, line_numbers: [4] }));
-	assert.deepEqual(small.details, { edit_index: 0, line_numbers: [4] }, "context inside the budget is kept as it is");
-
-	// A flood of keys is the same hazard as a flood of values: a handler must not spend the budget
-	// enumerating what it could not report anyway.
-	const manyKeys = failure("unknown_window_id", 'unknown window_id "w"', Object.fromEntries([...Array.from({ length: 300 }, (_, index) => [`window_${index}`, index]), ["k".repeat(5000), 1]]));
-	const keyed = refusal(manyKeys);
-	assert.deepEqual(Object.keys(keyed.details ?? {}).sort(), ["details_bytes", "truncated"], "oversized keys are replaced by the marker, not trimmed into a partial list");
-	assert.ok(structuredBytes(wireResult(manyKeys)) <= TOOL_OUTPUT_MAX_BYTES);
-
+test("a runaway refusal message is clipped with its lost length", () => {
 	const long = refusal(failure("internal_error", "m".repeat(50_000)));
 	assert.ok(Array.from(long.message).length < ERROR_MESSAGE_MAX_CHARS + 40, "a runaway message is clipped with a marker");
 	assert.match(long.message, /…\[truncated \d+ chars\]$/, "the clip says how much was dropped");
+	assert.ok(structuredBytes(wireResult(failure("internal_error", "m".repeat(50_000)))) <= TOOL_OUTPUT_MAX_BYTES, "even a pathological refusal fits the budget");
 });
 
-test("internal result invariants stay visible instead of becoming a bounded-looking refusal", () => {
-	// Context JSON cannot express is a handler defect, and a defect is not a bounded refusal.
-	const circular: Record<string, unknown> = {};
-	circular.self = circular;
-	assert.throws(() => failure("internal_error", "cyclic context", circular), TypeError, "a cyclic context throws instead of being swallowed");
-	assert.throws(() => failure("internal_error", "unrepresentable context", { size: 1n }), TypeError, "a BigInt context throws instead of becoming an empty value");
-
-	// A value with no JSON representation has no size to measure, so it is not measured as zero bytes.
+test("structuredBytes has no size for a value with no JSON representation", () => {
 	assert.throws(() => structuredBytes(undefined), TypeError, "undefined has no structured size");
 });
 
@@ -273,7 +233,6 @@ test("shared note operations return canonical outcomes with a body-only read win
 		assert.equal(change.kind, "body");
 		return "caller-rendered-diff";
 	}));
-	assert.equal(updated.applied, 1);
 	assert.equal(updated.change_kind, "body");
 	assert.equal(updated.diff, "caller-rendered-diff");
 
@@ -285,14 +244,12 @@ test("shared note operations return canonical outcomes with a body-only read win
 	assert.equal(read.text, stored.body, "a complete read is the whole body and nothing else");
 	assert.equal(read.total_chars, body.length);
 	assert.equal(read.next_offset_chars, null);
-	assert.equal(read.limited_by, null);
 	assert.equal(read.metadata.origin, "self");
 	assert.equal(notesRead.render(success(read)).includes("READ WINDOW"), false, "a read presents no metadata block");
 
 	// A negative offset resolves against the body, never against the serialized file.
 	const tail = data(await notesRead.execute({ address: "@project/test.md", offset_chars: -4 }, notesIdentity));
 	assert.equal(tail.text, body.slice(-4).join(""));
-	assert.equal(tail.offset_chars, body.length - 4);
 	assert.equal(tail.total_chars, body.length, "metadata length never enters the body cursor");
 	assert.equal(tail.next_offset_chars, null);
 
@@ -311,7 +268,7 @@ test("shared history operations read typed events through the addresses the adap
 	const windows = data(await historyWindows.execute({}, projection, "explicit-session"));
 	assert.equal(windows.session_id, "explicit-session");
 	assert.equal(windows.windows.length, 1);
-	assert.equal(windows.windows[0]?.item_count, 2, "a call and its result are one event, not two");
+	assert.deepEqual(windows.windows[0], { window_id: "root", created_at: null, first_seq: 1, last_seq: 2 }, "a call and its result are one event, not two");
 
 	const listed = data(await historyList.execute({ roles: ["tool"] }, projection));
 	assert.equal(listed.items.length, 1);
@@ -343,10 +300,22 @@ test("shared history operations read typed events through the addresses the adap
 	assert.equal(refusal(await historyRead.execute({ seq: 3 }, projection)).code, "not_an_event", "a paired result address is refused");
 });
 
+test("an unknown window_id names at most five known windows in its message", async () => {
+	const windows = Array.from({ length: 7 }, (_, index) => ({ windowId: `pcw:w${index}`, items: [{ seq: index + 1, windowId: `pcw:w${index}`, role: "user" as const, text: `message-${index}` }] }));
+	const projection = projectHistory(windows, 7, new Set([1, 2, 3, 4, 5, 6, 7]));
+	const outcome = await historyList.execute({ window_id: "pcw:absent" }, projection);
+	assert.equal(outcome.ok, false);
+	if (!outcome.ok) {
+		assert.equal(outcome.error.code, "unknown_window_id");
+		assert.match(outcome.error.message, /unknown window_id "pcw:absent"; known: pcw:w0, pcw:w1, pcw:w2, pcw:w3, pcw:w4/, "the message names the known windows itself");
+		assert.equal(outcome.error.message.includes("pcw:w5"), false, "at most five known windows are named");
+	}
+});
+
 test("one role schema declares the four public roles for the page item, the read payload, and the role filter", () => {
 	const read = (role: string) => ({
 		seq: 1, window_id: "root", role, created_at: null,
-		text: "", offset_chars: 0, total_chars: 0, next_offset_chars: null, limited_by: null,
+		text: "", total_chars: 0, next_offset_chars: null,
 	});
 	assert.equal(HistoryPageItemSchema.properties.role, HistoryRoleSchema, "the page item reuses the authoritative role schema");
 	assert.deepEqual(historyRoles().items, HistoryRoleSchema, "the role filter carries the authoritative role schema");

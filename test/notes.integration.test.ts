@@ -12,7 +12,7 @@ import { localIso } from "../src/notes/frontmatter.js";
 import type { NoteRow, Scope } from "../src/notes/index.js";
 import { listNotes, physicalPath, scopeDir } from "./helpers/notes.js";
 import { MAX_READ_WINDOW_CHARS, TOOL_OUTPUT_MAX_BYTES } from "../src/tools/output.js";
-import { MAX_METADATA_ENTRY_BYTES, notesUpdate } from "../src/tools/notes.js";
+import { notesUpdate } from "../src/tools/notes.js";
 import type { NotesListData, NotesReadData, NotesSearchData, NotesUpdateData } from "../src/tools/notes.js";
 import {
 	assertWithinBudget,
@@ -53,7 +53,7 @@ test("notes_list and notes_search are recent-first snapshots with narrowing hint
 	const listed = resultData<NotesListData>(await call(captured, "notes_list", { limit: 2 }, ctx));
 	assert.deepEqual(listed.files.map((file) => file.address), ["new.md", "@project/design.md"]);
 	assert.equal(listed.more, 1);
-	assert.deepEqual(Object.keys(listed).sort(), ["crumpled_excluded", "files", "homes_unavailable", "more"]);
+	assert.deepEqual(Object.keys(listed).sort(), ["files", "homes_unavailable", "more"]);
 
 	const searched = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle", limit: 2 }, ctx));
 	assert.deepEqual(searched.files.map((file) => file.address), ["new.md", "@project/design.md"]);
@@ -148,9 +148,9 @@ test("crumple lifecycle: metadata-only edits close and smooth a note without tou
 	await call(captured, "notes_write", { address: "journal.md", content: "log line" }, ctx);
 	const updatedBefore = (await listNotes(ctx, { scope: "session" }))[0]!.meta.updatedAt;
 
-	// metadata-only: content unchanged, applied 0, and the recorded time is the original one
+	// metadata-only: content unchanged, and the recorded time is the original one
 	const markOnly = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "journal.md", crumpled: true }, ctx));
-	assert.equal(markOnly.applied, 0);
+	assert.equal(markOnly.change_kind, "metadata");
 	assert.match(markOnly.diff, /^\+\s*\d+\s+crumpledAt: \d{4}-\d{2}-\d{2}T/m);
 	assert.deepEqual(await listNotes(ctx, { scope: "session" }), [], "a crumpled note leaves the live list");
 	const basket = (await listNotes(ctx, { scope: "session", wastebasket: true }))[0]!;
@@ -339,21 +339,17 @@ test("an over-budget note is delivered as a bounded prefix and resumed by next_o
 	assert.ok(first.content.length > 0, "the page is not empty");
 	assert.equal(first.content.includes("…"), false, "the window text is a plain prefix with no marker");
 	assert.ok(first.content.startsWith("H"), "the body is delivered first, with no frontmatter in the way");
-	assert.equal(first.offset_chars, 0, "the default window starts at the resolved offset 0");
-	assert.equal(first.total_chars, Array.from(text).length, "the window counts the body, not the serialized file");
-	assert.equal(first.limited_by, "limit", "the requested window ended this page, not the byte budget");
 	assert.equal(first.content.length, 12000, "the default window is the full requested count");
-	assert.deepEqual(Object.keys(resultData<NotesReadData>(rawFirst)).sort(), ["address", "limited_by", "metadata", "next_offset_chars", "offset_chars", "text", "total_chars"], "read fields are flat");
+	assert.deepEqual(Object.keys(resultData<NotesReadData>(rawFirst)).sort(), ["address", "metadata", "next_offset_chars", "text", "total_chars"], "read fields are flat");
 	assert.equal("access_count" in resultData<NotesReadData>(rawFirst).metadata, false, "access bookkeeping stays in storage");
-	assert.equal(textOf(rawFirst).endsWith(`\n\n[${first.total_chars - first.content.length} more characters. Use offset_chars=${first.next_offset_chars} to continue.]`), true, "the footer names the resume cursor in the new read style");
+	assert.equal(textOf(rawFirst).endsWith(`\n\n[truncated; continue at offset_chars=${first.next_offset_chars}]`), true, "the footer names the resume cursor");
 
-	// Asking for the largest legal window still cannot exceed the byte budget, and says so.
+	// Asking for the largest legal window still cannot exceed the byte budget.
 	const rawWide = await call(captured, "notes_read", { address: "huge.md", limit_chars: MAX_READ_WINDOW_CHARS }, ctx);
 	assertWithinBudget(rawWide, "widest requested window");
 	const wide = resultRead(rawWide);
-	assert.equal(wide.limited_by, "bytes", "the byte budget stopped this window");
 	assert.ok(Array.from(wide.content).length < MAX_READ_WINDOW_CHARS, "the widest request is cut short");
-	assert.match(textOf(rawWide), /\(32KB limit\)\. Use offset_chars=\d+ to continue\.\]$/, "a byte-stopped window names the budget that stopped it");
+	assert.match(textOf(rawWide), /\[truncated; continue at offset_chars=\d+\]$/, "a byte-stopped window still says where to continue");
 
 	// Following the cursor reconstructs the body by plain concatenation.
 	const parts = [first.content];
@@ -362,7 +358,6 @@ test("an over-budget note is delivered as a bounded prefix and resumed by next_o
 		const rawChunk = await call(captured, "notes_read", { address: "huge.md", offset_chars: offset }, ctx);
 		assertWithinBudget(rawChunk, `huge note chunk at ${offset}`);
 		const chunk = resultRead(rawChunk);
-		assert.equal(chunk.offset_chars, offset, "the response echoes the resolved absolute offset");
 		parts.push(chunk.content);
 		offset = chunk.next_offset_chars;
 	}
@@ -387,10 +382,9 @@ test("an over-budget note is delivered as a bounded prefix and resumed by next_o
 	assert.deepEqual(Object.keys(missing).sort(), ["code", "message"], "the refusal carries a precise code and message");
 	assert.equal(missing.message, "note not found");
 	assert.equal(missing.code, "not_found");
-	assert.equal(missingResult.details, undefined, "a refusal carries no details metadata");
 });
 
-test("an over-budget note search match is a named prefix with an honest line address", async () => {
+test("an over-budget note search match is a marked prefix with an honest line address", async () => {
 	const session = manager();
 	const captured = makeExtension(session);
 	const ctx = context(session);
@@ -398,19 +392,19 @@ test("an over-budget note search match is a named prefix with an honest line add
 	const hugeLine = `${'p'.repeat(500)}needle ${"y".repeat(TOOL_OUTPUT_MAX_BYTES * 2)}`;
 	await call(captured, "notes_write", { address: "a.md", content: "needle small" }, ctx);
 	await call(captured, "notes_write", { address: "search.md", content: hugeLine }, ctx);
-	const pages: Array<{ address: string; matches_total: number; matches: Array<{ line: number; text: string; truncated: boolean; offset_chars: number }> }> = [];
-	const found = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle", limit: 10 }, ctx));
+	const pages: Array<{ address: string; matches: Array<{ line: number; text: string; offset_chars: number }> }> = [];
+	const rawFound = await call(captured, "notes_search", { query: "needle", limit: 10 }, ctx);
+	const found = resultData<NotesSearchData>(rawFound);
 	assert.ok(Buffer.byteLength(JSON.stringify(found), "utf8") <= TOOL_OUTPUT_MAX_BYTES, "the structured match result stays within budget");
+	assert.match(textOf(rawFound), /\[truncated\]/, "the model-facing match line carries the same marker");
 	pages.push(...found.files);
 	assert.equal(found.more, 1, "the oversized result names the omitted matching file");
 	assert.deepEqual(pages.map((file) => file.address), ["search.md"], "the snapshot keeps the most recently updated match");
 	const oversized = pages[0]!;
-	assert.equal(oversized.matches_total, 1, "the file's full match count is named even though the line was cut");
 	assert.equal(oversized.matches.length, 1);
 	const match = oversized.matches[0]!;
-	assert.equal(match.truncated, true, "the oversized match line is flagged as truncated");
-	assert.ok(hugeLine.startsWith(match.text), "the match text is a plain prefix of the line");
-	assert.equal(match.text.includes("…"), false, "no marker is appended to the match text");
+	assert.ok(match.text.endsWith(" [truncated]"), "a shortened match line ends with the ellipsis marker");
+	assert.ok(hugeLine.startsWith(match.text.slice(0, -" [truncated]".length)), "the match text is a plain prefix of the line plus its marker");
 	assert.equal(match.line, 1, "the informational line number survives");
 	assert.equal(match.offset_chars, 500, "the offset addresses the body directly, so the query's real position survives");
 	const atMatch = resultRead(await call(captured, "notes_read", { address: "search.md", offset_chars: match.offset_chars }, ctx));
@@ -422,7 +416,6 @@ test("an over-budget note search match is a named prefix with an honest line add
 		const rawChunk = await call(captured, "notes_read", { address: "search.md", offset_chars: offset }, ctx);
 		assertWithinBudget(rawChunk, `search.md chunk at ${offset}`);
 		const chunk = resultRead(rawChunk);
-		assert.equal(chunk.offset_chars, offset, "the read echoes the resolved address");
 		parts.push(chunk.content);
 		offset = chunk.next_offset_chars;
 	}
@@ -467,17 +460,17 @@ test("an over-budget mutation diff is shortened on both surfaces, and the edit s
 	assertWithinBudget(raw, "oversized diff receipt");
 	const update = resultData<NotesUpdateData>(raw);
 	assert.equal(update.change_kind, "body");
-	assert.equal(update.applied, 1);
-	assert.equal(update.diff_truncated, true, "the receipt names that its own diff was shortened");
 	assert.ok(update.diff.length > 0, "a shortened diff is still delivered, not emptied");
-	assert.match(textOf(raw), /update itself was applied/, "a shortened receipt never claims the note is unchanged");
+	assert.ok(update.diff.endsWith("[diff truncated; update applied]"), "a shortened diff ends with the marker line");
+	assert.match(textOf(raw), /^updated bulk-edit\.md/, "the receipt still names the note it updated");
+	assert.ok(textOf(raw).includes("[diff truncated; update applied]"), "the model-facing text carries the same marker");
 	assert.equal(textOf(raw).includes(`+${"b".repeat(300)}`), false, "the delivered diff prefix stops inside the first change");
 
 	const body = resultRead(await call(captured, "notes_read", { address: "bulk-edit.md", limit_chars: 300 }, ctx)).content;
 	assert.equal(body, "b".repeat(300), "every one of the 1500 replacements was applied, not just the ones that fit the receipt");
 });
 
-test("oversized note metadata is counted out of a read instead of quietly dropped", async () => {
+test("oversized note metadata is named in place instead of riding along in the envelope", async () => {
 	const session = manager();
 	const captured = makeExtension(session);
 	const ctx = context(session);
@@ -494,13 +487,12 @@ test("oversized note metadata is counted out of a read instead of quietly droppe
 	assert.equal(metadata.origin, "external");
 	assert.equal("access_count" in metadata, false, "access bookkeeping stays in storage");
 	assert.equal(metadata.extra.small, "kept", "a small unrecognized key is delivered");
-	assert.equal(metadata.extra.fat, undefined, "an oversized value is not delivered in part");
-	assert.deepEqual(metadata.omitted_extra, { keys: 1, bytes: JSON.stringify("fat").length + 1 + JSON.stringify("x".repeat(8000)).length }, "the withheld entry is summarized, never listed, and its key bytes are counted");
-	assert.match(textOf(raw), /too large to show/, "the model-facing text says metadata was withheld");
+	assert.equal(metadata.extra.fat, "[omitted: too large]", "an oversized value is named in place, not hidden");
+	assert.match(textOf(raw), /\[omitted: too large\]/, "the model-facing metadata carries the marker too");
 	assert.equal(read.total_chars, 9, "the window counts the body only, whatever the front weighs");
 });
 
-test("a giant frontmatter key is counted out of a read instead of riding along in the envelope", async () => {
+test("a giant frontmatter key is left out of a read instead of riding along in the envelope", async () => {
 	const session = manager();
 	const captured = makeExtension(session);
 	const ctx = context(session);
@@ -518,8 +510,22 @@ test("a giant frontmatter key is counted out of a read instead of riding along i
 	assert.equal(read.total_chars, 0);
 	assert.equal(metadata.extra.small, "kept", "a small key beside a giant one is still delivered");
 	assert.equal(Object.prototype.hasOwnProperty.call(metadata.extra, giantKey), false, "the giant key is never partially delivered");
-	assert.deepEqual(metadata.omitted_extra, { keys: 1, bytes: JSON.stringify(giantKey).length + 1 + JSON.stringify("v").length }, "the accounting covers the key and the value, not the value alone");
-	assert.equal(metadata.omitted_extra!.bytes > MAX_METADATA_ENTRY_BYTES, true, "one oversized entry is counted in full, key included");
+});
+
+test("an extra value beyond the verbatim budget is named in place, not dropped", async () => {
+	const session = manager();
+	const captured = makeExtension(session);
+	const ctx = context(session);
+	const path = physicalPath("session", "many-extras.md", ctx);
+	mkdirSync(dirname(path), { recursive: true });
+	const stamp = localIso(Date.now());
+	const keys = Array.from({ length: 10 }, (_, index) => `k${index}: "${"x".repeat(400)}"`).join("\n");
+	writeFileSync(path, `---\norigin: self\ncreatedAt: ${stamp}\nupdatedAt: ${stamp}\nlastAccessed: ${stamp}\naccessCount: 0\n${keys}\n---\n\nbody`);
+
+	const metadata = resultData<NotesReadData>(await call(captured, "notes_read", { address: "many-extras.md" }, ctx)).metadata;
+	assert.equal(metadata.extra.k0, "x".repeat(400), "the first extras are delivered verbatim");
+	assert.equal(metadata.extra.k9, "[omitted: too large]", "an extra past the verbatim budget is named, not dropped");
+	assert.equal(Object.keys(metadata.extra).length, 10, "every key is still accounted for");
 });
 
 test("an unexpected notes defect propagates with its own identity while real filesystem refusals stay structured", async () => {
@@ -567,14 +573,11 @@ test("a body that repeats one anchor thousands of times refuses with bounded, co
 	assertWithinBudget(raw, "refusal with thousands of match lines");
 	const refusal = resultError(raw);
 	assert.equal(refusal.code, "ambiguous_edit");
+	assert.match(refusal.message, /edit 0:/, "the message names the failing edit index");
 	assert.match(refusal.message, /occurs 5000 times \(lines 1, 2, 3, 4, 5, 6, 7, 8, and 4992 more\)/, "the message names a bounded sample and the exact total");
-	assert.match(refusal.message, /names 20 of 5000 match lines/, "the receipt says its own line list is partial");
-	assert.deepEqual(refusal.details?.line_numbers, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
-	assert.equal(refusal.details?.line_numbers_total, repeats, "the full count travels with the sample, so nothing is silently dropped");
-	assert.equal(refusal.details?.edit_index, 0);
 	assert.equal(resultRead(await call(captured, "notes_read", { address: "many.md", limit_chars: 15 }, ctx)).content, "beta\n".repeat(3), "the refused edit changed nothing");
 
 	const replaced = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "many.md", edits: [{ oldText: "beta", newText: "B" }], replace_all: true }, ctx));
 	assertWithinBudget(await call(captured, "notes_read", { address: "many.md" }, ctx), "read after replace_all");
-	assert.equal(replaced.applied, 1);
+	assert.equal(replaced.change_kind, "body");
 });

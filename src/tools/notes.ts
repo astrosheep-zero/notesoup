@@ -21,28 +21,12 @@ function projectKeyField(scope: Scope, projectKey: string): { project_key?: stri
 	return scope === "project" ? { project_key: projectKey } : {};
 }
 
-const MAX_ERROR_LINE_FACTS = 20;
-
 /**
- * Typed refusal. Edit locations keep their precise line/edit facts in `details`.
+ * Typed refusal. Every fact a caller needs is already in the message; there is no separate context.
  * Convert expected refusals; unexpected errors propagate unchanged.
  */
 function failureOf(error: unknown): Outcome<never> {
-	if (error instanceof NoteError) {
-		const details: Record<string, unknown> = {};
-		let message = error.message;
-		if (error.lineNumbers) {
-			if (error.lineNumbers.length > MAX_ERROR_LINE_FACTS) {
-				details.line_numbers = error.lineNumbers.slice(0, MAX_ERROR_LINE_FACTS);
-				details.line_numbers_total = error.lineNumbers.length;
-				message = `${message} (this refusal names ${MAX_ERROR_LINE_FACTS} of ${error.lineNumbers.length} match lines; the note is unchanged)`;
-			} else {
-				details.line_numbers = error.lineNumbers;
-			}
-		}
-		if (error.editIndex !== undefined) details.edit_index = error.editIndex;
-		return failure(error.code, message, Object.keys(details).length > 0 ? details : undefined);
-	}
+	if (error instanceof NoteError) return failure(error.code, error.message);
 	// Address, pattern, and query guards raise declared types; nothing else is converted.
 	if (error instanceof InvalidQueryError) return failure("invalid_query", error.message);
 	if (isFilesystemError(error)) return failure("io_error", "notes operation failed");
@@ -55,9 +39,11 @@ function byRecent<T extends { address: string; meta: { updatedAt: number } }>(a:
 
 /** Metadata keys this layer normalizes; everything else is exposed verbatim under `extra`. */
 const NORMALIZED_META_KEYS = new Set(["scope", "origin", "createdAt", "updatedAt", "lastAccessed", "accessCount", "crumpledAt", "project"]);
-/** One unrecognized entry, and all of them together, are bounded; omissions are counted, never listed. */
+/** One unrecognized entry, and the verbatim extras together, are bounded so `extra` cannot outgrow the read. */
 export const MAX_METADATA_ENTRY_BYTES = 1024;
-const MAX_METADATA_EXTRA_BYTES = 2048;
+const MAX_METADATA_VERBATIM_BYTES = 2048;
+/** An extra value that cannot be carried is named in place, never silently dropped. */
+export const TOO_LARGE_EXTRA_VALUE = "[omitted: too large]";
 
 /** Include the key: hand-written frontmatter can have arbitrarily long keys. */
 function extraEntryBytes(key: string, value: unknown): number {
@@ -71,28 +57,28 @@ export const NoteMetadataSchema = Type.Object({
 	crumpled_at: Type.Optional(Type.String()),
 	project: Type.Optional(Type.String()),
 	extra: Type.Record(Type.String(), Type.Unknown()),
-	/** Values left in the file but too large to show, summarized so the summary cannot grow. */
-	omitted_extra: Type.Optional(Type.Object({ keys: Type.Integer(), bytes: Type.Integer() })),
-});
+}, { additionalProperties: false });
 export type NoteMetadata = Static<typeof NoteMetadataSchema>;
 
-/** Normalize known metadata and bound extras without partially serializing their values. */
+/** Normalize known metadata and bound extras, naming an oversized value instead of hiding it. */
 function noteMetadata(meta: NoteMeta): NoteMetadata {
 	const extra: Record<string, unknown> = {};
-	let extraBytes = 0;
-	let omittedKeys = 0;
-	let omittedBytes = 0;
-	for (const [key, value] of Object.entries(meta)) {
-		if (NORMALIZED_META_KEYS.has(key) || value === undefined) continue;
-		const bytes = extraEntryBytes(key, value);
-		if (bytes > MAX_METADATA_ENTRY_BYTES || extraBytes + bytes > MAX_METADATA_EXTRA_BYTES) {
-			omittedKeys++;
-			omittedBytes += bytes;
-			continue;
-		}
-		extraBytes += bytes;
+	let verbatimBytes = 0;
+	const put = (key: string, value: unknown): void => {
 		// defineProperty keeps a hand-written `__proto__` key as ordinary data.
 		Object.defineProperty(extra, key, { value, enumerable: true, writable: true, configurable: true });
+	};
+	for (const [key, value] of Object.entries(meta)) {
+		if (NORMALIZED_META_KEYS.has(key) || value === undefined) continue;
+		// A key too large to carry cannot be named at all; an oversized value is named in place.
+		if (structuredBytes(key) > MAX_METADATA_ENTRY_BYTES) continue;
+		const entryBytes = extraEntryBytes(key, value);
+		if (entryBytes > MAX_METADATA_ENTRY_BYTES || verbatimBytes + entryBytes > MAX_METADATA_VERBATIM_BYTES) {
+			put(key, TOO_LARGE_EXTRA_VALUE);
+			continue;
+		}
+		verbatimBytes += entryBytes;
+		put(key, value);
 	}
 	return {
 		origin: meta.origin,
@@ -101,7 +87,6 @@ function noteMetadata(meta: NoteMeta): NoteMetadata {
 		...(typeof meta.crumpledAt === "string" ? { crumpled_at: meta.crumpledAt } : {}),
 		...(typeof meta.project === "string" ? { project: meta.project } : {}),
 		extra,
-		...(omittedKeys > 0 ? { omitted_extra: { keys: omittedKeys, bytes: omittedBytes } } : {}),
 	};
 }
 
@@ -115,7 +100,6 @@ function renderMetadata(metadata: NoteMetadata): string {
 	];
 	const extra = Object.keys(metadata.extra);
 	if (extra.length > 0) fields.push(`extra ${JSON.stringify(metadata.extra)}`);
-	if (metadata.omitted_extra !== undefined) fields.push(`${metadata.omitted_extra.keys} more metadata values (${metadata.omitted_extra.bytes} bytes) are in the note file but too large to show`);
 	return fields.join(" | ");
 }
 
@@ -129,24 +113,21 @@ const ListedFileSchema = Type.Object({
 	project_key: Type.Optional(Type.String()),
 	updated_at: Type.String(),
 	crumpled_at: Type.Optional(Type.String()),
-});
+}, { additionalProperties: false });
 
 const MatchSchema = Type.Object({
 	line: Type.Integer(),
 	text: Type.String(),
-	truncated: Type.Boolean(),
 	offset_chars: Type.Integer(),
-});
+}, { additionalProperties: false });
 
 const SearchedFileSchema = Type.Object({
 	...ListedFileSchema.properties,
-	matches_total: Type.Integer(),
 	matches: Type.Array(MatchSchema),
-});
+}, { additionalProperties: false });
 
 const SnapshotSchema = {
 	more: Type.Integer(),
-	crumpled_excluded: Type.Integer(),
 	homes_unavailable: Type.Array(Type.String()),
 };
 
@@ -154,19 +135,16 @@ export const NotesWriteDataSchema = Type.Object({
 	address: Type.String(),
 	project_key: Type.Optional(Type.String()),
 	outcome: Type.Union([Type.Literal("created"), Type.Literal("overwrote"), Type.Literal("uncrumpled")]),
-});
+}, { additionalProperties: false });
 export type NotesWriteData = Static<typeof NotesWriteDataSchema>;
 
 export const NotesUpdateDataSchema = Type.Object({
 	address: Type.String(),
 	project_key: Type.Optional(Type.String()),
-	applied: Type.Integer(),
 	change_kind: Type.Union([Type.Literal("none"), Type.Literal("body"), Type.Literal("metadata"), Type.Literal("file")]),
 	diff: Type.String(),
-	diff_truncated: Type.Optional(Type.Literal(true)),
 	rename_from: Type.Optional(Type.String()),
-	replaced_crumpled_target: Type.Optional(Type.Boolean()),
-});
+}, { additionalProperties: false });
 export type NotesUpdateData = Static<typeof NotesUpdateDataSchema>;
 
 export const NotesReadDataSchema = Type.Object({
@@ -174,19 +152,19 @@ export const NotesReadDataSchema = Type.Object({
 	project_key: Type.Optional(Type.String()),
 	metadata: NoteMetadataSchema,
 	...TextWindowSchema.properties,
-});
+}, { additionalProperties: false });
 export type NotesReadData = Static<typeof NotesReadDataSchema>;
 
 export const NotesListDataSchema = Type.Object({
 	files: Type.Array(ListedFileSchema),
 	...SnapshotSchema,
-});
+}, { additionalProperties: false });
 export type NotesListData = Static<typeof NotesListDataSchema>;
 
 export const NotesSearchDataSchema = Type.Object({
 	files: Type.Array(SearchedFileSchema),
 	...SnapshotSchema,
-});
+}, { additionalProperties: false });
 export type NotesSearchData = Static<typeof NotesSearchDataSchema>;
 
 type Snapshot<T> = Omit<NotesListData, "files"> & { files: T[] };
@@ -200,7 +178,7 @@ function snapshot<T>(
 	shrink?: (item: T, fits: (candidate: T) => boolean) => T,
 ): Outcome<Snapshot<T>> {
 	const files: T[] = [];
-	const data = (selected: T[]): Snapshot<T> => ({ files: selected, more: rows.length - selected.length, crumpled_excluded: status.crumpledExcluded, homes_unavailable: status.homesUnavailable });
+	const data = (selected: T[]): Snapshot<T> => ({ files: selected, more: rows.length - selected.length, homes_unavailable: status.homesUnavailable });
 	const render = (outcome: Outcome<Snapshot<T>>) => renderOutcome(outcome, renderData);
 	const fits = (item: T) => fitsResult(success(data([...files, item])), render);
 	for (const item of rows.slice(0, limit)) {
@@ -246,12 +224,10 @@ export const notesUpdateParameters = Type.Object({ address: Type.String(), edits
 
 function renderUpdateData(data: NotesUpdateData): string {
 	const head = data.rename_from === undefined
-		? `${data.change_kind === "none" ? "unchanged" : "updated"} ${renderIdentity(data)}: ${data.applied} ${data.applied === 1 ? "edit" : "edits"}`
-		: `moved ${data.rename_from} -> ${data.address}${data.replaced_crumpled_target === true ? " (replaced a crumpled note)" : ""}`;
+		? `${data.change_kind === "none" ? "unchanged" : "updated"} ${renderIdentity(data)}`
+		: `moved ${data.rename_from} -> ${data.address}`;
 	const lines = [head];
-	if (data.diff_truncated === true) lines.push("diff (this receipt's diff was shortened to fit the output budget; the update itself was applied):");
-	else if (data.diff.length > 0) lines.push("diff:");
-	if (data.diff.length > 0) lines.push(data.diff);
+	if (data.diff.length > 0) lines.push("diff:", data.diff);
 	return lines.join("\n");
 }
 
@@ -259,12 +235,15 @@ function renderUpdate(result: Outcome<NotesUpdateData>): string {
 	return renderOutcome(result, renderUpdateData);
 }
 
-/** Bound a mutation receipt on both surfaces; a huge diff is cut to the longest fitting prefix. */
+/** A shortened diff still says so in the receipt's own text, on both surfaces. */
+export const DIFF_SHORTENED_MARKER = "[diff truncated; update applied]";
+
+/** Bound a mutation receipt on both surfaces; a huge diff is cut to the longest fitting prefix and marked. */
 function boundedUpdate(data: NotesUpdateData): Outcome<NotesUpdateData> {
 	if (fitsResult(success(data), renderUpdate)) return success(data);
-	const shortened: NotesUpdateData = { ...data, diff_truncated: true };
-	const diff = prefixFit(data.diff, (candidate) => fitsResult(success({ ...shortened, diff: candidate }), renderUpdate));
-	const result = success({ ...shortened, diff });
+	if (data.diff === "") return failure("output_too_large", "The update was applied, but its receipt metadata exceeds the response budget.");
+	const diff = prefixFit(data.diff, (candidate) => fitsResult(success({ ...data, diff: `${candidate}\n${DIFF_SHORTENED_MARKER}` }), renderUpdate));
+	const result = success({ ...data, diff: `${diff}\n${DIFF_SHORTENED_MARKER}` });
 	return fitsResult(result, renderUpdate) ? result : failure("output_too_large", "The update was applied, but its receipt metadata exceeds the response budget.");
 }
 
@@ -281,13 +260,13 @@ export const notesUpdate = {
 				if ((params.edits?.length ?? 0) > 0 || params.origin !== undefined || params.crumpled !== undefined || params.replace_all === true) {
 					return failureOf(new NoteError("invalid_scope", "rename_to is used alone: do not combine it with edits, origin, crumpled, or replace_all"));
 				}
-				const { replacedCrumpledTarget } = await store.rename(params.address, renameTo);
+				await store.rename(params.address, renameTo);
 				const from = noteIdentity(identity, params.address).address;
 				const to = noteIdentity(identity, renameTo);
-				return boundedUpdate({ ...to, rename_from: from, applied: 0, change_kind: "file", diff: `rename ${from} -> ${to.address}`, replaced_crumpled_target: replacedCrumpledTarget });
+				return boundedUpdate({ ...to, rename_from: from, change_kind: "file", diff: `rename ${from} -> ${to.address}` });
 			}
-			const { applied, change } = await store.update(params.address, params.edits, { origin: params.origin, crumpled: params.crumpled, replaceAll: params.replace_all });
-			return boundedUpdate({ ...noteIdentity(identity, params.address), applied, change_kind: change.kind, diff: renderDiff(change) });
+			const { change } = await store.update(params.address, params.edits, { origin: params.origin, crumpled: params.crumpled, replaceAll: params.replace_all });
+			return boundedUpdate({ ...noteIdentity(identity, params.address), change_kind: change.kind, diff: renderDiff(change) });
 		} catch (error) { return failureOf(error); }
 	},
 	render: renderUpdate,
@@ -325,14 +304,13 @@ function renderListData(data: NotesListData): string {
 		lines.push(`- ${renderIdentity(file)} | updated ${file.updated_at}${file.crumpled_at === undefined ? "" : ` | crumpled ${file.crumpled_at}`}`);
 	}
 	if (data.more > 0) lines.push(`${data.more} more matching notes omitted; narrow with pattern`);
-	if (data.crumpled_excluded > 0) lines.push(`${data.crumpled_excluded} crumpled notes hidden; pass wastebasket to list them`);
 	for (const home of data.homes_unavailable) lines.push(`${home} could not be read`);
 	return lines.join("\n");
 }
 
 export const notesList = {
 	name: "notes_list", label: "Notes list",
-	description: `List notes in the session and the four @ homes, newest first. Snapshot, not pageable: more counts omitted files; pattern globs full addresses. Reports unavailable homes and how many crumpled notes were excluded. ${ADDRESS_DESCRIPTION}`,
+	description: `List notes in the session and the four @ homes, newest first. Snapshot, not pageable: more counts omitted files; pattern globs full addresses. Reports unavailable homes. ${ADDRESS_DESCRIPTION}`,
 	parameters: notesListParameters, outputSchema: resultSchema(NotesListDataSchema),
 	async execute(params: Static<typeof notesListParameters>, identity: NotesIdentity): Promise<Outcome<NotesListData>> {
 		try {
@@ -343,23 +321,25 @@ export const notesList = {
 	render: (result: Outcome<NotesListData>): string => renderOutcome(result, renderListData),
 } as const;
 
-export const notesSearchParameters = Type.Object({ query: searchQuery(), pattern: nullableString(), limit: FILE_LIMIT_PARAMETER, max_matches_per_file: Type.Optional(Type.Integer({ minimum: 1, description: "Max matches shown per file (default: no cap); matches_total still counts all." })), wastebasket: WASTEBASKET_PARAMETER }, { additionalProperties: false });
+export const notesSearchParameters = Type.Object({ query: searchQuery(), pattern: nullableString(), limit: FILE_LIMIT_PARAMETER, max_matches_per_file: Type.Optional(Type.Integer({ minimum: 1, description: "Max matches shown per file (default: no cap)." })), wastebasket: WASTEBASKET_PARAMETER }, { additionalProperties: false });
 
 function renderSearchData(data: NotesSearchData): string {
 	const lines = [`${data.files.length} ${data.files.length === 1 ? "file" : "files"}`];
 	for (const file of data.files) {
-		lines.push(`- ${renderIdentity(file)} | updated ${file.updated_at} | ${file.matches_total} ${file.matches_total === 1 ? "match" : "matches"}${file.matches.length < file.matches_total ? ` (${file.matches.length} shown)` : ""}`);
-		for (const match of file.matches) lines.push(`  line ${match.line} at offset_chars ${match.offset_chars}: ${match.text}${match.truncated ? " [line shortened]" : ""}`);
+		lines.push(`- ${renderIdentity(file)} | updated ${file.updated_at} | ${file.matches.length} ${file.matches.length === 1 ? "match" : "matches"}`);
+		for (const match of file.matches) lines.push(`  line ${match.line} at offset_chars ${match.offset_chars}: ${match.text}`);
 	}
 	if (data.more > 0) lines.push(`${data.more} more matching files omitted; narrow with pattern`);
-	if (data.crumpled_excluded > 0) lines.push(`${data.crumpled_excluded} crumpled notes hidden; pass wastebasket to search them`);
 	for (const home of data.homes_unavailable) lines.push(`${home} could not be read`);
 	return lines.join("\n");
 }
 
 type SearchFile = NotesSearchData["files"][number];
 
-/** Prefer whole match lines; shorten the first line only if no whole line fits. */
+/** A shortened match line still ends with a marker, so its own text says it was cut. */
+export const MATCH_SHORTENED_MARKER = " [truncated]";
+
+/** Prefer whole match lines; shorten the first line only if no whole line fits, and mark it. */
 function fitSearchFile(file: SearchFile, fits: (candidate: SearchFile) => boolean): SearchFile {
 	let low = 0;
 	let high = file.matches.length;
@@ -371,21 +351,20 @@ function fitSearchFile(file: SearchFile, fits: (candidate: SearchFile) => boolea
 	if (low > 0) return { ...file, matches: file.matches.slice(0, low) };
 	const first = file.matches[0];
 	if (!first) return file;
-	const withText = (text: string): SearchFile => ({ ...file, matches: [{ ...first, text, truncated: true }] });
+	const withText = (text: string): SearchFile => ({ ...file, matches: [{ ...first, text: `${text}${MATCH_SHORTENED_MARKER}` }] });
 	return withText(prefixFit(first.text, text => fits(withText(text))));
 }
 
 export const notesSearch = {
 	name: "notes_search", label: "Notes search",
-	description: `Search note bodies for case-insensitive literal queries (OR). Returns matching lines and body code-point offsets for \`notes_read\`. Snapshot, not pageable: more counts omitted files; matches_total is before per-file capping. pattern globs full addresses across the session and the four @ homes. ${ADDRESS_DESCRIPTION}`,
+	description: `Search note bodies for case-insensitive literal queries (OR). Returns matching lines and body code-point offsets for \`notes_read\`. Snapshot, not pageable: more counts omitted files; pattern globs full addresses across the session and the four @ homes. ${ADDRESS_DESCRIPTION}`,
 	parameters: notesSearchParameters, outputSchema: resultSchema(NotesSearchDataSchema),
 	async execute(params: Static<typeof notesSearchParameters>, identity: NotesIdentity): Promise<Outcome<NotesSearchData>> {
 		try {
 			const { rows, status } = await createNotesStore(identity).searchWithStatus(searchQueries(params.query), { pattern: params.pattern ?? undefined, wastebasket: params.wastebasket });
 			const files: NotesSearchData["files"] = rows.sort(byRecent).map(row => ({
 				...listedFile(row, identity),
-				matches_total: row.matches.length,
-				matches: row.matches.slice(0, params.max_matches_per_file).map(match => ({ line: match.line, text: match.text, truncated: false, offset_chars: match.offsetChars })),
+				matches: row.matches.slice(0, params.max_matches_per_file).map(match => ({ line: match.line, text: match.text, offset_chars: match.offsetChars })),
 			}));
 			return snapshot(files, params.limit, status, renderSearchData, fitSearchFile);
 		} catch (error) { return failureOf(error); }

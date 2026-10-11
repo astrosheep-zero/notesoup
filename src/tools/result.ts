@@ -2,11 +2,10 @@
 import { Type, type Static, type TSchema } from "typebox";
 import { DEFAULT_READ_WINDOW_CHARS, TOOL_OUTPUT_MAX_BYTES, withinTextBudget } from "./output.js";
 
-/** `details` is sanitized context for a caller, never a payload or a file body. */
+/** The one refusal shape: `code` is a stable internal identifier, `message` the bounded reading. */
 export const OperationErrorSchema = Type.Object({
 	code: Type.String(),
 	message: Type.String(),
-	details: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
 }, { additionalProperties: false });
 export type OperationError = Static<typeof OperationErrorSchema>;
 
@@ -17,59 +16,36 @@ export function success<T>(data: T): Outcome<T> {
 	return { ok: true, data };
 }
 
-/** A code is an internal stable identifier and is never clipped; the dynamic message and details are the bounded surface. */
+/** A code is an internal stable identifier and is never clipped; the dynamic message is the bounded surface. */
 export const ERROR_MESSAGE_MAX_CHARS = 2000;
-export const ERROR_DETAILS_MAX_BYTES = 4096;
 
 function boundedMessage(message: string): string {
 	const chars = Array.from(message);
 	return chars.length <= ERROR_MESSAGE_MAX_CHARS ? message : `${chars.slice(0, ERROR_MESSAGE_MAX_CHARS).join("")}…[truncated ${chars.length - ERROR_MESSAGE_MAX_CHARS} chars]`;
 }
 
-/** Oversized context becomes an explicit marker, and context JSON cannot serialize propagates instead of being swallowed. */
-function boundedDetails(details: Record<string, unknown>): Record<string, unknown> {
-	const json = JSON.stringify(details);
-	const bytes = Buffer.byteLength(json, "utf8");
-	return bytes <= ERROR_DETAILS_MAX_BYTES ? JSON.parse(json) as Record<string, unknown> : { truncated: true, details_bytes: bytes };
-}
-
-export function failure(code: string, message: string, details?: Record<string, unknown>): Outcome<never> {
-	return {
-		ok: false,
-		error: {
-			code,
-			message: boundedMessage(message),
-			...(details === undefined ? {} : { details: boundedDetails(details) }),
-		},
-	};
+export function failure(code: string, message: string): Outcome<never> {
+	return { ok: false, error: { code, message: boundedMessage(message) } };
 }
 
 /** Public results have no success envelope. `error` is reserved for a refusal message. */
-export type WireError = { error: string; code: string; details?: Record<string, unknown> };
+export const WireErrorSchema = Type.Object({ error: Type.String(), code: Type.String() }, { additionalProperties: false });
+export type WireError = Static<typeof WireErrorSchema>;
 export type WireResult<T> = T | WireError;
 
 export function wireResult<T>(result: Outcome<T>): WireResult<T> {
 	if (result.ok) return result.data;
-	const { code, message, details } = result.error;
-	return { error: message, code, ...(details === undefined ? {} : { details }) };
+	const { code, message } = result.error;
+	return { error: message, code };
 }
 
 export function resultSchema<S extends TSchema>(dataSchema: S) {
-	return Type.Union([
-		dataSchema,
-		Type.Object({
-			error: Type.String(),
-			code: Type.String(),
-			details: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-		}, { additionalProperties: false }),
-	]);
+	return Type.Union([dataSchema, WireErrorSchema]);
 }
 
 /** A refusal reads as one short line; a success is the operation's own reading of its data. */
 export function renderOutcome<T>(result: Outcome<T>, renderData: (data: T) => string): string {
-	if (result.ok) return renderData(result.data);
-	const { code, message, details } = result.error;
-	return `error: ${code}: ${message}${details === undefined ? "" : ` ${JSON.stringify(details)}`}`;
+	return result.ok ? renderData(result.data) : `error: ${result.error.code}: ${result.error.message}`;
 }
 
 /** Bytes of the structured payload as delivered: compact JSON, not the model-facing text. A value with no JSON representation has no size to measure. */
@@ -88,10 +64,8 @@ export function fitsResult<T>(result: Outcome<T>, render: (result: Outcome<T>) =
 /** `text` is verbatim, with no marker inserted, so windows concatenate back into the source. */
 export const TextWindowSchema = Type.Object({
 	text: Type.String(),
-	offset_chars: Type.Integer({ minimum: 0 }),
 	total_chars: Type.Integer({ minimum: 0 }),
 	next_offset_chars: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()], { description: "Continue at this code-point offset; null at EOF." }),
-	limited_by: Type.Union([Type.Literal("limit"), Type.Literal("bytes"), Type.Null()]),
 }, { additionalProperties: false });
 export type TextWindow = Static<typeof TextWindowSchema>;
 
@@ -117,13 +91,10 @@ export function readTextWindow<T>(
 	const range = Math.min(requestedChars, chars.length - start);
 	const window = (delivered: number): TextWindow => {
 		const end = start + delivered;
-		const withheld = end < chars.length;
 		return {
 			text: chars.slice(start, end).join(""),
-			offset_chars: start,
 			total_chars: chars.length,
-			next_offset_chars: withheld ? end : null,
-			limited_by: !withheld ? null : delivered === range ? "limit" : "bytes",
+			next_offset_chars: end < chars.length ? end : null,
 		};
 	};
 	const fits = (delivered: number): boolean => fitsResult(success(makeData(window(delivered))), render);
@@ -136,19 +107,14 @@ export function readTextWindow<T>(
 		if (fits(mid)) low = mid;
 		else high = mid - 1;
 	}
-	if (low === 0) {
-		return failure("output_too_large", "The response metadata leaves no room for a progressing read window.", { total_chars: chars.length, offset_chars: start, budget_bytes: TOOL_OUTPUT_MAX_BYTES });
-	}
+	if (low === 0) return failure("output_too_large", "The response metadata leaves no room for a progressing read window.");
 	return success(makeData(window(low)));
 }
 
 /** The continuation line never becomes part of `window.text`, and a complete window has none. */
 export function renderTextWindow(window: TextWindow): string {
 	const next = window.next_offset_chars;
-	if (next === null) return window.text;
-	const resume = `Use offset_chars=${next} to continue.`;
-	if (window.limited_by === "limit") return `${window.text}\n\n[${window.total_chars - next} more characters. ${resume}]`;
-	return `${window.text}\n\n[Showing chars [${window.offset_chars}, ${next}) of ${window.total_chars} (${TOOL_OUTPUT_MAX_BYTES / 1024}KB limit). ${resume}]`;
+	return next === null ? window.text : `${window.text}\n\n[truncated; continue at offset_chars=${next}]`;
 }
 
 /** One outcome in, model-facing text out. */

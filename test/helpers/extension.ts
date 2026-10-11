@@ -283,8 +283,7 @@ function isOperationError(value: unknown): value is OperationError {
 function isTextWindow(value: unknown): value is TextWindow {
 	if (typeof value !== "object" || value === null) return false;
 	const candidate = value as Partial<TextWindow>;
-	return typeof candidate.text === "string" && typeof candidate.offset_chars === "number" &&
-		typeof candidate.total_chars === "number" &&
+	return typeof candidate.text === "string" && typeof candidate.total_chars === "number" &&
 		(candidate.next_offset_chars === null || typeof candidate.next_offset_chars === "number");
 }
 
@@ -300,7 +299,7 @@ export function resultData<T>(result: AgentToolResult<unknown>): T {
 export function resultError(result: AgentToolResult<unknown>): OperationError {
 	const outcome = outcomeOf(result);
 	assert.equal(result.isError, true, "a refusal is delivered as an error result");
-	const error = { code: outcome.code, message: outcome.error, ...(outcome.details === undefined ? {} : { details: outcome.details }) };
+	const error = { code: outcome.code, message: outcome.error };
 	assert.ok(isOperationError(error), "refusal carries a code and an error message");
 	return error;
 }

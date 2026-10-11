@@ -40,7 +40,7 @@ function isoUtcMs(value: string): number | undefined {
 function timeBound(name: "since" | "until", value: string | undefined): Outcome<number | undefined> {
 	if (value === undefined) return success(undefined);
 	const at = isoUtcMs(value);
-	return at === undefined ? failure("invalid_time", `${name} is not an ISO 8601 timestamp: "${value}"`, { [name]: value }) : success(at);
+	return at === undefined ? failure("invalid_time", `${name} is not an ISO 8601 timestamp: "${value}"`) : success(at);
 }
 
 /** Parse `since`/`until`; a malformed or inverted pair refuses here. */
@@ -50,7 +50,7 @@ function resolveTimeBounds(params: HistorySelection): Outcome<{ sinceMs?: number
 	const until = timeBound("until", params.until);
 	if (!until.ok) return until;
 	if (since.data !== undefined && until.data !== undefined && since.data >= until.data) {
-		return failure("invalid_time", "since must be earlier than until", { since: params.since, until: params.until });
+		return failure("invalid_time", "since must be earlier than until");
 	}
 	return success({ ...(since.data === undefined ? {} : { sinceMs: since.data }), ...(until.data === undefined ? {} : { untilMs: until.data }) });
 }
@@ -86,9 +86,7 @@ function truncateHistoryItem(item: HistoryPageItem, fits: (candidate: HistoryPag
 	if (fits(withContent)) return withContent;
 	if (item.tool === undefined) return withContent;
 	const { tool: _dropped, ...withoutName } = item;
-	const named = { ...withoutName, tool_name_omitted: true };
-	if (fits(named)) return named;
-	return shrinkContent(named);
+	return fits(withoutName) ? withoutName : shrinkContent(withoutName);
 }
 
 function isFoldableEvent(event: HistoryEvent): boolean {
@@ -113,8 +111,7 @@ function foldedRuns(events: HistoryEvent[]): HistoryFoldedRow[] {
 	const entries = [...counts].filter(([name]) => name.length <= MAX_FOLD_TOOL_NAME_CHARS).slice(0, MAX_FOLD_TOOL_NAMES);
 	// fromEntries preserves __proto__ as an ordinary key without mutating the prototype.
 	const tools = Object.fromEntries(entries);
-	const omitted = counts.size - entries.length;
-	return [{ folded: true, first_seq: sorted[0]!.seq, last_seq: sorted.at(-1)!.seq, count: sorted.length, tools, ...(omitted > 0 ? { omitted_tools: omitted } : {}) }];
+	return [{ folded: true, first_seq: sorted[0]!.seq, last_seq: sorted.at(-1)!.seq, count: sorted.length, tools }];
 }
 
 /** A cursor exists only when the same selection still has a visible event past that end. */
@@ -219,7 +216,7 @@ export function selectPage(projection: HistoryProjection, params: HistorySelecti
 	}
 	const page = pageData(projection, scoped, allVisible, kept, maxChars, folds);
 	if (!fits(page)) {
-		return failure("page_too_large", `${page.items.length} history rows and their fold summary do not fit one response even at their smallest; narrow with before/after or since/until, or read one seq`, { rows: page.items.length });
+		return failure("page_too_large", `${page.items.length} history rows and their fold summary do not fit one response even at their smallest; narrow with before/after or since/until, or read one seq`);
 	}
 	return success(page);
 }
