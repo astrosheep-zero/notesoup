@@ -75,7 +75,7 @@ test("every notes tool declares a result schema that accepts its own structured 
 	}
 });
 
-test("note schemas drop status/stale and expose crumpled plus wastebasket", () => {
+test("note schemas drop status/stale and expose crumpled listing", () => {
 	const captured = makeExtension(manager());
 	const schema = (name: string): TSchema => captured.tools.get(name)!.parameters as TSchema;
 	const write = schema("notes_write");
@@ -88,8 +88,12 @@ test("note schemas drop status/stale and expose crumpled plus wastebasket", () =
 	assert.equal(Check(edit, { address: "a.md", status: "archived" }), false, "status is gone");
 	for (const name of ["notes_list", "notes_search"]) {
 		const base = name === "notes_search" ? { query: "x" } : {};
-		assert.equal(Check(schema(name), { ...base, wastebasket: true }), true, `${name} accepts wastebasket`);
+		assert.equal(Check(schema(name), { ...base, crumpled: true }), true, `${name} accepts crumpled`);
 		assert.equal(Check(schema(name), { ...base, status: "active" }), false, `${name} rejects status`);
+		// The retired names are unknown parameters, refused like any other: `additionalProperties: false`.
+		for (const retired of [{ wastebasket: true }, { pattern: "**" }]) {
+			assert.equal(Check(schema(name), { ...base, ...retired }), false, `${name} refuses the retired ${Object.keys(retired)[0]} as an unknown parameter`);
+		}
 	}
 });
 
@@ -325,7 +329,7 @@ test("notes_update rename_to moves a note and refuses combinations and live targ
 	const renamed = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "move-me.md", rename_to: "moved.md" }, ctx));
 	assertReceiptIdentity(renamed, "moved.md", "session", ctx);
 	assert.equal(renamed.rename_from, "move-me.md");
-	assert.equal(renamed.change_kind, "file");
+	assert.equal(renamed.change_kind, "moved");
 	assert.equal(renamed.address, "moved.md");
 
 	const gone = resultError(await call(captured, "notes_read", { address: "move-me.md" }, ctx));
@@ -335,8 +339,8 @@ test("notes_update rename_to moves a note and refuses combinations and live targ
 	// Empty filler values are not a combination: a model passing every parameter still gets its crumple.
 	const crumpled = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "moved.md", crumpled: true, edits: [], origin: "self", rename_to: "", replace_all: false }, ctx));
 	assert.equal(crumpled.address, "moved.md", "an empty rename_to is ignored as if omitted");
-	const basket = resultData<NotesListData>(await call(captured, "notes_list", { wastebasket: true }, ctx));
-	assert.equal(basket.files.some((file) => file.address === "moved.md"), true, "the note was crumpled");
+	const listedCrumpled = resultData<NotesListData>(await call(captured, "notes_list", { crumpled: true }, ctx));
+	assert.equal(listedCrumpled.files.some((file) => file.address === "moved.md"), true, "the note was crumpled");
 
 	const fillerRename = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "moved.md", rename_to: "moved-again.md", edits: [], replace_all: false }, ctx));
 	assert.equal(fillerRename.address, "moved-again.md", "empty edits and replace_all: false ride along with a rename");
@@ -361,6 +365,10 @@ test("write and update receipts distinguish outcomes and no-op edits", async () 
 	const mixed = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "@self/alias", edits: [{ oldText: "restored", newText: "restored" }, { oldText: "restored", newText: "changed" }] }, ctx));
 	assert.equal(mixed.change_kind, "body");
 	assert.equal(mixed.change_kind, "body");
+	// A body edit that also rewrites frontmatter is still a body change; the diff carries the rest.
+	const combined = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "@self/alias", edits: [{ oldText: "changed", newText: "changed once more" }], origin: "user" }, ctx));
+	assert.equal(combined.change_kind, "body", "an edit that also rewrites frontmatter is a body change, not a whole file");
+	assert.match(combined.diff, /origin/, "the diff still carries the frontmatter part");
 });
 
 test("empty results distinguish hidden notes and unavailable homes", async () => {
@@ -368,22 +376,22 @@ test("empty results distinguish hidden notes and unavailable homes", async () =>
 	const session = manager();
 	const captured = makeExtension(session);
 	const ctx = context(session);
-	const empty = resultData<NotesListData>(await call(captured, "notes_list", { pattern: "@human/**" }, ctx));
+	const empty = resultData<NotesListData>(await call(captured, "notes_list", { glob: "@human/**" }, ctx));
 	assert.deepEqual(empty, { files: [], more: 0, homes_unavailable: [] });
 	await call(captured, "notes_write", { address: "@human/hidden.md", content: "needle" }, ctx);
 	await call(captured, "notes_update", { address: "@human/hidden.md", crumpled: true }, ctx);
-	const hidden = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle", pattern: "@human/**" }, ctx));
+	const hidden = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle", glob: "@human/**" }, ctx));
 	assert.deepEqual(hidden.files, [], "a crumpled note is hidden from search");
 	const broken = scopeDir("project", ctx);
 	mkdirSync(join(broken, ".."), { recursive: true });
 	writeFileSync(broken, "not a directory");
-	const partial = resultData<NotesListData>(await call(captured, "notes_list", { pattern: "**" }, ctx));
+	const partial = resultData<NotesListData>(await call(captured, "notes_list", { glob: "**" }, ctx));
 	assert.deepEqual(partial.homes_unavailable, ["@project"]);
 	assert.deepEqual(partial.files, []);
-	const searched = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle", pattern: "**" }, ctx));
+	const searched = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle", glob: "**" }, ctx));
 	assert.deepEqual(searched.homes_unavailable, ["@project"]);
 	writeFileSync(join(process.env.PI_NOTES_HOME!, "agents"), "not a directory");
-	const namespace = resultData<NotesListData>(await call(captured, "notes_list", { pattern: "@agents/*/note.md" }, ctx));
+	const namespace = resultData<NotesListData>(await call(captured, "notes_list", { glob: "@agents/*/note.md" }, ctx));
 	assert.deepEqual(namespace.homes_unavailable, ["@agents"]);
 });
 
@@ -414,11 +422,11 @@ test("notes receipts report resolved identity across scopes", async () => {
 		assert.equal(rawRead.content[0]!.type === "text" && rawRead.content[0]!.text.includes("---"), false, "the rendered read carries no frontmatter block");
 	}
 
-	const listed = resultData<NotesListData>(await call(captured, "notes_list", { pattern: "**" }, ctx));
+	const listed = resultData<NotesListData>(await call(captured, "notes_list", { glob: "**" }, ctx));
 	assert.deepEqual(listed.files.map((file) => file.address).sort(), notes.map((note) => note.address).sort(), "notes_list returns each full address");
 	for (const row of listed.files) assertReceiptIdentity(row, row.address, notes.find((note) => note.address === row.address)!.scope, ctx);
 
-	const searched = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "match", pattern: "**" }, ctx));
+	const searched = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "match", glob: "**" }, ctx));
 	assert.deepEqual(searched.files.map((file) => file.address), notes.map((note) => note.address).sort(), "notes_search returns each full address");
 	for (const row of searched.files) assertReceiptIdentity(row, row.address, notes.find((note) => note.address === row.address)!.scope, ctx);
 });
@@ -438,8 +446,8 @@ test("list and search merge scopes and carry addresses; the path jail rejects es
 	for (const row of listed.files) {
 		assert.deepEqual(Object.keys(row).sort(), ["address", "updated_at", ...(row.address.startsWith("@project/") ? ["project_key"] : [])].sort());
 	}
-	const scoped = resultData<NotesListData>(await call(captured, "notes_list", { pattern: "@human/**" }, ctx));
-	assert.deepEqual(scoped.files.map((file) => file.address), ["@human/three.md"], "an address-pattern filter narrows the set");
+	const scoped = resultData<NotesListData>(await call(captured, "notes_list", { glob: "@human/**" }, ctx));
+	assert.deepEqual(scoped.files.map((file) => file.address), ["@human/three.md"], "an address glob filter narrows the set");
 
 	const searched = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle" }, ctx));
 	assert.equal(searched.files.length, 3, "literal search finds matches in every scope");
@@ -460,8 +468,8 @@ test("list and search merge scopes and carry addresses; the path jail rejects es
 	}
 	assert.equal(resultError(await call(captured, "notes_search", { query: "" }, ctx)).code, "invalid_query");
 	assert.equal(resultError(await call(captured, "notes_read", { address: "one.md", offset_chars: 99999 }, ctx)).code, "invalid_offset");
-	assert.equal(resultError(await call(captured, "notes_list", { pattern: "bad\\glob" }, ctx)).code, "invalid_pattern");
-	assert.equal(resultError(await call(captured, "notes_search", { query: "needle", pattern: "bad\\glob" }, ctx)).code, "invalid_pattern");
+	assert.equal(resultError(await call(captured, "notes_list", { glob: "bad\\glob" }, ctx)).code, "invalid_pattern");
+	assert.equal(resultError(await call(captured, "notes_search", { query: "needle", glob: "bad\\glob" }, ctx)).code, "invalid_pattern");
 });
 
 test("a read offsets the body in code points, not bytes or frontmatter", async () => {
@@ -471,7 +479,7 @@ test("a read offsets the body in code points, not bytes or frontmatter", async (
 	const ctx = context(session);
 	await call(captured, "notes_write", { address: "emoji.md", content: "🐑字\nneedle tail" }, ctx);
 
-	const search = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle", pattern: "emoji.md" }, ctx));
+	const search = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle", glob: "emoji.md" }, ctx));
 	const match = search.files[0]!.matches[0]!;
 	assert.equal(match.line, 2);
 	assert.equal(match.offset_chars, 3, "the emoji and CJK line above contribute two code points plus the newline, not their bytes");
@@ -482,7 +490,7 @@ test("a read offsets the body in code points, not bytes or frontmatter", async (
 	const negative = resultRead(await call(captured, "notes_read", { address: "emoji.md", offset_chars: -4 }, ctx));
 	assert.equal(negative.text, "tail", "a negative offset counts back from the end of the body");
 	assert.equal(negative.next_offset_chars, null, "a tail read has no continuation");
-	const start = resultRead(await call(captured, "notes_read", { address: "emoji.md", limit_chars: 3 }, ctx));
+	const start = resultRead(await call(captured, "notes_read", { address: "emoji.md", max_chars: 3 }, ctx));
 	assert.equal(start.text, "🐑字\n");
 	assert.equal(start.next_offset_chars, 3);
 	assert.equal(resultRead(await call(captured, "notes_read", { address: "emoji.md", offset_chars: 14 }, ctx)).text, "", "the exact end is an empty window, not a refusal");
@@ -495,7 +503,7 @@ test("a read keeps its body window verbatim under the new presentation", async (
 	const ctx = context(session);
 	await call(captured, "notes_write", { address: "present.md", content: "0123456789" }, ctx);
 
-	const limited = await call(captured, "notes_read", { address: "present.md", limit_chars: 4 }, ctx);
+	const limited = await call(captured, "notes_read", { address: "present.md", max_chars: 4 }, ctx);
 	const text = limited.content[0]!.type === "text" ? limited.content[0]!.text : "";
 	assert.equal(text.includes("READ WINDOW"), false, "the old READ WINDOW block is gone");
 	assert.equal(text.includes("chars: ["), false, "no parsed range block stands between the header and the body");
@@ -535,8 +543,8 @@ test("Pi adapter defaults to anonymous agent identity", async () => {
 		await call(captured, "notes_write", { address: "@self/private.md", content: "anonymous agent note" }, ctx);
 		const listed = resultData<NotesListData>(await call(captured, "notes_list", {}, ctx));
 		assert.deepEqual(listed.files.map((row) => row.address), ["@self/private.md"]);
-		const explicit = resultData<NotesListData>(await call(captured, "notes_list", { pattern: "@agents/*/private.md" }, ctx));
-		assert.deepEqual(explicit.files.map((row) => row.address), ["@self/private.md"], "explicit-id patterns still match the current home");
+		const explicit = resultData<NotesListData>(await call(captured, "notes_list", { glob: "@agents/*/private.md" }, ctx));
+		assert.deepEqual(explicit.files.map((row) => row.address), ["@self/private.md"], "explicit-id globs still match the current home");
 		assert.equal(existsSync(join(root, "agents", "anonymous", "private.md")), true);
 	});
 });

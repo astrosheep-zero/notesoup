@@ -33,16 +33,16 @@ test("standalone notes API persists camelCase metadata, edits, lists and searche
 	assert.equal(metadataEdit.change.after.includes("needle"), false, "metadata-only diff excludes body");
 	assert.equal((await notes.list()).some((row) => row.address === "checkpoint.md"), false, "a crumpled note leaves the live list");
 	assert.equal((await notes.search(["needle"])).length, 0, "search also skips crumpled notes");
-	const basket = (await notes.list({ wastebasket: true }))[0]!;
+	const basket = (await notes.list({ crumpled: true }))[0]!;
 	assert.equal(basket.address, "checkpoint.md");
 	assert.ok(basket.meta.crumpledAt);
 	assert.equal(basket.meta.updatedAt, updatedBefore, "crumpling does not bump updatedAt");
 	const crumpledAt = basket.meta.crumpledAt;
 	await notes.update("checkpoint", undefined, { crumpled: true });
-	assert.equal((await notes.list({ wastebasket: true }))[0]?.meta.crumpledAt, crumpledAt, "re-crumpling keeps the original time");
+	assert.equal((await notes.list({ crumpled: true }))[0]?.meta.crumpledAt, crumpledAt, "re-crumpling keeps the original time");
 	await notes.update("checkpoint", undefined, { crumpled: false });
 	assert.equal((await notes.list()).some((row) => row.address === "checkpoint.md"), true, "smoothing returns the note to the live list");
-	assert.equal((await notes.list({ wastebasket: true })).length, 0);
+	assert.equal((await notes.list({ crumpled: true })).length, 0);
 	const matches = await notes.search(["needle"]);
 	assert.equal(matches[0]?.matches[0]?.line, 2);
 	const body = (await notes.read("checkpoint"))!.body;
@@ -63,7 +63,7 @@ test("standalone notes API persists camelCase metadata, edits, lists and searche
 	assert.deepEqual(rewritten.meta.recurrenceWindows, ["pcw:one", "pcw:two"]);
 	assert.equal(rewritten.meta.crumpledAt, undefined, "writing always produces an uncrumpled note");
 	const combined = await moved.update("checkpoint", [{ oldText: "new", newText: "final" }], { crumpled: true });
-	assert.equal(combined.change.kind, "file");
+	assert.equal(combined.change.kind, "body");
 	assert.match(combined.change.after, /\ncrumpledAt: \d{4}-\d{2}-\d{2}T/);
 	assert.match(combined.change.after, /final body$/);
 	assert.deepEqual((await moved.update("checkpoint", undefined, { crumpled: true })).change, { kind: "none", before: "", after: "" });
@@ -114,16 +114,16 @@ test("stores snapshot explicit identity and do not leak homes across instances",
 	await assert.rejects(() => notes.write("@agents/visitor/hello", "overwrite"), (error: unknown) => error instanceof NoteError && error.code === "invalid_scope");
 });
 
-test("list and search share scoped pattern scans and search offsets count Unicode code points", async (t) => {
+test("list and search share scoped glob scans and search offsets count Unicode code points", async (t) => {
 	const { notes } = fixture(t);
 	await notes.write("shared.md", "😀 needle in session");
 	await notes.write("@project/shared.md", "needle in project");
 	await notes.write("@human/shared.md", "needle in human");
 	await notes.write("@project/elsewhere.md", "unrelated");
 
-	const pattern = "**/shared.md";
-	const listed = await notes.list({ pattern });
-	const searched = await notes.search(["needle"], { pattern });
+	const glob = "**/shared.md";
+	const listed = await notes.list({ glob });
+	const searched = await notes.search(["needle"], { glob });
 	const listedAddresses = listed.map((row) => row.address).sort();
 	const searchedAddresses = searched.map((row) => row.address).sort();
 	assert.deepEqual(searchedAddresses, ["@human/shared.md", "@project/shared.md", "shared.md"]);

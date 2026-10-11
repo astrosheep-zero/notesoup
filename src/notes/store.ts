@@ -31,13 +31,13 @@ export type NotesQuery = (
 	| { scope?: undefined; who?: never }
 	| { scope: "session" | "project" | "human"; who?: never }
 	| { scope: "agent" | "model"; who?: string }
-) & { pattern?: string; wastebasket?: boolean };
+) & { glob?: string; crumpled?: boolean };
 /** A read exposes metadata and the pure body; the serialized frontmatter is never part of the body. */
 export type NoteReadResult = { meta: NoteMeta; body: string; resolvedScope: Scope };
 export type NoteWriteResult = { meta: NoteMeta; outcome: "created" | "overwrote" | "uncrumpled" };
 export type NoteChange =
 	| { kind: "none"; before: ""; after: "" }
-	| { kind: "body" | "metadata" | "file"; before: string; after: string };
+	| { kind: "body" | "metadata"; before: string; after: string };
 export type NoteEditResult = { meta: NoteMeta; applied: number; resolvedScope: Scope; change: NoteChange };
 export type NoteRenameResult = { meta: NoteMeta; replacedCrumpledTarget: boolean };
 export type NoteQueryStatus = { homesUnavailable: string[] };
@@ -174,7 +174,7 @@ async function homesFor(identity: NotesIdentity, opts: NotesQuery): Promise<Home
 		return [{ scope }];
 	}
 	if (opts.who !== undefined) throw new NoteError("invalid_scope", "who requires agent or model scope");
-	return await homesForPattern(normalizePattern(opts.pattern, identity), identity) ?? SCOPE_ORDER.map((scope) => ({ scope }));
+	return await homesForPattern(normalizePattern(opts.glob, identity), identity) ?? SCOPE_ORDER.map((scope) => ({ scope }));
 }
 
 /**
@@ -358,7 +358,9 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 			assertSerializedSize(serialized);
 			const metadataChanged = originChanged || beforeMeta.crumpledAt !== meta.crumpledAt;
 			let change: NoteChange;
-			if (bodyChanged && metadataChanged) change = { kind: "file", before: raw, after: serialized };
+			// A body edit that also rewrites frontmatter is still a body change; its diff inputs span the
+			// whole serialized file, so the frontmatter part stays visible in the diff.
+			if (bodyChanged && metadataChanged) change = { kind: "body", before: raw, after: serialized };
 			else if (bodyChanged) change = { kind: "body", before: body, after: next };
 			else if (metadataChanged) change = { kind: "metadata", before: frontmatterOf(beforeMeta), after: frontmatterOf(meta) };
 			else change = { kind: "none", before: "", after: "" };
@@ -406,13 +408,13 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 	}
 
 	async function* scan(options: NotesQuery, status?: NoteQueryStatus): AsyncGenerator<Omit<NoteRow, "sizeBytes">> {
-		const matcher = matcherFor(normalizePattern(options.pattern, identity));
+		const matcher = matcherFor(normalizePattern(options.glob, identity));
 		let homes: HomeRef[];
 		try {
 			homes = await homesFor(identity, options);
 		} catch (error) {
-			if (!status || !isFilesystemError(error) || !/^@(agents|models)\//.test(options.pattern ?? "")) throw error;
-			status.homesUnavailable.push(options.pattern!.startsWith("@agents/") ? "@agents" : "@models");
+			if (!status || !isFilesystemError(error) || !/^@(agents|models)\//.test(options.glob ?? "")) throw error;
+			status.homesUnavailable.push(options.glob!.startsWith("@agents/") ? "@agents" : "@models");
 			return;
 		}
 		for (const home of homes) {
@@ -427,7 +429,7 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 					const raw = await withPathQueue(fullPath, () => readFile(fullPath, "utf8"));
 					const { meta, body } = parseNote(raw);
 					meta.scope = scope;
-					if ((meta.crumpledAt !== undefined) !== (options.wastebasket === true)) continue;
+					if ((meta.crumpledAt !== undefined) !== (options.crumpled === true)) continue;
 					homeRows.push({ address, scope, path, meta, body });
 				}
 			} catch (error) {

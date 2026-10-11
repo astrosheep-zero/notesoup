@@ -47,6 +47,7 @@ pi -e npm:notesoup
 | `notes.search` | `notes_search` |
 
 - **Migration**: `history_search` is gone; pass `query` to `history_list`.
+- **Migration (0.40.0)**: parameters renamed: `order` → `from`, `before`/`after` → `before_seq`/`after_seq`, `limit_chars` → `max_chars`, `wastebasket` → `crumpled`, `pattern` → `glob` (the standalone library's options included), and `notes_update`'s `change_kind` value `file` → `moved`. Old names are refused.
 
 - **Runtime toggle** — `/notesoup off` stops new automatic resets; `/notesoup on` re-enables them; bare `/notesoup` reports the state.
 

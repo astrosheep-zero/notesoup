@@ -275,7 +275,7 @@ test("real Pi codemode receives typed notes/history outcomes, including expected
 			if (request === 1) return assistant(fixture, [{ type: "toolCall", id: "structured-smoke", name: "codemode", arguments: { code: `
 const written = await tools.notes_write({ address: "smoke.md", content: "A😀界Z" });
 const listed = await tools.notes_list({});
-const read = await tools.notes_read({ address: "smoke.md", offset_chars: 1, limit_chars: 2 });
+const read = await tools.notes_read({ address: "smoke.md", offset_chars: 1, max_chars: 2 });
 const refused = await tools.notes_read({ address: "missing.md" });
 if ("error" in written || "error" in listed || "error" in read || !("error" in refused)) throw new Error("wrong outcome");
 if (read.text !== "😀界" || read.next_offset_chars !== 3) throw new Error("wrong window");

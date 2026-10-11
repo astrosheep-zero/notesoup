@@ -108,8 +108,8 @@ test("Claude helper refuses schema-invalid parameters before any operation runs"
   const cases: Array<{ name: string; params: Record<string, unknown> }> = [
     { name: "a string offset", params: { address, offset_chars: "0" } },
     { name: "a fractional offset", params: { address, offset_chars: 0.5 } },
-    { name: "a zero limit", params: { address, limit_chars: 0 } },
-    { name: "a limit past the maximum", params: { address, limit_chars: 999_999_999 } },
+    { name: "a zero limit", params: { address, max_chars: 0 } },
+    { name: "a limit past the maximum", params: { address, max_chars: 999_999_999 } },
   ];
   for (const { name, params } of cases) {
     const refused = JSON.parse(await handleLine(JSON.stringify({ op: "tool", tool: "notes_read", identity, params }))) as { ok: boolean; error?: string };
@@ -124,7 +124,7 @@ test("Claude helper refuses schema-invalid parameters before any operation runs"
   assert.equal((absent.outcome as ToolOutcome).ok, false);
   assert.equal((absent.outcome as Required<ToolOutcome>).error?.code, "not_found", "the refused write never reached the store");
 
-  const valid = await callTool("notes_read", { address, offset_chars: 0, limit_chars: 8 });
+  const valid = await callTool("notes_read", { address, offset_chars: 0, max_chars: 8 });
   assert.equal((valid.outcome as ToolOutcome).ok, true, "a schema-valid window still reads");
   assert.match(valid.text, /^boundary\.md/);
 });

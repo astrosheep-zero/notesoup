@@ -12,12 +12,12 @@ type Candidate = { event: HistoryEvent; matchOffset?: number; preview?: HistoryP
 export type HistoryOrder = "newest" | "oldest";
 
 /**
- * What one list call selects. `before`/`after` choose a seq range and `since`/`until` a time range;
- * `order` chooses the end `limit` counts from; a `query` keeps only matching events, across every
- * role, with no folded rows.
+ * What one list call selects. `before_seq`/`after_seq` choose a seq range and `since`/`until` a time
+ * range; `from` chooses the end `limit` counts from; a `query` keeps only matching events, across
+ * every role, with no folded rows.
  */
 export type HistorySelection = HistoryFilter & {
-	order?: HistoryOrder;
+	from?: HistoryOrder;
 	limit?: number;
 	query?: string | string[];
 	since?: string;
@@ -57,18 +57,18 @@ function resolveTimeBounds(params: HistorySelection): Outcome<{ sinceMs?: number
 
 /** The params to merge into the previous call to continue toward older events. */
 export const HistoryOlderSchema = Type.Object({
-	before: Type.Integer({ minimum: 1 }),
+	before_seq: Type.Integer({ minimum: 1 }),
 }, { additionalProperties: false });
 /** The params to merge into the previous call to continue toward newer events. */
 export const HistoryNewerSchema = Type.Object({
-	after: Type.Integer({ minimum: 1 }),
-	order: Type.Literal("oldest"),
+	after_seq: Type.Integer({ minimum: 1 }),
+	from: Type.Literal("oldest"),
 }, { additionalProperties: false });
 
 export const HistoryPageSchema = Type.Object({
 	items: Type.Array(Type.Union([HistoryPageItemSchema, HistoryFoldedRowSchema])),
-	page_older: Type.Union([HistoryOlderSchema, Type.Null()], { description: "Merge into your params to page older; null at the oldest end." }),
-	page_newer: Type.Union([HistoryNewerSchema, Type.Null()], { description: "Merge into your params to page newer; null at the newest end." }),
+	page_older: Type.Union([HistoryOlderSchema, Type.Null()], { description: "Params for the next page; null at the end." }),
+	page_newer: Type.Union([HistoryNewerSchema, Type.Null()], { description: "Params for the next page; null at the end." }),
 }, { additionalProperties: false });
 
 /** One whole page payload, before it becomes an outcome. */
@@ -115,16 +115,16 @@ function foldedRuns(events: HistoryEvent[]): HistoryFoldedRow[] {
 }
 
 /** A cursor exists only when the same selection still has a visible event past that end. */
-function pageCursors(vis: HistoryEvent[], selected: HistoryEvent[], before: number | undefined, after: number | undefined): Pick<HistoryPage, "page_older" | "page_newer"> {
+function pageCursors(vis: HistoryEvent[], selected: HistoryEvent[], beforeSeq: number | undefined, afterSeq: number | undefined): Pick<HistoryPage, "page_older" | "page_newer"> {
 	if (selected.length === 0) return { page_older: null, page_newer: null };
-	const lower = after ?? 0;
-	const upper = before ?? Number.POSITIVE_INFINITY;
+	const lower = afterSeq ?? 0;
+	const upper = beforeSeq ?? Number.POSITIVE_INFINITY;
 	// Selected events are in seq order.
 	const first = selected[0]!.seq;
 	const last = selected.at(-1)!.seq;
 	return {
-		page_older: vis.some((event) => event.seq > lower && event.seq < first) ? { before: first } : null,
-		page_newer: vis.some((event) => event.seq > last && event.seq < upper) ? { after: last, order: "oldest" } : null,
+		page_older: vis.some((event) => event.seq > lower && event.seq < first) ? { before_seq: first } : null,
+		page_newer: vis.some((event) => event.seq > last && event.seq < upper) ? { after_seq: last, from: "oldest" } : null,
 	};
 }
 
@@ -151,7 +151,7 @@ function foldRows(projection: HistoryProjection, params: HistorySelection, selec
 function pageData(projection: HistoryProjection, params: HistorySelection, vis: HistoryEvent[], selected: Candidate[], maxChars: number, folds: boolean): HistoryPage {
 	const orderedSelected = [...selected].sort((a, b) => a.event.seq - b.event.seq);
 	const selectedEvents = orderedSelected.map((candidate) => candidate.event);
-	const cursors = pageCursors(vis, selectedEvents, params.before, params.after);
+	const cursors = pageCursors(vis, selectedEvents, params.before_seq, params.after_seq);
 	const visible = orderedSelected.map((candidate) => candidate.preview ?? visibleItem(candidate.event, maxChars, candidate.matchOffset));
 	let rows: PageRow[] = visible;
 	if (folds) {
@@ -181,13 +181,13 @@ function selectionCandidates(projection: HistoryProjection, params: HistorySelec
 }
 
 /**
- * Take the limit from the end `order` names, starting there so a budget for one row keeps the most
- * important row. The selection is already filtered to its range; `order` never states a direction.
+ * Take the limit from the end `from` names, starting there so a budget for one row keeps the most
+ * important row. The selection is already filtered to its range; `from` never states a direction.
  */
 function orderedCandidates(vis: Candidate[], params: HistorySelection, limit: number): Candidate[] {
 	const ascending = [...vis].sort((a, b) => a.event.seq - b.event.seq);
-	const selected = params.order === "oldest" ? ascending.slice(0, limit) : ascending.slice(-limit);
-	return params.order === "oldest" ? selected : selected.reverse();
+	const selected = params.from === "oldest" ? ascending.slice(0, limit) : ascending.slice(-limit);
+	return params.from === "oldest" ? selected : selected.reverse();
 }
 
 /**
@@ -216,7 +216,7 @@ export function selectPage(projection: HistoryProjection, params: HistorySelecti
 	}
 	const page = pageData(projection, scoped, allVisible, kept, maxChars, folds);
 	if (!fits(page)) {
-		return failure("page_too_large", `${page.items.length} history rows and their fold summary do not fit one response even at their smallest; narrow with before/after or since/until, or read one seq`);
+		return failure("page_too_large", `${page.items.length} history rows and their fold summary do not fit one response even at their smallest; narrow with before_seq/after_seq or since/until, or read one seq`);
 	}
 	return success(page);
 }

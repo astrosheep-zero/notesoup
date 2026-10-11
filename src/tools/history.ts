@@ -1,7 +1,7 @@
 /** Host-neutral history operations: one bounded payload for text and structured results. */
 import { Type, type Static } from "typebox";
-import { DEFAULT_READ_WINDOW_CHARS, MAX_READ_WINDOW_CHARS, HISTORY_PREVIEW_CHARS } from "./output.js";
-import { failure, fitsResult, resultSchema, readTextWindow, renderOutcome, renderTextWindow, success, TextWindowSchema, type Operation, type Outcome } from "./result.js";
+import { HISTORY_PREVIEW_CHARS } from "./output.js";
+import { failure, fitsResult, resultSchema, readTextWindow, renderOutcome, renderTextWindow, success, TextWindowRequestSchema, TextWindowSchema, type Operation, type Outcome } from "./result.js";
 import { historyRoles, searchQuery } from "./schema.js";
 import { HistoryPageSchema, selectPage, type HistoryPage } from "../history/query.js";
 import { allItems, eventDocument, nestedCallSummary, toolSummary, HistoryRoleSchema, NestedCallSummarySchema, ToolSummarySchema, type HistoryFilter, type HistoryFoldedRow, type HistoryPageItem, type HistoryProjection, unknownWindowId } from "../history/history.js";
@@ -25,8 +25,8 @@ const HistoryWindowsDataSchema = Type.Object({
 		created_at: Type.Union([Type.String(), Type.Null()]),
 		first_seq: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),
 		last_seq: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),
-	}, { additionalProperties: false }), { description: "Oldest first." }),
-	more: Type.Integer({ minimum: 0, description: "Omitted windows; `history_list` also supplies window ids." }),
+	}, { additionalProperties: false })),
+	more: Type.Integer({ minimum: 0, description: "How many more were left out." }),
 }, { additionalProperties: false });
 type HistoryWindowsData = Static<typeof HistoryWindowsDataSchema>;
 
@@ -60,7 +60,7 @@ function isFoldedRow(item: HistoryPageItem | HistoryFoldedRow): item is HistoryF
 
 function renderFoldedRow(row: HistoryFoldedRow): string {
 	const tools = Object.entries(row.tools).map(([name, count]) => `${name} ${count}`).join(", ");
-	const expand = `\n\t→ expand: {"after":${row.first_seq - 1},"before":${row.last_seq + 1},"order":"oldest","roles":["tool","context"]}`;
+	const expand = `\n\t→ expand: {"after_seq":${row.first_seq - 1},"before_seq":${row.last_seq + 1},"from":"oldest","roles":["tool","context"]}`;
 	return `seqs ${row.first_seq}-${row.last_seq} | folded ${row.count} events${tools ? ` | ${tools}` : ""}${expand}`;
 }
 
@@ -77,8 +77,8 @@ function renderPage(page: HistoryPage): string {
 
 function renderRead(data: HistoryReadData): string {
 	const tool = toolHeader(data);
-	const after = data.seq - 10;
-	const neighborhood = `neighborhood → \`history_list\`(${JSON.stringify({ ...(after >= 1 ? { after } : {}), before: data.seq + 10 })})`;
+	const afterSeq = data.seq - 10;
+	const neighborhood = `neighborhood → \`history_list\`(${JSON.stringify({ ...(afterSeq >= 1 ? { after_seq: afterSeq } : {}), before_seq: data.seq + 10 })})`;
 	return [header(data), ...(tool ? [tool] : []), neighborhood, "", renderTextWindow(data)].join("\n");
 }
 
@@ -121,7 +121,7 @@ export const historyWindowsParameters = Type.Object({}, { additionalProperties: 
 export const historyWindows: Operation<typeof historyWindowsParameters, HistoryWindowsData, [HistoryProjection, string]> = {
 	name: "history_windows",
 	label: "History list windows",
-	description: "List session-history windows oldest first, with seq ranges. A fork has its own session_id.",
+	description: "List this session's context windows, oldest first, with seq ranges.",
 	parameters: historyWindowsParameters,
 	outputSchema: resultSchema(HistoryWindowsDataSchema),
 	async execute(_params, projection, sessionId) {
@@ -153,22 +153,22 @@ function renderWindows(data: HistoryWindowsData): string {
 /* ------------------------------------------------------------------ history_list */
 
 export const historyListParameters = Type.Object({
-	query: Type.Optional(searchQuery("Optional. Case-insensitive literal, or an array of literals (OR), matched across all roles including tool arguments and output. Returns only hits; each preview starts at its match.")),
+	query: Type.Optional(searchQuery("(optional) Text, or a list of texts (any match). Searches every role, tool arguments and output included; returns only hits.")),
 	roles: historyRoles(),
-	before: Type.Optional(Type.Integer({ minimum: 1, description: "Optional. Upper bound: only events with seq strictly below this." })),
-	after: Type.Optional(Type.Integer({ minimum: 1, description: "Optional. Lower bound: only events with seq strictly above this." })),
-	since: Type.Optional(Type.String({ minLength: 1, description: "Optional. ISO 8601 time; only events at or after it. No offset means UTC; untimed events are dropped." })),
-	until: Type.Optional(Type.String({ minLength: 1, description: "Optional. ISO 8601 time; only events before it. No offset means UTC; untimed events are dropped." })),
-	order: Type.Optional(Type.Union([Type.Literal("newest"), Type.Literal("oldest")], { description: "Optional. Which end limit counts from: newest (default) or oldest. Items are always ascending by seq." })),
-	window_id: Type.Optional(Type.String({ minLength: 1, description: `Optional. Limit to one context window. Values come from \`history_windows\` or any event; "${PREVIOUS_WINDOW}" names the window before the current one.` })),
-	limit: Type.Optional(Type.Integer({ description: "Optional. Maximum visible items per page; folded rows do not count. Default 20." })),
-	max_chars_per_item: Type.Optional(Type.Integer({ description: `Optional. Maximum preview characters per item (default ${HISTORY_PREVIEW_CHARS}); use \`history_read\` for full content.` })),
+	before_seq: Type.Optional(Type.Integer({ minimum: 1, description: "(optional) Only events with seq below this." })),
+	after_seq: Type.Optional(Type.Integer({ minimum: 1, description: "(optional) Only events with seq above this." })),
+	since: Type.Optional(Type.String({ minLength: 1, description: "(optional) ISO 8601 time; only events at or after it. UTC if no offset." })),
+	until: Type.Optional(Type.String({ minLength: 1, description: "(optional) ISO 8601 time; only events before it. UTC if no offset." })),
+	from: Type.Optional(Type.Union([Type.Literal("newest"), Type.Literal("oldest")], { description: "(optional, default newest) Which end `limit` counts from: newest or oldest. Results stay oldest first." })),
+	window_id: Type.Optional(Type.String({ minLength: 1, description: `(optional) Only this context window. From \`history_windows\` or any event; \`${PREVIOUS_WINDOW}\` is the one before this.` })),
+	limit: Type.Optional(Type.Integer({ description: "(optional, default 20) Max events per page; folded rows don't count." })),
+	max_chars_per_item: Type.Optional(Type.Integer({ description: `(optional, default ${HISTORY_PREVIEW_CHARS}) Max preview chars per event.` })),
 }, { additionalProperties: false });
 
 export const historyList: Operation<typeof historyListParameters, HistoryPage, [HistoryProjection]> = {
 	name: "history_list",
 	label: "History list items",
-	description: "Browse or search this session's events a page at a time. The footer prints the next call; read one event in full with `history_read`.",
+	description: "Browse or search this session's events, a page at a time. Read one in full with `history_read`.",
 	parameters: historyListParameters,
 	outputSchema: resultSchema(HistoryPageSchema),
 	async execute(params, projection) {
@@ -184,16 +184,12 @@ export const historyList: Operation<typeof historyListParameters, HistoryPage, [
 
 /* ------------------------------------------------------------------ history_read */
 
-export const historyReadParameters = Type.Object({
-	seq: Type.Integer({ minimum: 1, description: "Event address from `history_list`." }),
-	offset_chars: Type.Optional(Type.Integer({ description: "Code-point offset (default 0); negative counts from EOF." })),
-	limit_chars: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_READ_WINDOW_CHARS, description: `Max code points (default ${DEFAULT_READ_WINDOW_CHARS}); also bounded by output bytes.` })),
-}, { additionalProperties: false });
+export const historyReadParameters = Type.Object({ seq: Type.Integer({ minimum: 1, description: "Event seq, from `history_list`." }), ...TextWindowRequestSchema }, { additionalProperties: false });
 
 export const historyRead: Operation<typeof historyReadParameters, HistoryReadData, [HistoryProjection]> = {
 	name: "history_read",
 	label: "History read item",
-	description: "Read an event document by seq with a tool summary. Arguments, output and nested-call evidence are in the pageable text. Pass next_offset_chars as offset_chars until null. The footer prints a `history_list` call for the surrounding events.",
+	description: "Read one event in full: tool arguments, output, and nested calls.",
 	parameters: historyReadParameters,
 	outputSchema: resultSchema(HistoryReadDataSchema),
 	async execute(params, projection) {
@@ -221,7 +217,7 @@ export const historyRead: Operation<typeof historyReadParameters, HistoryReadDat
 		return readTextWindow(
 			document,
 			params.offset_chars,
-			params.limit_chars,
+			params.max_chars,
 			(window) => ({
 				seq: item.seq,
 				window_id: item.windowId,

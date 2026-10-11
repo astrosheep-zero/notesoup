@@ -46,7 +46,7 @@ export type HistoryWindow = { windowId: string; createdAt?: string; items: Histo
 /** Paired result seqs stay on the branch but redirect readers to the call's event. */
 export type HistoryProjection = { windows: HistoryWindow[]; highestSeq: number; branchSeqs: Set<number>; pairedResults: Map<number, number> };
 /** The filters one selection applies before paging: as-given window and roles, seq bounds, and parsed epoch-ms time bounds. */
-export type HistoryFilter = { window_id?: string | null; roles?: HistoryRole[] | null; after?: number; before?: number; sinceMs?: number; untilMs?: number };
+export type HistoryFilter = { window_id?: string | null; roles?: HistoryRole[] | null; after_seq?: number; before_seq?: number; sinceMs?: number; untilMs?: number };
 
 /** Native entries after the adapter allocates seqs and selects the active branch. */
 export type DecodedHistoryItem = {
@@ -177,7 +177,7 @@ export function projectHistory(rawWindows: DecodedHistoryWindow[], highestSeq: n
 /** Summary shared by list, search and read. Full arguments/calls are in the document. */
 export const NestedCallSummarySchema = Type.Object({
 	call_count: Type.Integer({ minimum: 0 }),
-	complete: Type.Boolean({ description: "Whether the host recorded all nested calls." }),
+	complete: Type.Boolean({ description: "true = every nested call was recorded." }),
 }, { additionalProperties: false });
 
 /** Tool-run facts shared by list rows and reads; full arguments and calls live in the document. */
@@ -213,8 +213,8 @@ export const HistoryPageItemSchema = Type.Object({
 	created_at: Type.Union([Type.String(), Type.Null()]),
 	...ToolSummarySchema.properties,
 	content: Type.String(),
-	truncated: Type.Boolean({ description: "Preview is partial; read this seq for more." }),
-	offset_chars: Type.Optional(Type.Integer({ minimum: 0, description: "Search match/preview start, in code points." })),
+	truncated: Type.Boolean({ description: "Preview is partial." }),
+	offset_chars: Type.Optional(Type.Integer({ minimum: 0, description: "Where the preview starts." })),
 }, { additionalProperties: false });
 export type HistoryPageItem = Static<typeof HistoryPageItemSchema>;
 
@@ -224,7 +224,7 @@ export const HistoryFoldedRowSchema = Type.Object({
 	first_seq: Type.Integer({ minimum: 1 }),
 	last_seq: Type.Integer({ minimum: 1 }),
 	count: Type.Integer({ minimum: 1 }),
-	tools: Type.Record(Type.String(), Type.Integer({ minimum: 1 }), { description: "Counts by tool name." }),
+	tools: Type.Record(Type.String(), Type.Integer({ minimum: 1 }), { description: "Count per tool name." }),
 }, { additionalProperties: false });
 export type HistoryFoldedRow = Static<typeof HistoryFoldedRowSchema>;
 
@@ -269,8 +269,8 @@ export function unknownWindowId(projection: HistoryProjection, params: HistoryFi
  */
 export function inSelection(event: HistoryEvent, params: HistoryFilter): boolean {
 	if (typeof params.window_id === "string" && params.window_id !== event.windowId) return false;
-	if (params.after !== undefined && event.seq <= params.after) return false;
-	if (params.before !== undefined && event.seq >= params.before) return false;
+	if (params.after_seq !== undefined && event.seq <= params.after_seq) return false;
+	if (params.before_seq !== undefined && event.seq >= params.before_seq) return false;
 	if (params.sinceMs === undefined && params.untilMs === undefined) return true;
 	if (event.createdAt === undefined) return false;
 	const at = Date.parse(event.createdAt);

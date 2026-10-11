@@ -1,6 +1,6 @@
 /** Internal outcomes, compact wire results, and bounded read windows. */
 import { Type, type Static, type TSchema } from "typebox";
-import { DEFAULT_READ_WINDOW_CHARS, TOOL_OUTPUT_MAX_BYTES, withinTextBudget } from "./output.js";
+import { DEFAULT_READ_WINDOW_CHARS, MAX_READ_WINDOW_CHARS, TOOL_OUTPUT_MAX_BYTES, withinTextBudget } from "./output.js";
 
 /** The one refusal shape: `code` is a stable internal identifier, `message` the bounded reading. */
 export const OperationErrorSchema = Type.Object({
@@ -65,9 +65,18 @@ export function fitsResult<T>(result: Outcome<T>, render: (result: Outcome<T>) =
 export const TextWindowSchema = Type.Object({
 	text: Type.String(),
 	total_chars: Type.Integer({ minimum: 0 }),
-	next_offset_chars: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()], { description: "Continue at this code-point offset; null at EOF." }),
+	next_offset_chars: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()], { description: "Pass as `offset_chars` to continue; null at the end." }),
 }, { additionalProperties: false });
 export type TextWindow = Static<typeof TextWindowSchema>;
+
+/**
+ * The request both read operations share: where to start and how much to deliver. Optional in full,
+ * because `readTextWindow` already owns the defaults.
+ */
+export const TextWindowRequestSchema = {
+	offset_chars: Type.Optional(Type.Integer({ description: "(optional, default 0) Start offset in chars; negative counts from the end." })),
+	max_chars: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_READ_WINDOW_CHARS, description: `(optional, default ${DEFAULT_READ_WINDOW_CHARS}) Max chars to return.` })),
+};
 
 /**
  * Read one code-point window of `text` and build the operation's data around it. `offset` and

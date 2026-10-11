@@ -34,7 +34,7 @@ Write only what git and history cannot give back. Crumple notes that are no long
 
 ## Finding things again
 
-- **A note**: `notes_list` with a `pattern` when you know roughly where it lives, `notes_search` when you know a phrase; then `notes_read` the address.
+- **A note**: `notes_list` with a `glob` when you know roughly where it lives, `notes_search` when you know a phrase; then `notes_read` the address.
 - **Something that happened**: `history_list` to browse or search this session's events; `history_read` the seq for the whole event.
 - **An earlier window**: `history_windows` gives window ids; pass one as `window_id` to `history_list`.
 

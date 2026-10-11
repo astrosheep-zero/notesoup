@@ -22,7 +22,7 @@ import { installExtensionTestHooks } from "./helpers/extension-test-environment.
 
 installExtensionTestHooks("notesoup-history-v2");
 
-type Page = { items: Array<Record<string, unknown>>; page_older: { before: number } | null; page_newer: { after: number; order: "oldest" } | null };
+type Page = { items: Array<Record<string, unknown>>; page_older: { before_seq: number } | null; page_newer: { after_seq: number; from: "oldest" } | null };
 type Appendable = Parameters<SessionManager["appendMessage"]>[0];
 
 /** Append a message the way the host records one, without the harness's per-role sugar. */
@@ -51,7 +51,7 @@ function rendered(result: Awaited<ReturnType<typeof call>>): string {
 	return result.content.flatMap((part) => part.type === "text" ? [part.text] : []).join("");
 }
 
-test("history_list exposes bounded paging, order and a literal query, while notes use snapshot limits", () => {
+test("history_list exposes bounded paging, `from` and a literal query, while notes use snapshot limits", () => {
 	const captured = makeExtension(manager());
 	const readSchema = captured.tools.get("history_read")?.parameters as { properties?: Record<string, unknown>; required?: string[] };
 	const legacyItemKey = ["item", "id"].join("_");
@@ -62,11 +62,11 @@ test("history_list exposes bounded paging, order and a literal query, while note
 
 	const listSchema = captured.tools.get("history_list")!.parameters as TSchema;
 	const properties = (listSchema as unknown as { properties: Record<string, { minimum?: number; anyOf?: Array<{ const?: string }>; items?: { anyOf?: Array<{ const?: string }> } }> }).properties;
-	assert.equal(properties.before?.minimum, 1, "bounds are positive seqs");
-	assert.equal(properties.after?.minimum, 1);
-	assert.equal(Check(listSchema, { before: 0 }), false, "before:0 is refused by the schema, not answered with a silent empty page");
-	assert.equal(Check(listSchema, { after: 0 }), false);
-	assert.deepEqual(properties.order?.anyOf?.map((item) => item.const), ["newest", "oldest"]);
+	assert.equal(properties.before_seq?.minimum, 1, "bounds are positive seqs");
+	assert.equal(properties.after_seq?.minimum, 1);
+	assert.equal(Check(listSchema, { before_seq: 0 }), false, "before_seq:0 is refused by the schema, not answered with a silent empty page");
+	assert.equal(Check(listSchema, { after_seq: 0 }), false);
+	assert.deepEqual(properties.from?.anyOf?.map((item) => item.const), ["newest", "oldest"]);
 	assert.ok(properties.query);
 	assert.equal(properties.around, undefined);
 	assert.equal(properties.tool_name, undefined);
@@ -77,8 +77,12 @@ test("history_list exposes bounded paging, order and a literal query, while note
 	assert.ok(properties.until, "the time filter has an until param");
 	assert.equal(Check(listSchema, { since: "2026-10-10", until: "2026-10-10T06:00:00Z" }), true);
 	assert.equal(Check(listSchema, { since: "" }), false, "an empty time value is refused by the schema");
-	assert.equal(Check(listSchema, { query: "needle", order: "oldest", roles: ["tool"] }), true);
-	assert.equal(Check(listSchema, { order: "recent" }), false);
+	assert.equal(Check(listSchema, { query: "needle", from: "oldest", roles: ["tool"] }), true);
+	assert.equal(Check(listSchema, { from: "recent" }), false);
+	// The retired names are unknown parameters, refused like any other: `additionalProperties: false`.
+	for (const retired of [{ before: 5 }, { after: 5 }, { order: "oldest" }, { limit_chars: 10 }]) {
+		assert.equal(Check(listSchema, retired), false, `${Object.keys(retired)[0]} is refused as an unknown parameter`);
+	}
 	assert.equal(Check(listSchema, { query: "" }), true, "an empty literal is schema-valid; the operation refuses it as invalid_query");
 	for (const invalid of [{ roles: ["tool_call"] }, { roles: ["system"] }, { tool_name: "bash" }, { roles: [] }]) {
 		assert.equal(Check(listSchema, invalid), false, JSON.stringify(invalid));
@@ -160,30 +164,30 @@ test("a result address consumed by a pairing names its call instead of serving a
 	assert.equal(callSeq.content, 'edit {"path":"a.md"}\n--- output ---\nedited');
 });
 
-test("history_list pages from the end order names and returns bounded ranges", async () => {
+test("history_list pages from the end `from` names and returns bounded ranges", async () => {
 	const session = manager();
 	const captured = makeExtension(session);
 	const ctx = context(session);
 	for (let index = 1; index <= 5; index++) appendText(session, "user", `message-${index}`);
 
 	assert.deepEqual(seqs(await call(captured, "history_list", { limit: 2 }, ctx)), [4, 5], "the default newest page is the highest seqs, ascending");
-	assert.deepEqual(seqs(await call(captured, "history_list", { limit: 2, order: "oldest" }, ctx)), [1, 2], "order oldest takes the other end of the same selection");
+	assert.deepEqual(seqs(await call(captured, "history_list", { limit: 2, from: "oldest" }, ctx)), [1, 2], "from oldest takes the other end of the same selection");
 	appendText(session, "user", "message-6");
-	const older = page(await call(captured, "history_list", { before: 5, limit: 2 }, ctx));
+	const older = page(await call(captured, "history_list", { before_seq: 5, limit: 2 }, ctx));
 	assert.deepEqual(older.items.map((item) => item.seq), [3, 4]);
-	assert.deepEqual(older.page_older, { before: 3 });
+	assert.deepEqual(older.page_older, { before_seq: 3 });
 	assert.equal(older.page_newer, null);
-	assert.deepEqual(seqs(await call(captured, "history_list", { after: 5, limit: 2, order: "oldest" }, ctx)), [6]);
+	assert.deepEqual(seqs(await call(captured, "history_list", { after_seq: 5, limit: 2, from: "oldest" }, ctx)), [6]);
 	for (let index = 7; index <= 10; index++) appendText(session, "user", `message-${index}`);
-	const range = page(await call(captured, "history_list", { after: 2, before: 10, limit: 3, order: "oldest" }, ctx));
+	const range = page(await call(captured, "history_list", { after_seq: 2, before_seq: 10, limit: 3, from: "oldest" }, ctx));
 	assert.deepEqual(range.items.map((item) => item.seq), [3, 4, 5]);
 	assert.equal(range.page_older, null);
-	assert.deepEqual(range.page_newer, { after: 5, order: "oldest" }, "both bounds do not imply a direction; the cursor carries one");
-	assert.match(rendered(await call(captured, "history_list", { after: 2, before: 10, limit: 3, order: "oldest" }, ctx)), /→ newer: \{"after":5,"order":"oldest"\}/, "the footer prints the exact call to page newer");
-	assert.deepEqual(seqs(await call(captured, "history_list", { after: 2, before: 10, limit: 3 }, ctx)), [7, 8, 9], "the same range with the default order starts from the newest end");
-	const rangeNext = page(await call(captured, "history_list", { ...range.page_newer!, before: 10, limit: 3 }, ctx));
+	assert.deepEqual(range.page_newer, { after_seq: 5, from: "oldest" }, "both bounds do not imply a direction; the cursor carries one");
+	assert.match(rendered(await call(captured, "history_list", { after_seq: 2, before_seq: 10, limit: 3, from: "oldest" }, ctx)), /→ newer: \{"after_seq":5,"from":"oldest"\}/, "the footer prints the exact call to page newer");
+	assert.deepEqual(seqs(await call(captured, "history_list", { after_seq: 2, before_seq: 10, limit: 3 }, ctx)), [7, 8, 9], "the same range with the default from starts from the newest end");
+	const rangeNext = page(await call(captured, "history_list", { ...range.page_newer!, before_seq: 10, limit: 3 }, ctx));
 	assert.deepEqual(rangeNext.items.map((item) => item.seq), [6, 7, 8]);
-	const rangeLast = page(await call(captured, "history_list", { ...rangeNext.page_newer!, before: 10, limit: 3 }, ctx));
+	const rangeLast = page(await call(captured, "history_list", { ...rangeNext.page_newer!, before_seq: 10, limit: 3 }, ctx));
 	assert.deepEqual(rangeLast.items.map((item) => item.seq), [9]);
 	assert.equal(rangeLast.page_older, null);
 	assert.equal(rangeLast.page_newer, null);
@@ -195,14 +199,14 @@ test("a one-row page budget admits the newest candidate first", () => {
 	const windowId = "w1";
 	const items: DecodedHistoryItem[] = [1, 2, 3].map((seq) => ({ seq, windowId, role: "user", text: `message-${seq}`, createdAt: undefined }));
 	const projection = projectHistory([{ windowId, items }], 12, new Set([1, 2, 3]));
-	const keptSeqs = (fitsRows: number, order?: "newest" | "oldest"): number[] => {
-		const outcome = selectPage(projection, { limit: 3, ...(order === undefined ? {} : { order }) }, (candidate: HistoryPage) => candidate.items.length <= fitsRows, 200);
+	const keptSeqs = (fitsRows: number, from?: "newest" | "oldest"): number[] => {
+		const outcome = selectPage(projection, { limit: 3, ...(from === undefined ? {} : { from }) }, (candidate: HistoryPage) => candidate.items.length <= fitsRows, 200);
 		assert.equal(outcome.ok, true);
 		return outcome.ok ? outcome.data.items.map((item) => ("folded" in item ? item.first_seq : item.seq)) : [];
 	};
 	assert.deepEqual(keptSeqs(1), [3], "a budget for one row admits the newest candidate, not the oldest");
 	assert.deepEqual(keptSeqs(2), [2, 3], "a truncated prefix is the newest rows, delivered in chronological order");
-	assert.deepEqual(keptSeqs(1, "oldest"), [1], "order oldest keeps the other end when the budget is short");
+	assert.deepEqual(keptSeqs(1, "oldest"), [1], "from oldest keeps the other end when the budget is short");
 });
 
 test("since and until select a half-open time range, compose with query and paging, and refuse bad bounds", async () => {
@@ -220,13 +224,13 @@ test("since and until select a half-open time range, compose with query and pagi
 		return outcome.ok ? outcome.data.items.map((item) => ("folded" in item ? item.first_seq : item.seq)) : [];
 	};
 
-	assert.deepEqual(await selected({ roles: ["user", "assistant"], order: "oldest", since: "2026-10-10T06:00:00Z" }), [2, 3, 4], "since keeps later events and drops one with no time");
-	assert.deepEqual(await selected({ roles: ["user", "assistant"], order: "oldest", until: "2026-10-10T12:00:00Z" }), [1, 2], "until is exclusive");
-	assert.deepEqual(await selected({ roles: ["user", "assistant"], order: "oldest", since: "2026-10-10T06:00:00Z", until: "2026-10-10T18:00:00Z" }), [2, 3], "both bounds make a half-open range");
-	assert.deepEqual(await selected({ query: "needle", order: "oldest", since: "2026-10-10T06:00:00Z" }), [3], "a query composes with the time range");
-	assert.deepEqual(await selected({ roles: ["user", "assistant"], order: "oldest", since: "2026-10-10T00:00:00Z", until: "2026-10-10T18:00:00Z", after: 1, before: 4 }), [2, 3], "seq paging composes with the time range");
-	assert.deepEqual(await selected({ roles: ["user", "assistant"], order: "oldest", since: "2026-10-10" }), [1, 2, 3, 4], "a date-only since is inclusive UTC midnight, not local midnight");
-	assert.deepEqual(await selected({ roles: ["user", "assistant"], order: "oldest", until: "2026-10-10T12:00" }), [1, 2], "a time without an offset is UTC");
+	assert.deepEqual(await selected({ roles: ["user", "assistant"], from: "oldest", since: "2026-10-10T06:00:00Z" }), [2, 3, 4], "since keeps later events and drops one with no time");
+	assert.deepEqual(await selected({ roles: ["user", "assistant"], from: "oldest", until: "2026-10-10T12:00:00Z" }), [1, 2], "until is exclusive");
+	assert.deepEqual(await selected({ roles: ["user", "assistant"], from: "oldest", since: "2026-10-10T06:00:00Z", until: "2026-10-10T18:00:00Z" }), [2, 3], "both bounds make a half-open range");
+	assert.deepEqual(await selected({ query: "needle", from: "oldest", since: "2026-10-10T06:00:00Z" }), [3], "a query composes with the time range");
+	assert.deepEqual(await selected({ roles: ["user", "assistant"], from: "oldest", since: "2026-10-10T00:00:00Z", until: "2026-10-10T18:00:00Z", after_seq: 1, before_seq: 4 }), [2, 3], "seq paging composes with the time range");
+	assert.deepEqual(await selected({ roles: ["user", "assistant"], from: "oldest", since: "2026-10-10" }), [1, 2, 3, 4], "a date-only since is inclusive UTC midnight, not local midnight");
+	assert.deepEqual(await selected({ roles: ["user", "assistant"], from: "oldest", until: "2026-10-10T12:00" }), [1, 2], "a time without an offset is UTC");
 
 	const malformed = await historyList.execute({ since: "yesterday" }, projection);
 	assert.equal(malformed.ok, false);
@@ -286,9 +290,9 @@ test("conversation view folds tools and injected messages, while explicit roles 
 	assert.deepEqual(folded.tools, { bash: 1, read: 1 });
 	assert.equal("custom_types" in folded, false);
 
-	const empty = page(await call(captured, "history_list", { roles: ["context"], before: 2 }, ctx));
+	const empty = page(await call(captured, "history_list", { roles: ["context"], before_seq: 2 }, ctx));
 	assert.deepEqual(empty.items, []);
-	const hiddenOnly = page(await call(captured, "history_list", { after: 2, before: 6 }, ctx));
+	const hiddenOnly = page(await call(captured, "history_list", { after_seq: 2, before_seq: 6 }, ctx));
 	assert.deepEqual(hiddenOnly.items, [{ folded: true, first_seq: 3, last_seq: 4, count: 2, tools: { bash: 1, read: 1 } }]);
 
 	const expanded = page(await call(captured, "history_list", { roles: ["tool"] }, ctx));
@@ -397,12 +401,12 @@ test("oversized arguments and long nested records remain fully pageable and sear
 		},
 	});
 
-	let read = resultRead<{ nested_calls: { call_count: number; complete: boolean } }>(await call(captured, "history_read", { seq: 2, limit_chars: 50_000 }, ctx));
+	let read = resultRead<{ nested_calls: { call_count: number; complete: boolean } }>(await call(captured, "history_read", { seq: 2, max_chars: 50_000 }, ctx));
 	assert.deepEqual(read.nested_calls, { call_count: 400, complete: true }, "the read counts every recorded call, not only the records one page can carry");
 	let document = read.text;
 	while (read.next_offset_chars !== null) {
 		const next = read.next_offset_chars;
-		const result = await call(captured, "history_read", { seq: 2, offset_chars: next, limit_chars: 50_000 }, ctx);
+		const result = await call(captured, "history_read", { seq: 2, offset_chars: next, max_chars: 50_000 }, ctx);
 		assertWithinBudget(result, "bounded document page");
 		read = resultRead(result);
 		assert.ok(read.text.length > 0, "every continuation makes progress");
@@ -476,7 +480,7 @@ test("list renders paging and fold recipes, read renders a neighborhood call, an
 	appendText(session, "user", "current window");
 
 	const listed = await call(captured, "history_list", {}, ctx);
-	assert.match(rendered(listed), /→ older: \{"before":\d+\}/, "the footer prints the exact call to page older");
+	assert.match(rendered(listed), /→ older: \{"before_seq":\d+\}/, "the footer prints the exact call to page older");
 
 	const windows = resultData<{ windows: Array<{ window_id: string }> }>(await call(captured, "history_windows", {}, ctx));
 	assert.equal(windows.windows.length, 2);
@@ -489,12 +493,12 @@ test("list renders paging and fold recipes, read renders a neighborhood call, an
 	toolResult(session, "t1", "bash", "done");
 	appendText(session, "user", "after tools");
 	const folded = await call(captured, "history_list", {}, ctx);
-	assert.match(rendered(folded), /→ expand: \{"after":\d+,"before":\d+,"order":"oldest","roles":\["tool","context"\]\}/, "a folded row prints its own expand recipe");
+	assert.match(rendered(folded), /→ expand: \{"after_seq":\d+,"before_seq":\d+,"from":"oldest","roles":\["tool","context"\]\}/, "a folded row prints its own expand recipe");
 
 	appendText(session, "user", "needle read target");
 	const hits = page(await call(captured, "history_list", { query: "needle read target" }, ctx));
 	const read = await call(captured, "history_read", { seq: hits.items[0]!.seq }, ctx);
-	assert.match(rendered(read), /neighborhood → `history_list`\(\{"after":\d+,"before":\d+\}\)/, "a read prints the call for surrounding events");
+	assert.match(rendered(read), /neighborhood → `history_list`\(\{"after_seq":\d+,"before_seq":\d+\}\)/, "a read prints the call for surrounding events");
 
 	const solo = manager();
 	const soloCaptured = makeExtension(solo);
@@ -535,9 +539,9 @@ test("a query covers every role, carries match offsets and refuses an empty lite
 	const developers = page(await call(captured, "history_list", { query: "needle", roles: ["context"] }, ctx));
 	assert.deepEqual(developers.items.map((item) => item.role), ["context"]);
 	assert.equal("custom_type" in developers.items[0]!, false);
-	const first = page(await call(captured, "history_list", { query: "needle", after: 1, limit: 1, order: "oldest" }, ctx));
+	const first = page(await call(captured, "history_list", { query: "needle", after_seq: 1, limit: 1, from: "oldest" }, ctx));
 	assert.deepEqual(first.items.map((item) => item.seq), [2]);
-	assert.deepEqual(first.page_newer, { after: 2, order: "oldest" });
+	assert.deepEqual(first.page_newer, { after_seq: 2, from: "oldest" });
 	const next = page(await call(captured, "history_list", { query: "needle", ...first.page_newer!, limit: 2 }, ctx));
 	assert.deepEqual(next.items.map((item) => item.seq), [3]);
 	const absent = await call(captured, "history_list", { query: "absent" }, ctx);
@@ -553,10 +557,10 @@ test("page_older and page_newer round-trip a session with no duplicates and no g
 	for (let seq = 1; seq <= 10; seq++) appendText(session, "user", `needle ${seq}`);
 
 	const forward: number[] = [];
-	let current = page(await call(captured, "history_list", { query: "needle", order: "oldest", limit: 3 }, ctx));
+	let current = page(await call(captured, "history_list", { query: "needle", from: "oldest", limit: 3 }, ctx));
 	assert.deepEqual(current.items.map((item) => item.seq), [1, 2, 3]);
-	assert.equal(current.page_older, null, "the first page in order oldest has nothing older");
-	assert.deepEqual(current.page_newer, { after: 3, order: "oldest" });
+	assert.equal(current.page_older, null, "the first page in `from` oldest has nothing older");
+	assert.deepEqual(current.page_newer, { after_seq: 3, from: "oldest" });
 	forward.push(...current.items.map((item) => item.seq as number));
 	while (current.page_newer !== null) {
 		const cursor = current.page_newer;
@@ -568,7 +572,7 @@ test("page_older and page_newer round-trip a session with no duplicates and no g
 	const backward: number[] = [];
 	current = page(await call(captured, "history_list", { query: "needle", limit: 3 }, ctx));
 	assert.deepEqual(current.items.map((item) => item.seq), [8, 9, 10]);
-	assert.deepEqual(current.page_older, { before: 8 });
+	assert.deepEqual(current.page_older, { before_seq: 8 });
 	backward.push(...current.items.map((item) => item.seq as number));
 	while (current.page_older !== null) {
 		const cursor = current.page_older;
@@ -592,7 +596,7 @@ test("query previews start at case-insensitive literal matches and offsets read 
 	assert.equal("match_offset_chars" in hit, false);
 	assert.equal(hit.content, "NeEdLe.*");
 	assert.equal(hit.truncated, true);
-	const read = resultRead<{ seq: number }>(await call(captured, "history_read", { seq: hit.seq as number, offset_chars: hit.offset_chars as number, limit_chars: 8 }, ctx));
+	const read = resultRead<{ seq: number }>(await call(captured, "history_read", { seq: hit.seq as number, offset_chars: hit.offset_chars as number, max_chars: 8 }, ctx));
 	assert.equal(read.content, hit.content);
 	const listed = page(await call(captured, "history_list", { max_chars_per_item: 8 }, ctx));
 	assert.equal(listed.items.length, 1);
@@ -615,7 +619,7 @@ test("history_read paginates one document with an accurate limit and a bounded b
 
 	// 50k requested chars of 64 KiB of text exceeds the byte cap, so the delivered slice stops short
 	// of the request rather than at it.
-	const full = await call(captured, "history_read", { seq, limit_chars: 50_000 }, ctx);
+	const full = await call(captured, "history_read", { seq, max_chars: 50_000 }, ctx);
 	assertWithinBudget(full, "history_read page");
 	const read = resultRead<{ seq: number; window_id: string }>(full);
 	assert.equal(read.seq, seq);
@@ -627,13 +631,13 @@ test("history_read paginates one document with an accurate limit and a bounded b
 	assert.equal(text.type === "text" && text.text.includes("READ WINDOW"), false, "no READ WINDOW block survives");
 	assert.match(text.type === "text" ? text.text : "", /\[truncated; continue at offset_chars=\d+\]$/, "a byte-capped window states where to continue");
 
-	const next = resultRead(await call(captured, "history_read", { seq, offset_chars: read.next_offset_chars!, limit_chars: 50_000 }, ctx));
+	const next = resultRead(await call(captured, "history_read", { seq, offset_chars: read.next_offset_chars!, max_chars: 50_000 }, ctx));
 	assert.equal(read.content + next.content, content.slice(0, read.content.length + next.content.length));
 	assert.equal(Array.from(read.content).length, read.next_offset_chars, "the cursor addresses the first undelivered character");
 
-	const limited = resultRead(await call(captured, "history_read", { seq, limit_chars: 10 }, ctx));
+	const limited = resultRead(await call(captured, "history_read", { seq, max_chars: 10 }, ctx));
 	assert.equal(limited.content, "z".repeat(10));
-	const limitedText = (await call(captured, "history_read", { seq, limit_chars: 10 }, ctx)).content[0]!;
+	const limitedText = (await call(captured, "history_read", { seq, max_chars: 10 }, ctx)).content[0]!;
 	const limitedSuffix = "\n\n[truncated; continue at offset_chars=10]";
 	assert.equal(limitedText.type === "text" && limitedText.text.endsWith(limitedSuffix), true, "a count-limited window states where to resume");
 

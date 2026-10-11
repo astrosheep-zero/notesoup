@@ -3,18 +3,19 @@ import { Type, type Static } from "typebox";
 import { localIso } from "../notes/frontmatter.js";
 import { isFilesystemError } from "../notes/fs-error.js";
 import { createNotesStore, NoteError, noteIdentity, type NoteChange, type NoteMeta, type NoteQueryStatus, type NoteRow, type Scope } from "../notes/index.js";
-import { DEFAULT_READ_WINDOW_CHARS, MAX_READ_WINDOW_CHARS, prefixFit } from "./output.js";
-import { failure, fitsResult, resultSchema, readTextWindow, renderOutcome, renderTextWindow, structuredBytes, success, TextWindowSchema, type Outcome } from "./result.js";
+import { prefixFit } from "./output.js";
+import { failure, fitsResult, resultSchema, readTextWindow, renderOutcome, renderTextWindow, structuredBytes, success, TextWindowRequestSchema, TextWindowSchema, type Outcome } from "./result.js";
 import { nullableString, InvalidQueryError, searchQueries, searchQuery } from "./schema.js";
 
 const ORIGIN_VALUES = [Type.Literal("user"), Type.Literal("self"), Type.Literal("external")] as const;
 const ORIGIN = Type.Optional(Type.Union([...ORIGIN_VALUES], {
-	description: "Content source: user, self (default), or external.",
+	description: "(optional, default self) Who wrote it: user, self, or external.",
 }));
-const CRUMPLED_PARAMETER = Type.Optional(Type.Boolean({ description: "true crumples (archives) the note: hidden from list/search, still readable by address; false restores it." }));
-const WASTEBASKET_PARAMETER = Type.Optional(Type.Boolean({ description: "true lists only crumpled notes instead of live ones." }));
-const FILE_LIMIT_PARAMETER = Type.Optional(Type.Integer({ minimum: 1, description: "Max files (default: as many as fit the output budget)." }));
-const ADDRESS_DESCRIPTION = "Addresses: <path> with no @ for this session; @project/, @human/, @self/, @model/ for durable homes (see /skill:memory). Never pass them to filesystem tools.";
+const CRUMPLED_PARAMETER = Type.Optional(Type.Boolean({ description: "(optional) true = crumple (hide from list and search, still readable); false = restore." }));
+const CRUMPLED_LIST_PARAMETER = Type.Optional(Type.Boolean({ description: "(optional) true = list only crumpled notes." }));
+const FILE_LIMIT_PARAMETER = Type.Optional(Type.Integer({ minimum: 1, description: "(optional, default as many as fit) Max notes." }));
+const GLOB_PARAMETER = nullableString("(optional) Glob over full addresses.");
+const ADDRESS_DESCRIPTION = "Addresses: a bare path is this session's note; `@project/`, `@human/`, `@self/`, `@model/` are durable homes. Not file paths: never pass them to file tools.";
 
 /** The one receipt field a caller cannot derive from the address itself. */
 function projectKeyField(scope: Scope, projectKey: string): { project_key?: string } {
@@ -27,7 +28,7 @@ function projectKeyField(scope: Scope, projectKey: string): { project_key?: stri
  */
 function failureOf(error: unknown): Outcome<never> {
 	if (error instanceof NoteError) return failure(error.code, error.message);
-	// Address, pattern, and query guards raise declared types; nothing else is converted.
+	// Address, glob, and query guards raise declared types; nothing else is converted.
 	if (error instanceof InvalidQueryError) return failure("invalid_query", error.message);
 	if (isFilesystemError(error)) return failure("io_error", "notes operation failed");
 	throw error;
@@ -127,7 +128,7 @@ const SearchedFileSchema = Type.Object({
 }, { additionalProperties: false });
 
 const SnapshotSchema = {
-	more: Type.Integer(),
+	more: Type.Integer({ description: "How many more were left out." }),
 	homes_unavailable: Type.Array(Type.String()),
 };
 
@@ -141,7 +142,7 @@ export type NotesWriteData = Static<typeof NotesWriteDataSchema>;
 export const NotesUpdateDataSchema = Type.Object({
 	address: Type.String(),
 	project_key: Type.Optional(Type.String()),
-	change_kind: Type.Union([Type.Literal("none"), Type.Literal("body"), Type.Literal("metadata"), Type.Literal("file")]),
+	change_kind: Type.Union([Type.Literal("none"), Type.Literal("body"), Type.Literal("metadata"), Type.Literal("moved")]),
 	diff: Type.String(),
 	rename_from: Type.Optional(Type.String()),
 }, { additionalProperties: false });
@@ -209,7 +210,7 @@ function renderWriteData(data: NotesWriteData): string {
 
 export const notesWrite = {
 	name: "notes_write", label: "Notes write",
-	description: `Create or replace a note body, preserving metadata; uncrumples a crumpled note. Name it for its contents and when to use it. Store what git/history cannot recover. ${ADDRESS_DESCRIPTION}`,
+	description: `Create or replace a note's body, keeping metadata; uncrumples a crumpled note. Name it for what it holds and when to use it. Store what git and history can't recover. ${ADDRESS_DESCRIPTION}`,
 	parameters: notesWriteParameters, outputSchema: resultSchema(NotesWriteDataSchema), executionMode: "sequential",
 	async execute(params: Static<typeof notesWriteParameters>, identity: NotesIdentity): Promise<Outcome<NotesWriteData>> {
 		try {
@@ -220,7 +221,14 @@ export const notesWrite = {
 	render: (result: Outcome<NotesWriteData>): string => renderOutcome(result, renderWriteData),
 } as const;
 
-export const notesUpdateParameters = Type.Object({ address: Type.String(), edits: Type.Optional(Type.Array(Type.Object({ oldText: Type.String(), newText: Type.String() }, { additionalProperties: false }))), origin: ORIGIN, crumpled: CRUMPLED_PARAMETER, replace_all: Type.Optional(Type.Boolean()), rename_to: Type.Optional(Type.String({ description: "Move, preserving metadata. Use alone. Refuses live targets; may replace crumpled targets. References are not updated. Empty string is ignored." })) }, { additionalProperties: false });
+export const notesUpdateParameters = Type.Object({
+	address: Type.String(),
+	edits: Type.Optional(Type.Array(Type.Object({ oldText: Type.String(), newText: Type.String() }, { additionalProperties: false }))),
+	origin: ORIGIN,
+	crumpled: CRUMPLED_PARAMETER,
+	replace_all: Type.Optional(Type.Boolean({ description: "(optional) true = replace every match of `oldText`." })),
+	rename_to: Type.Optional(Type.String({ description: "(optional) Move to this address, keeping metadata. Use alone. Won't overwrite a live note; references aren't updated." })),
+}, { additionalProperties: false });
 
 function renderUpdateData(data: NotesUpdateData): string {
 	const head = data.rename_from === undefined
@@ -249,7 +257,7 @@ function boundedUpdate(data: NotesUpdateData): Outcome<NotesUpdateData> {
 
 export const notesUpdate = {
 	name: "notes_update", label: "Notes update",
-	description: `Edit body text, change origin or crumpled state, or move a note. Each oldText must match once unless replace_all is true; edits cannot change frontmatter. Metadata-only updates need origin or crumpled. Returns applied changes and a bounded diff. ${ADDRESS_DESCRIPTION}`,
+	description: `Edit a note's body, change its origin or crumpled state, or move it. Each \`oldText\` must match exactly once unless \`replace_all\` is true; frontmatter can't be edited. Returns a diff. ${ADDRESS_DESCRIPTION}`,
 	parameters: notesUpdateParameters, outputSchema: resultSchema(NotesUpdateDataSchema), executionMode: "sequential",
 	async execute(params: Static<typeof notesUpdateParameters>, identity: NotesIdentity, renderDiff: (change: NoteChange) => string): Promise<Outcome<NotesUpdateData>> {
 		try {
@@ -263,7 +271,7 @@ export const notesUpdate = {
 				await store.rename(params.address, renameTo);
 				const from = noteIdentity(identity, params.address).address;
 				const to = noteIdentity(identity, renameTo);
-				return boundedUpdate({ ...to, rename_from: from, change_kind: "file", diff: `rename ${from} -> ${to.address}` });
+				return boundedUpdate({ ...to, rename_from: from, change_kind: "moved", diff: `rename ${from} -> ${to.address}` });
 			}
 			const { change } = await store.update(params.address, params.edits, { origin: params.origin, crumpled: params.crumpled, replaceAll: params.replace_all });
 			return boundedUpdate({ ...noteIdentity(identity, params.address), change_kind: change.kind, diff: renderDiff(change) });
@@ -272,7 +280,7 @@ export const notesUpdate = {
 	render: renderUpdate,
 } as const;
 
-export const notesReadParameters = Type.Object({ address: Type.String(), offset_chars: Type.Optional(Type.Integer({ description: "Body code-point offset (default 0); negative counts from EOF." })), limit_chars: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_READ_WINDOW_CHARS, description: `Max code points (default ${DEFAULT_READ_WINDOW_CHARS}); also bounded by output bytes.` })) }, { additionalProperties: false });
+export const notesReadParameters = Type.Object({ address: Type.String(), ...TextWindowRequestSchema }, { additionalProperties: false });
 
 function renderReadData(data: NotesReadData): string {
 	return `${renderIdentity(data)}\n${renderMetadata(data.metadata)}\n\n${renderTextWindow(data)}`;
@@ -280,7 +288,7 @@ function renderReadData(data: NotesReadData): string {
 
 export const notesRead = {
 	name: "notes_read", label: "Notes read",
-	description: `Read note metadata and a verbatim body slice, excluding frontmatter. Pass next_offset_chars as offset_chars until null. ${ADDRESS_DESCRIPTION}`,
+	description: `Read a note's metadata and body, without frontmatter. ${ADDRESS_DESCRIPTION}`,
 	parameters: notesReadParameters, outputSchema: resultSchema(NotesReadDataSchema),
 	async execute(params: Static<typeof notesReadParameters>, identity: NotesIdentity): Promise<Outcome<NotesReadData>> {
 		try {
@@ -290,46 +298,46 @@ export const notesRead = {
 			if (params.offset_chars !== undefined && params.offset_chars > totalChars) return failure("invalid_offset", `offset_chars ${params.offset_chars} is past the end of the body: the note has ${totalChars} body chars; the largest legal offset is ${totalChars} (an empty end-read)`);
 			const resolved = noteIdentity(identity, params.address);
 			const metadata = noteMetadata(note.meta);
-			return readTextWindow(note.body, params.offset_chars, params.limit_chars, (window) => ({ ...resolved, metadata, ...window }), (result) => renderOutcome(result, renderReadData));
+			return readTextWindow(note.body, params.offset_chars, params.max_chars, (window) => ({ ...resolved, metadata, ...window }), (result) => renderOutcome(result, renderReadData));
 		} catch (error) { return failureOf(error); }
 	},
 	render: (result: Outcome<NotesReadData>): string => renderOutcome(result, renderReadData),
 } as const;
 
-export const notesListParameters = Type.Object({ pattern: nullableString(), limit: FILE_LIMIT_PARAMETER, wastebasket: WASTEBASKET_PARAMETER }, { additionalProperties: false });
+export const notesListParameters = Type.Object({ glob: GLOB_PARAMETER, limit: FILE_LIMIT_PARAMETER, crumpled: CRUMPLED_LIST_PARAMETER }, { additionalProperties: false });
 
 function renderListData(data: NotesListData): string {
 	const lines = [`${data.files.length} ${data.files.length === 1 ? "note" : "notes"}`];
 	for (const file of data.files) {
 		lines.push(`- ${renderIdentity(file)} | updated ${file.updated_at}${file.crumpled_at === undefined ? "" : ` | crumpled ${file.crumpled_at}`}`);
 	}
-	if (data.more > 0) lines.push(`${data.more} more matching notes omitted; narrow with pattern`);
+	if (data.more > 0) lines.push(`${data.more} more matching notes omitted; narrow with glob`);
 	for (const home of data.homes_unavailable) lines.push(`${home} could not be read`);
 	return lines.join("\n");
 }
 
 export const notesList = {
 	name: "notes_list", label: "Notes list",
-	description: `List notes in the session and the four @ homes, newest first. Snapshot, not pageable: more counts omitted files; pattern globs full addresses. Reports unavailable homes. ${ADDRESS_DESCRIPTION}`,
+	description: `List notes in this session and the four @ homes, newest first. Not pageable; \`more\` counts the rest. ${ADDRESS_DESCRIPTION}`,
 	parameters: notesListParameters, outputSchema: resultSchema(NotesListDataSchema),
 	async execute(params: Static<typeof notesListParameters>, identity: NotesIdentity): Promise<Outcome<NotesListData>> {
 		try {
-			const { rows, status } = await createNotesStore(identity).listWithStatus({ pattern: params.pattern ?? undefined, wastebasket: params.wastebasket });
+			const { rows, status } = await createNotesStore(identity).listWithStatus({ glob: params.glob ?? undefined, crumpled: params.crumpled });
 			return snapshot(rows.map(row => listedFile(row, identity)), params.limit, status, renderListData);
 		} catch (error) { return failureOf(error); }
 	},
 	render: (result: Outcome<NotesListData>): string => renderOutcome(result, renderListData),
 } as const;
 
-export const notesSearchParameters = Type.Object({ query: searchQuery(), pattern: nullableString(), limit: FILE_LIMIT_PARAMETER, max_matches_per_file: Type.Optional(Type.Integer({ minimum: 1, description: "Max matches shown per file (default: no cap)." })), wastebasket: WASTEBASKET_PARAMETER }, { additionalProperties: false });
+export const notesSearchParameters = Type.Object({ query: searchQuery(), glob: GLOB_PARAMETER, limit: FILE_LIMIT_PARAMETER, max_matches_per_file: Type.Optional(Type.Integer({ minimum: 1, description: "(optional, default all) Max matching lines per note." })), crumpled: CRUMPLED_LIST_PARAMETER }, { additionalProperties: false });
 
 function renderSearchData(data: NotesSearchData): string {
-	const lines = [`${data.files.length} ${data.files.length === 1 ? "file" : "files"}`];
+	const lines = [`${data.files.length} ${data.files.length === 1 ? "note" : "notes"}`];
 	for (const file of data.files) {
 		lines.push(`- ${renderIdentity(file)} | updated ${file.updated_at} | ${file.matches.length} ${file.matches.length === 1 ? "match" : "matches"}`);
 		for (const match of file.matches) lines.push(`  line ${match.line} at offset_chars ${match.offset_chars}: ${match.text}`);
 	}
-	if (data.more > 0) lines.push(`${data.more} more matching files omitted; narrow with pattern`);
+	if (data.more > 0) lines.push(`${data.more} more matching notes omitted; narrow with glob`);
 	for (const home of data.homes_unavailable) lines.push(`${home} could not be read`);
 	return lines.join("\n");
 }
@@ -357,11 +365,11 @@ function fitSearchFile(file: SearchFile, fits: (candidate: SearchFile) => boolea
 
 export const notesSearch = {
 	name: "notes_search", label: "Notes search",
-	description: `Search note bodies for case-insensitive literal queries (OR). Returns matching lines and body code-point offsets for \`notes_read\`. Snapshot, not pageable: more counts omitted files; pattern globs full addresses across the session and the four @ homes. ${ADDRESS_DESCRIPTION}`,
+	description: `Search note bodies for literal text, case-insensitive. Returns matching lines with offsets for \`notes_read\`. Not pageable; \`more\` counts the rest. ${ADDRESS_DESCRIPTION}`,
 	parameters: notesSearchParameters, outputSchema: resultSchema(NotesSearchDataSchema),
 	async execute(params: Static<typeof notesSearchParameters>, identity: NotesIdentity): Promise<Outcome<NotesSearchData>> {
 		try {
-			const { rows, status } = await createNotesStore(identity).searchWithStatus(searchQueries(params.query), { pattern: params.pattern ?? undefined, wastebasket: params.wastebasket });
+			const { rows, status } = await createNotesStore(identity).searchWithStatus(searchQueries(params.query), { glob: params.glob ?? undefined, crumpled: params.crumpled });
 			const files: NotesSearchData["files"] = rows.sort(byRecent).map(row => ({
 				...listedFile(row, identity),
 				matches: row.matches.slice(0, params.max_matches_per_file).map(match => ({ line: match.line, text: match.text, offset_chars: match.offsetChars })),

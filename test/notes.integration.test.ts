@@ -59,7 +59,7 @@ test("notes_list and notes_search are recent-first snapshots with narrowing hint
 	assert.deepEqual(searched.files.map((file) => file.address), ["new.md", "@project/design.md"]);
 	assert.equal(searched.more, 1);
 
-	const narrowed = resultData<NotesListData>(await call(captured, "notes_list", { pattern: "@project/**" }, ctx));
+	const narrowed = resultData<NotesListData>(await call(captured, "notes_list", { glob: "@project/**" }, ctx));
 	assert.deepEqual(narrowed.files.map((file) => file.address), ["@project/design.md"]);
 	assert.equal(narrowed.more, 0);
 });
@@ -104,7 +104,7 @@ test("notes_list is most-recently-updated first across merged scopes", async () 
 	// A same-path pair in two scopes keeps both rows; equal timestamps tie-break by scope name.
 	put("human", "a.md", base + 10);
 	assert.deepEqual((await files({})).filter((file) => file.address.endsWith("a.md")).map((file) => file.address), ["@human/a.md", "a.md"], "equal timestamps tie-break by full address");
-	assert.deepEqual((await files({ pattern: "*.md" })).map((file) => file.address), ["a.md", "b.md"], "a bare pattern narrows to the session home");
+	assert.deepEqual((await files({ glob: "*.md" })).map((file) => file.address), ["a.md", "b.md"], "a bare glob narrows to the session home");
 });
 
 test("notes are real files that persist across sessions and round-trip Unicode", async () => {
@@ -123,17 +123,17 @@ test("notes are real files that persist across sessions and round-trip Unicode",
 	assert.equal(read.address, "@human/checkpoint/进度.md");
 	assert.equal(read.content, "Café", "a negative offset reads the body tail in one call");
 	const searched = resultData<NotesSearchData>(
-		await call(restoredCaptured, "notes_search", { pattern: "@human/**", query: "Café" }, restoredCtx),
+		await call(restoredCaptured, "notes_search", { glob: "@human/**", query: "Café" }, restoredCtx),
 	);
 	assert.equal(searched.files[0]?.matches[0]?.line, 2);
 	const listedFiles = resultData<NotesListData>(
-		await call(restoredCaptured, "notes_list", { pattern: "@human/checkpoint/**" }, restoredCtx),
+		await call(restoredCaptured, "notes_list", { glob: "@human/checkpoint/**" }, restoredCtx),
 	);
 	assert.equal(listedFiles.files.length, 1, "glob ** crosses into the checkpoint directory");
 	assert.equal(listedFiles.files[0]?.address, "@human/checkpoint/进度.md");
 	// A single-segment * never crosses `/`, so a nested-only store matches nothing at the root.
 	const rootOnly = resultData<NotesListData>(
-		await call(restoredCaptured, "notes_list", { pattern: "@human/*" }, restoredCtx)
+		await call(restoredCaptured, "notes_list", { glob: "@human/*" }, restoredCtx)
 	);
 	assert.equal(rootOnly.files.length, 0, "glob * stays within one segment");
 	assert.equal(searched.files[0]?.updated_at, listedFiles.files[0]?.updated_at);
@@ -153,16 +153,16 @@ test("crumple lifecycle: metadata-only edits close and smooth a note without tou
 	assert.equal(markOnly.change_kind, "metadata");
 	assert.match(markOnly.diff, /^\+\s*\d+\s+crumpledAt: \d{4}-\d{2}-\d{2}T/m);
 	assert.deepEqual(await listNotes(ctx, { scope: "session" }), [], "a crumpled note leaves the live list");
-	const basket = (await listNotes(ctx, { scope: "session", wastebasket: true }))[0]!;
+	const basket = (await listNotes(ctx, { scope: "session", crumpled: true }))[0]!;
 	assert.ok(basket.meta.crumpledAt);
 	assert.equal(basket.meta.updatedAt, updatedBefore, "crumpling does not change updatedAt");
 	assert.equal(resultRead(await call(captured, "notes_read", { address: "journal.md" }, ctx)).content.endsWith("log line"), true, "read still reaches a crumpled note");
 
 	// re-crumpling keeps the first time; smoothing empties the basket
 	await call(captured, "notes_update", { address: "journal.md", crumpled: true }, ctx);
-	assert.equal((await listNotes(ctx, { scope: "session", wastebasket: true }))[0]?.meta.crumpledAt, basket.meta.crumpledAt);
+	assert.equal((await listNotes(ctx, { scope: "session", crumpled: true }))[0]?.meta.crumpledAt, basket.meta.crumpledAt);
 	await call(captured, "notes_update", { address: "journal.md", crumpled: false }, ctx);
-	assert.deepEqual(await listNotes(ctx, { scope: "session", wastebasket: true }), []);
+	assert.deepEqual(await listNotes(ctx, { scope: "session", crumpled: true }), []);
 	assert.equal((await listNotes(ctx, { scope: "session" }))[0]?.meta.crumpledAt, undefined);
 
 	// writing to a crumpled address always produces an uncrumpled note
@@ -345,7 +345,7 @@ test("an over-budget note is delivered as a bounded prefix and resumed by next_o
 	assert.equal(textOf(rawFirst).endsWith(`\n\n[truncated; continue at offset_chars=${first.next_offset_chars}]`), true, "the footer names the resume cursor");
 
 	// Asking for the largest legal window still cannot exceed the byte budget.
-	const rawWide = await call(captured, "notes_read", { address: "huge.md", limit_chars: MAX_READ_WINDOW_CHARS }, ctx);
+	const rawWide = await call(captured, "notes_read", { address: "huge.md", max_chars: MAX_READ_WINDOW_CHARS }, ctx);
 	assertWithinBudget(rawWide, "widest requested window");
 	const wide = resultRead(rawWide);
 	assert.ok(Array.from(wide.content).length < MAX_READ_WINDOW_CHARS, "the widest request is cut short");
@@ -370,8 +370,8 @@ test("an over-budget note is delivered as a bounded prefix and resumed by next_o
 	for (const result of [
 		await call(captured, "notes_write", { address: "@project/receipt", content: "body" }, ctx),
 		await call(captured, "notes_update", { address: "@project/receipt", edits: [{ oldText: "body", newText: "changed" }] }, ctx),
-		await call(captured, "notes_list", { pattern: "@project/**" }, ctx),
-		await call(captured, "notes_search", { query: "changed", pattern: "@project/**" }, ctx),
+		await call(captured, "notes_list", { glob: "@project/**" }, ctx),
+		await call(captured, "notes_search", { query: "changed", glob: "@project/**" }, ctx),
 		await call(captured, "notes_read", { address: "@project/receipt" }, ctx),
 	]) {
 		assert.equal(JSON.stringify(result).includes(root), false, "notes receipts never expose the absolute home");
@@ -427,26 +427,26 @@ test("notes_search ignores case, treats queries literally, and preserves origina
 	const captured = makeExtension(session);
 	const ctx = context(session);
 	await call(captured, "notes_write", { address: "case-match.md", content: "😀İ NeEdLe.* tail" }, ctx);
-	const found = resultData<NotesSearchData>(await call(captured, "notes_search", { query: ["missing", "needle.*"], pattern: "case-match.md" }, ctx));
+	const found = resultData<NotesSearchData>(await call(captured, "notes_search", { query: ["missing", "needle.*"], glob: "case-match.md" }, ctx));
 	assert.equal(found.files.length, 1);
 	assert.equal(found.files[0]!.matches.length, 1);
 	const hit = found.files[0]!;
 	const read = resultRead(await call(captured, "notes_read", { address: hit.address, offset_chars: hit.matches[0]!.offset_chars }, ctx));
 	assert.equal(read.content, "NeEdLe.* tail");
-	const absent = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle.+", pattern: "case-match.md" }, ctx));
+	const absent = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle.+", glob: "case-match.md" }, ctx));
 	assert.deepEqual(absent.files, []);
 });
 
-test("notes_search scopes by glob pattern; a non-matching pattern is an empty page, not an error", async () => {
+test("notes_search scopes by glob; a non-matching glob is an empty page, not an error", async () => {
 	const session = manager();
 	const captured = makeExtension(session);
 	const ctx = context(session);
 	await call(captured, "notes_write", { address: "deep/nested/a.md", content: "needle here" }, ctx);
 	await call(captured, "notes_write", { address: "top.md", content: "needle there" }, ctx);
-	const scoped = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle", pattern: "deep/**" }, ctx));
+	const scoped = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle", glob: "deep/**" }, ctx));
 	assert.deepEqual(scoped.files.map((file) => file.address), ["deep/nested/a.md"], "a glob scopes the search to the subtree");
-	const none = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle", pattern: "absent/**" }, ctx));
-	assert.deepEqual(none.files, [], "a non-matching pattern is an empty page, not a refusal");
+	const none = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle", glob: "absent/**" }, ctx));
+	assert.deepEqual(none.files, [], "a non-matching glob is an empty page, not a refusal");
 });
 
 test("an over-budget mutation diff is shortened on both surfaces, and the edit still lands whole", async () => {
@@ -466,7 +466,7 @@ test("an over-budget mutation diff is shortened on both surfaces, and the edit s
 	assert.ok(textOf(raw).includes("[diff truncated; update applied]"), "the model-facing text carries the same marker");
 	assert.equal(textOf(raw).includes(`+${"b".repeat(300)}`), false, "the delivered diff prefix stops inside the first change");
 
-	const body = resultRead(await call(captured, "notes_read", { address: "bulk-edit.md", limit_chars: 300 }, ctx)).content;
+	const body = resultRead(await call(captured, "notes_read", { address: "bulk-edit.md", max_chars: 300 }, ctx)).content;
 	assert.equal(body, "b".repeat(300), "every one of the 1500 replacements was applied, not just the ones that fit the receipt");
 });
 
@@ -575,7 +575,7 @@ test("a body that repeats one anchor thousands of times refuses with bounded, co
 	assert.equal(refusal.code, "ambiguous_edit");
 	assert.match(refusal.message, /edit 0:/, "the message names the failing edit index");
 	assert.match(refusal.message, /occurs 5000 times \(lines 1, 2, 3, 4, 5, 6, 7, 8, and 4992 more\)/, "the message names a bounded sample and the exact total");
-	assert.equal(resultRead(await call(captured, "notes_read", { address: "many.md", limit_chars: 15 }, ctx)).content, "beta\n".repeat(3), "the refused edit changed nothing");
+	assert.equal(resultRead(await call(captured, "notes_read", { address: "many.md", max_chars: 15 }, ctx)).content, "beta\n".repeat(3), "the refused edit changed nothing");
 
 	const replaced = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "many.md", edits: [{ oldText: "beta", newText: "B" }], replace_all: true }, ctx));
 	assertWithinBudget(await call(captured, "notes_read", { address: "many.md" }, ctx), "read after replace_all");
