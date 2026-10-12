@@ -7,6 +7,7 @@ import { WARNING_CONTENT } from "./reset/text.js";
 import { readThresholdSettings, type ThresholdSettingsResolution } from "./thresholds.js";
 import { currentWindowId, hasWindowMessage, isWindowMarker, rootWindowId, windowUsage } from "./window.js";
 import { tokenBudgetGuidance } from "../budget/text.js";
+import { arrangeAnchoredReminders, type AnchorDetails } from "./anchored.js";
 import { output } from "../tools/output.js";
 
 /** Remaining tokens in the provider's active window, or null without a usable estimate. */
@@ -66,7 +67,7 @@ export function registerBudget(
 		for (const [key, notice] of pendingNotices) {
 			if (warningCommittedInWindow(ctx, notice)) {
 				pendingNotices.delete(key);
-				ctx.ui.notify("notesoup: context almost full; close out the current memory window.", "warning");
+				ctx.ui.notify("🥣 Context almost full · saving notes before memory clears", "warning");
 			} else if (settled) {
 				// An uncommitted draft must not be matched to a later manual warning.
 				pendingNotices.delete(key);
@@ -85,7 +86,7 @@ export function registerBudget(
 		notifiedWarnings.clear();
 	};
 
-	const consumeTurnEnd = (ctx: ExtensionContext): SessionBoundaryDraft[] => {
+	const consumeTurnEnd = (ctx: ExtensionContext, anchorEntryId: string): SessionBoundaryDraft[] => {
 		const staged = [
 			pendingGuidance ? { ...pendingGuidance, customType: GUIDANCE_TYPE } : undefined,
 			pendingWarning ? { ...pendingWarning, customType: WARNING_TYPE } : undefined,
@@ -102,6 +103,7 @@ export function registerBudget(
 			customType: draft.customType,
 			content: draft.content,
 			display: false,
+			details: { anchorEntryId } satisfies AnchorDetails,
 		}));
 	};
 
@@ -117,41 +119,40 @@ export function registerBudget(
 		notifyCommittedWarnings(ctx, true);
 		clearStaged();
 	});
-	pi.on("context", (_event, ctx) => {
+	pi.on("context", (event, ctx) => {
 		if (!isEnabled()) return undefined;
-		// The early reminder persists once per window the first time remaining crosses
-		// reserve+margin. It never edits the outgoing request.
+		// Durable reminders return to the slot where the model first read them.
+		const messages = arrangeAnchoredReminders(event.messages, ctx);
+		const result = (extra?: { customType: string; content: string }) => {
+			if (!extra) return messages === event.messages ? undefined : { messages };
+			return { messages: [...messages, { role: "custom" as const, ...extra, display: false, timestamp: Date.now() }] };
+		};
+		// Each crossing reaches the model in the request that crosses it, with the count
+		// measured for that request, and persists the same text at its successful turn_end.
+		// Without automatic reset nothing gets cleared, so there is nothing to remind about.
+		if (!automaticResetEnabled(ctx)) return result();
 		const remaining = remainingTokens(ctx);
-		if (remaining === null) return undefined;
+		if (remaining === null) return result();
 		const windowId = currentWindowId(ctx);
 		const { reminder, warning } = thresholdsFor(ctx);
-		if (remaining <= warning && automaticResetEnabled(ctx)) {
+		if (remaining <= warning) {
 			// Re-arm close-out on each eligible request. A prior request may have aborted
 			// after persisting the warning, so warning deduplication must not own this state.
 			onCloseOut(windowId);
-			if (hasWindowMessage(ctx, WARNING_TYPE) || pendingWarning?.windowId === windowId) return undefined;
+			if (hasWindowMessage(ctx, WARNING_TYPE)) return result();
 			// The critical close-out starts at reserve + runway, not at the hard reserve.
+			// Another request in the same turn re-sends the staged text instead of re-measuring.
 			pendingGuidance = undefined;
-			const content = WARNING_CONTENT;
-			pendingWarning = { windowId, content };
-			const warningMessage = {
-				role: "custom" as const,
-				customType: WARNING_TYPE,
-				content,
-				display: false,
-				timestamp: Date.now(),
-			};
-			return { messages: [..._event.messages, warningMessage] };
+			if (pendingWarning?.windowId !== windowId) pendingWarning = { windowId, content: WARNING_CONTENT };
+			return result({ customType: WARNING_TYPE, content: pendingWarning.content });
 		}
-		if (hasWindowMessage(ctx, WARNING_TYPE) || pendingWarning?.windowId === windowId) return undefined;
-		if (hasWindowMessage(ctx, GUIDANCE_TYPE) || pendingGuidance?.windowId === windowId) return undefined;
-		if (remaining <= reminder) {
-			// Persist at turn_end, before any reset drafts. A queued sendMessage could
-			// otherwise cross the marker and leak the old window's reminder forward.
-			const left = Math.max(0, remaining - warning);
-			pendingGuidance = { windowId, content: tokenBudgetGuidance(left, PI_TOOL_NAMES.wipe) };
+		if (hasWindowMessage(ctx, WARNING_TYPE) || pendingWarning?.windowId === windowId) return result();
+		if (hasWindowMessage(ctx, GUIDANCE_TYPE)) return result();
+		if (pendingGuidance?.windowId !== windowId) {
+			if (remaining > reminder) return result();
+			pendingGuidance = { windowId, content: tokenBudgetGuidance(remainingBudget(remaining, warning) ?? 0, PI_TOOL_NAMES.wipe) };
 		}
-		return undefined;
+		return result({ customType: GUIDANCE_TYPE, content: pendingGuidance.content });
 	});
 
 	pi.registerTool(defineTool({

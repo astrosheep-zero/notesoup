@@ -113,7 +113,7 @@ test("the root boot and reset boot carry durable window identity", async () => {
 	assert.equal(boundary.continue, true);
 	await runHandlers(captured, "turn_start", {}, ctx);
 	await runHandlers(captured, "agent_settled", {}, ctx);
-	assert.equal(noticesOf(ctx).filter((notice) => notice.message.includes("memory cleared")).length, 1, "the committed reset is announced once");
+	assert.equal(noticesOf(ctx).filter((notice) => notice.message.includes("Memory cleared")).length, 1, "the committed reset is announced once");
 	const entries = sessionManager.getBranch();
 	const marker = entries.find((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE);
 	assert.ok(marker && marker.type === "custom");
@@ -144,7 +144,7 @@ test("an aborted async boot repair emits no boot, continuation, or incomplete-no
 	await pending;
 
 	assert.equal(captured.sent.length, 0, "aborted snapshot work cannot append the reset boot or continuation");
-	assert.equal(noticesOf(ctx).some((notice) => notice.message.includes("notes index incomplete")), false, "aborted snapshot work cannot notify about missing homes");
+	assert.equal(noticesOf(ctx).some((notice) => notice.message.includes("didn't load")), false, "aborted snapshot work cannot notify about missing homes");
 	assert.equal(sessionManager.getBranch().some((entry) => entry.type === "custom_message" && [BOOT_TYPE, CONTINUATION_TYPE].includes(entry.customType)), false);
 });
 
@@ -270,7 +270,7 @@ test("/clear-memory waits out non-agent busy work before starting its single-tur
 	assert.equal(waits, 1);
 	assert.equal(captured.sent.length, 1);
 	assert.equal(captured.sent[0]?.options?.triggerTurn, true);
-	assert.equal(notices.filter((message) => message.includes("received; the agent closes out its notes")).length, 1);
+	assert.equal(notices.filter((message) => message.includes("notes first, then it stops")).length, 1);
 });
 
 test("notesoup command toggles future work, /clear-memory schedules a turn-end reset, and /compact remains disabled", async () => {
@@ -297,7 +297,7 @@ test("notesoup command toggles future work, /clear-memory schedules a turn-end r
 	assert.match(notices[0]?.message ?? "", /on/);
 	notices = await runCommand(captured, "clear-memory", "", low);
 	assert.equal(notices.length, 1, "the command acknowledges the reset request");
-	assert.match(notices[0]?.message ?? "", /closes out its notes/);
+	assert.match(notices[0]?.message ?? "", /notes first, then it stops/);
 	assert.equal(captured.sent.length, 2, "the command persists one hidden warning after the startup boot");
 	assert.equal(captured.sent[1]?.options?.triggerTurn, true, "the manual checkpoint prompt starts an ordinary agent turn");
 	assert.equal(captured.sent[1]?.message.customType, MANUAL_WIPE_TYPE);
@@ -332,7 +332,7 @@ test("committed reset confirmation survives later work while repair refuses that
 	assert.equal(resetBoundaryCommitted(ctx, marker.id, windowId), true, "later work does not undo a committed native boundary");
 	await runHandlers(captured, "agent_settled", {}, ctx);
 	await runHandlers(captured, "turn_start", {}, ctx);
-	assert.equal(noticesOf(ctx).filter((notice) => notice.message.includes("memory cleared")).length, 1);
+	assert.equal(noticesOf(ctx).filter((notice) => notice.message.includes("Memory cleared")).length, 1);
 	assert.equal(resetBoundaryCommitted(ctx, marker.id, "wrong-window"), false);
 
 	const partial = manager();

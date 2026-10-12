@@ -2,6 +2,7 @@ import { deriveThresholds, type ResolvedThresholds } from "../budget/policy.js";
 import { SettingsManager, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_RESERVE_TOKENS, DEFAULT_REMINDER_MARGIN_TOKENS, WARNING_RUNWAY_TOKENS } from "../budget/constants.js";
 import { mergeNotesoupSettings } from "../settings.js";
+import { errorMessage } from "../error-message.js";
 
 /**
  * Read the active compaction reserve, enablement, and notesoup margin settings. This
@@ -44,7 +45,7 @@ export function readThresholdSettings(ctx: ExtensionContext, settingsManager?: S
 				warning: DEFAULT_RESERVE_TOKENS + WARNING_RUNWAY_TOKENS,
 			},
 			automatic: true,
-			warnings: [`notesoup: could not read settings; using defaults (${String(error)}).`],
+			warnings: [`🥣 Couldn't read settings · using defaults (${errorMessage(error)})`],
 		};
 	}
 }

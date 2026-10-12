@@ -3,11 +3,12 @@ import { getCurrentSystemMessage, isContextOverflow, isRecoverableLength } from 
 import type { AgentBeforeSettleEvent, ExtensionAPI, ExtensionContext, SessionBoundaryDraft } from "@earendil-works/pi-coding-agent";
 import { currentReset, currentWindowId } from "../window.js";
 import { resetBoundaryCommitted } from "./committed.js";
+import { errorMessage } from "../../error-message.js";
 
 type BudgetOwner = {
 	automaticResetEnabled: (ctx: ExtensionContext) => boolean;
 	hardReserveDue: (ctx: ExtensionContext) => boolean;
-	consumeTurnEnd: (ctx: ExtensionContext) => SessionBoundaryDraft[];
+	consumeTurnEnd: (ctx: ExtensionContext, anchorEntryId: string) => SessionBoundaryDraft[];
 	clear: () => void;
 };
 
@@ -236,7 +237,7 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 		try {
 			resetDrafts = await options.buildReset(ctx, isCurrent, prompt);
 		} catch (error) {
-			if (isCurrent()) ctx.ui.notify(`notesoup: could not build reset (${String(error)}).${prompt ? " The follow-up prompt was not executed." : ""}`, "warning");
+			if (isCurrent()) ctx.ui.notify(`🥣 Couldn't clear memory: ${errorMessage(error)}${prompt ? " · your prompt was not sent" : ""}`, "warning");
 			return entries.length > 0 ? { entries } : undefined;
 		}
 		if (!isCurrent()) return entries.length > 0 ? { entries } : undefined;
@@ -263,7 +264,7 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 	pi.on("turn_end", async (event, ctx) => {
 		if (!sessionActive) return undefined;
 		const aborted = isAbort(event.message, event.outcome, ctx);
-		const stagedBudgetEntries = options.budget.consumeTurnEnd(ctx);
+		const stagedBudgetEntries = options.budget.consumeTurnEnd(ctx, event.messageEntryId);
 		const budgetEntries = options.isEnabled() && !aborted && event.outcome !== "error" ? stagedBudgetEntries : [];
 		const entries = [...(event.entries ?? []), ...budgetEntries];
 		const decision = reduceResetControl(control, {
@@ -309,7 +310,7 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 		const markerExists = currentReset(ctx) !== undefined;
 		if (options.isEnabled() || markerExists) {
 			if (event.reason === "manual") {
-				ctx.ui.notify("notesoup: /compact is disabled while context windows are active; use /clear-memory to start a fresh window.", "warning");
+				ctx.ui.notify("🥣 /compact is off while notesoup is on · use /clear-memory", "warning");
 			}
 			return { cancel: true };
 		}

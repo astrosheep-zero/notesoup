@@ -13,6 +13,7 @@ import { gitCommit } from "../../dream/git.js";
 import { readDreamerSettings } from "./settings.js";
 import { doctor } from "../../dream/doctor.js";
 import { notesRoot } from "../notes/adapter.js";
+import { errorMessage } from "../../error-message.js";
 
 function args(argv: string[]) { const out: Record<string, string | boolean> = {}; for (let i=0;i<argv.length;i++) { const a=argv[i]!; if (a === "--force" || a === "--help") out[a.slice(2)] = true; else if (a.startsWith("--")) out[a.slice(2)] = argv[++i] ?? ""; } return out; }
 function packageRoot(): string {
@@ -43,7 +44,7 @@ export async function main(argv = process.argv.slice(2), deps: DreamDependencies
 	const time = timeGate(stampPath, minHours); console.log(time.reason); if (!a.force && !time.ok) return 0;
 	const since = existsSync(stampPath) ? statSync(stampPath).mtimeMs : 0;
 	const material = materialGate(home, since, minSessions); console.log(material.reason); if (!a.force && !material.ok) return 0;
-	let lock; try { lock = acquireLock(lockPath); } catch (e) { console.log(`lock gate: ${e instanceof Error ? e.message : e}`); return 0; } if (!lock.held) { console.log(lock.reason); return 0; }
+	let lock; try { lock = acquireLock(lockPath); } catch (e) { console.log(`lock gate: ${errorMessage(e)}`); return 0; } if (!lock.held) { console.log(lock.reason); return 0; }
 	const stamp = new Date(lock.startedAt).toISOString().replace(/[:.]/g, "-"); const reportPath = join(home, "dreams", `${stamp}.md`);
 	let succeeded = false;
 	try {
@@ -67,7 +68,7 @@ export async function main(argv = process.argv.slice(2), deps: DreamDependencies
 			const playbook = loadPlaybook(playbookPath);
 			result = await (deps.runDreamer ?? runDreamer)(playbook, home, { modelPattern, sessionFactory: deps.sessionFactory });
 		} catch (e) {
-			const message = e instanceof Error ? e.message : String(e);
+			const message = errorMessage(e);
 			console.error(message);
 			return finishDream(home, stamp, reportPath, true, message, []);
 		}

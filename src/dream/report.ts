@@ -2,6 +2,7 @@ import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { gitCommit } from "./git.js";
 import type { DreamWrite } from "./result.js";
+import { errorMessage } from "../error-message.js";
 
 function writeList(writes: DreamWrite[]): string {
 	return writes.length ? writes.map((w) => `- ${w.tool}: ${w.path}`).join("\n") : "- no changes";
@@ -10,12 +11,12 @@ function writeList(writes: DreamWrite[]): string {
 /** Best-effort text write; returns the failure message instead of throwing. */
 function writeText(path: string, content: string): string | undefined {
 	try { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, content); return undefined; }
-	catch (error) { return error instanceof Error ? error.message : String(error); }
+	catch (error) { return errorMessage(error); }
 }
 
 function appendText(path: string, content: string): string | undefined {
 	try { appendFileSync(path, content); return undefined; }
-	catch (error) { return error instanceof Error ? error.message : String(error); }
+	catch (error) { return errorMessage(error); }
 }
 
 /**

@@ -2,13 +2,14 @@ import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { ADDRESS_FORMS, assertAddress } from "../notes/address.js";
 import { SLUG_PATTERN } from "../notes/paths.js";
+import { errorMessage } from "../error-message.js";
 
 /** Read-only diagnostics. Never follows symlinks or acquires/removes a dream lock. */
 export function doctor(home: string): string[] {
 	const issues: string[] = [];
 	const report = (path: string, message: string) => issues.push(`${relative(home, path) || "."}: ${message}`);
 	const inspect = (path: string, action: () => void) => {
-		try { action(); } catch (error) { report(path, `cannot inspect: ${error instanceof Error ? error.message : String(error)}`); }
+		try { action(); } catch (error) { report(path, `cannot inspect: ${errorMessage(error)}`); }
 	};
 	const directory = (path: string): boolean => {
 		const stat = lstatSync(path);

@@ -21,12 +21,14 @@ The address decides who a note belongs to and how long it lasts.
 | `<path>`, no `@` | session note | current task state and loose ends; gone with the session |
 | `@project/<path>` | project note | decisions and constraints future work must respect |
 | `@human/<path>` | human note | how to work with this human, across projects |
-| `@self/<path>` | self note | this agent's own reminders and lessons |
+| `@self/<path>` | self note | your reminders; yours alone if you have a name, shared by everyone nameless |
 | `@model/<path>` | model note | what applies to this model only |
+
+When notes conflict, the one most relevant to what you're doing applies. If that doesn't settle it, judge the case.
 
 Any other `@` prefix is refused. A path is relative and `/`-separated, with no empty, `.` or `..` segments.
 
-`@` addresses name notes, not files. Never pass them to read/write/edit/bash: that creates a stray directory instead of a note.
+`@` addresses are not file paths: never pass them to file tools like `read`, `write`, `edit`, or `bash`. That creates a stray directory instead of a note.
 
 `MAP.md` at the root of each `@` home is its index: one line per durable note, address and gist. Update it whenever you add, move or crumple a durable note.
 
@@ -42,7 +44,7 @@ Seqs are stable. Write the useful ones into a note so they need not be found twi
 
 ## Saving recovery state
 
-Before a long or risky step, or when room runs low, keep one session note named for its task (not `current.md`) and update it instead of starting new ones. Record:
+Before a long or risky step, or when room runs low, keep session notes named for what they hold (not `current.md`) and rewrite them to the current state instead of starting new ones or appending a timeline. Record:
 
 - the goal and the current step
 - decisions made, and why

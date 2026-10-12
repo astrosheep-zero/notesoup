@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { errorMessage } from "../error-message.js";
 
 /**
  * Outcome of one audit commit. `ok: true` always carries a real `commit` snapshot;
@@ -58,7 +59,7 @@ export function gitCommit(home: string, message: string): AuditResult {
 		if (commit === undefined) return { ok: false, error: "audit commit produced no snapshot (no HEAD)" };
 		return { ok: true, commit, empty: clean };
 	} catch (error) {
-		const reason = error instanceof Error ? error.message : String(error);
+		const reason = errorMessage(error);
 		console.log(`git audit layer failed: ${reason}`);
 		return { ok: false, error: reason };
 	}

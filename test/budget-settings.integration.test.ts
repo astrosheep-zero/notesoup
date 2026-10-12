@@ -29,7 +29,8 @@ test("low-budget guidance and warning persist at turn_end, once per active windo
 	const sessionManager = manager();
 	const captured = makeExtension(sessionManager);
 	const low = context(sessionManager, undefined, { tokens: 165_000, percent: 82.5, contextWindow: 200_000 });
-	assert.equal(await runContextHook(captured, low), undefined, "guidance is staged, not injected into this request");
+	const guidance = await runContextHook(captured, low);
+	assert.deepEqual(guidance?.messages.map((message) => (message as { customType?: string }).customType), [GUIDANCE_TYPE], "guidance reaches the crossing request");
 	assert.equal(captured.sent.length, 0, "guidance does not trigger a detached turn");
 	const guidanceBoundary = await commitTurnEndBoundary(captured, sessionManager, low);
 	assert.equal(guidanceBoundary.entries.filter((entry) => entry.type === "custom_message" && entry.customType === GUIDANCE_TYPE).length, 1);
@@ -49,7 +50,7 @@ test("early guidance stays silent and the committed final warning notifies once"
 	const sm = manager();
 	const captured = makeExtension(sm);
 	const early = context(sm, undefined, { tokens: 165_000, percent: 82.5, contextWindow: 200_000 });
-	assert.equal(await runContextHook(captured, early), undefined, "early guidance is persisted at turn_end, not injected immediately");
+	assert.equal((await runContextHook(captured, early))?.messages.length, 1, "early guidance reaches the crossing request");
 	await commitTurnEndBoundary(captured, sm, early);
 	await runHandlers(captured, "agent_settled", {}, early);
 	assert.equal(noticesOf(early).filter((notice) => notice.message.includes("Context running low") || notice.message.includes("Context almost full")).length, 0, "early model guidance has no UI toast");
@@ -61,7 +62,7 @@ test("early guidance stays silent and the committed final warning notifies once"
 	await commitTurnEndBoundary(captured, sm, final);
 	await runHandlers(captured, "turn_start", {}, final);
 	await runHandlers(captured, "agent_settled", {}, final);
-	assert.equal(noticesOf(final).filter((notice) => notice.message === "notesoup: context almost full; close out the current memory window.").length, 1, "only the committed final warning notifies, exactly once");
+	assert.equal(noticesOf(final).filter((notice) => notice.message === "🥣 Context almost full · saving notes before memory clears").length, 1, "only the committed final warning notifies, exactly once");
 });
 
 test("the visible countdown ends at the warning line, clamps at zero, and preserves unknown usage", async () => {
@@ -108,7 +109,7 @@ test("absent notesoup key or margins reproduce the default reminder threshold at
 		assert.equal(await runContextHook(captured, first), undefined, `${label}: nothing injected above the default reminder`);
 		assert.equal(sentOf(captured, GUIDANCE_TYPE).length, 0, `${label}: no guidance above the default reminder`);
 		const crossing = at(40_960);
-		assert.equal(await runContextHook(captured, crossing), undefined, `${label}: default reminder crossing persists only`);
+		assert.equal((await runContextHook(captured, crossing))?.messages.length, 1, `${label}: default reminder crossing reaches the request`);
 		await commitTurnEndBoundary(captured, sm, crossing);
 		assert.equal(sm.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === GUIDANCE_TYPE).length, 1, `${label}: default reminder fires`);
 		assert.equal(noticesOf(first).length, 0, `${label}: valid defaults warn nobody`);
@@ -130,7 +131,7 @@ test("project notesoup reminder margin and reserve override global per key", asy
 	assert.equal(await runContextHook(captured, at(90_001)), undefined, "nothing injected above the project-derived reminder");
 	assert.equal(sentOf(captured, GUIDANCE_TYPE).length, 0);
 	const crossing = at(90_000);
-	assert.equal(await runContextHook(captured, crossing), undefined, "project-derived reminder crossing persists only");
+	assert.equal((await runContextHook(captured, crossing))?.messages.length, 1, "project-derived reminder crossing reaches the request");
 	await commitTurnEndBoundary(captured, sm, crossing);
 	assert.equal(sm.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === GUIDANCE_TYPE).length, 1, "project reminder margin wins");
 });
@@ -145,7 +146,7 @@ test("an invalid reminder margin degrades to its default with one warning and ne
 	assert.equal(notices.length, 1, "one warning for the offending key");
 	assert.equal(notices[0]?.type, "warning");
 	assert.match(notices[0]?.message ?? "", /reminderMarginTokens/);
-	assert.match(notices[0]?.message ?? "", /default reminder margin/);
+	assert.match(notices[0]?.message ?? "", /using the default/);
 	assert.equal(/\d+\s*k?\s*(remaining|tokens)/i.test(notices[0]?.message ?? ""), false, "UI notices do not expose token counts");
 
 	const window = 200_000;
@@ -153,7 +154,7 @@ test("an invalid reminder margin degrades to its default with one warning and ne
 	// The degraded reminder is Pi's default reserve + default margin = 40960.
 	assert.equal(await runContextHook(captured, at(40_961)), undefined, "nothing injected above the degraded reminder");
 	const crossing = at(40_960);
-	assert.equal(await runContextHook(captured, crossing), undefined, "degraded reminder uses its default");
+	assert.equal((await runContextHook(captured, crossing))?.messages.length, 1, "degraded reminder uses its default");
 	await commitTurnEndBoundary(captured, sm, crossing);
 	assert.equal(sm.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === GUIDANCE_TYPE).length, 1, "the degraded reminder is persisted once");
 	assert.equal(noticesOf(ctx).filter((notice) => notice.type === "warning").length, 1, "warning stays one-time across handler calls");
@@ -168,6 +169,6 @@ test("the warning supersedes the early reminder when usage jumps across both thr
 	assert.deepEqual(warningResult?.messages.map((message) => (message as { customType?: string }).customType), [WARNING_TYPE]);
 	await commitTurnEndBoundary(captured, sm, ctx);
 	const reloaded = makeExtension(sm);
-	await runHandlers(reloaded, "context", {}, ctx);
+	await runHandlers(reloaded, "context", { messages: [] }, ctx);
 	assert.equal(reloaded.sent.length, 0, "persisted warning also suppresses a late reminder after reload");
 });

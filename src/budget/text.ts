@@ -7,5 +7,5 @@ export const GUIDANCE_CLOSE_TAG = "</context_window_guidance>";
  * at write time; get_context_remaining remains the live source for the current figure.
  */
 export function tokenBudgetGuidance(remaining: number, wipeTool: string): string {
-	return `${GUIDANCE_OPEN_TAG}\nOnly ${remaining} tokens left before you get wiped. While you still have room, update your notes, rescue anything still only in your head, crumple the notes that stopped telling the truth, and keep any \`MAP.md\` honest. If you're ready, call \`${wipeTool}\` and go out on your own terms.\n${GUIDANCE_CLOSE_TAG}`;
+	return `${GUIDANCE_OPEN_TAG}\nAbout ${remaining} tokens remain before this context window is cleared. Notes and history persist; anything not written down is lost.\nThis is a good point to start recording the current state in your notes. If you are ready, you can call \`${wipeTool}\` at any time.\n${GUIDANCE_CLOSE_TAG}`;
 }

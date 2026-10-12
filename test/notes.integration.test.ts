@@ -288,7 +288,7 @@ test("boot note acquisition is one closed snapshot and isolates one or all faile
 		currentWindowId: "pcw:test:next",
 		notes: oneFailed,
 	});
-	assert.ok(oneFailedText.includes("PROJECT_MAP_BODY") && oneFailedText.includes("THE HUMAN · @human\n──────────────────\n\n  This drawer wouldn't open — ask `notes_list` to try again."), "healthy homes and a per-section recovery notice survive one failure");
+	assert.ok(oneFailedText.includes("PROJECT_MAP_BODY") && oneFailedText.includes("THE HUMAN · @human\n──────────────────\n\n  This drawer wouldn't open. Try `notes_list` again."), "healthy homes and a per-section recovery notice survive one failure");
 	assert.equal(oneFailedText.includes("HUMAN_POCKET_BODY"), false, "the failed home's index is omitted");
 	assert.equal(oneFailedText.includes("Human note"), false, "the failed home takes no feed seats");
 

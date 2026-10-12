@@ -1,6 +1,6 @@
 ---
 name: dream
-description: Review and consolidate durable notes using notesoup's shared dream playbook. Use when the human asks to dream over notes, merge genuine duplicates, update maps, or promote durable learning.
+description: Review and consolidate durable notes using notesoup's shared dream playbook. Use when the human asks to dream over notes, merge genuine duplicates, update maps, or promote durable findings.
 ---
 
 # Dream

@@ -3,6 +3,7 @@ import type { DreamResult, DreamWrite } from "../../dream/result.js";
 import { createAgentSession, createEditToolDefinition, createWriteToolDefinition, ModelRuntime, resolveModelScopeWithDiagnostics, SessionManager, type AgentSession, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type Api, type Model } from "@earendil-works/pi-ai";
 import { contentText } from "../../history/history.js";
+import { errorMessage } from "../../error-message.js";
 
 export type DreamerSession = Pick<AgentSession, "prompt" | "subscribe" | "dispose">;
 export type DreamerSessionFactory = (options: { cwd: string; modelPattern?: string; tools: string[] }) => Promise<DreamerSession>;
@@ -80,7 +81,7 @@ export async function runDreamer(playbook: string, cwd: string, options: { model
 		try {
 			await session.prompt(playbook);
 		} catch (error) {
-			return { report: answer, writes, error: error instanceof Error ? error.message : String(error) };
+			return { report: answer, writes, error: errorMessage(error) };
 		}
 		if (providerError) return { report: answer, writes, error: `dreamer failed: ${providerError}` };
 		return { report: answer, writes };

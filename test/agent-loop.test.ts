@@ -177,12 +177,13 @@ async function openFixture(options: {
 	await session.bindExtensions({
 		uiContext: {
 			notify(message: string, type?: "info" | "warning" | "error") {
-				if (message.startsWith("notesoup: memory cleared · ")) {
-					const windowId = message.split(" · ")[1];
+				if (message === "🥣 Memory cleared") {
+					const marker = sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE).at(-1);
+					const windowId = (marker as { data?: { windowId?: string } } | undefined)?.data?.windowId;
 					assert.ok(sessionManager.getBranch().some((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE && (entry.data as { windowId?: string })?.windowId === windowId), "notification follows the reset marker commit");
 					assert.ok(sessionManager.getBranch().some((entry) => entry.type === "custom_message" && entry.customType === BOOT_TYPE && (entry.details as { windowId?: string })?.windowId === windowId), "notification follows the reset boot commit");
 				}
-				if (type === "warning" && /^notesoup: context (?:almost full|running low)/.test(message)) budgetNotices++;
+				if (type === "warning" && /^🥣 Context almost full/.test(message)) budgetNotices++;
 				notices.push(message);
 			},
 		} as ExtensionUIContext,
@@ -242,6 +243,10 @@ function text(message: AgentContext | undefined): string {
 	return JSON.stringify(message?.messages ?? []);
 }
 
+/** `text()` serializes to JSON, so match the reset prose in its escaped form. */
+const CONTINUATION_JSON = JSON.stringify(CONTINUATION).slice(1, -1);
+const WARNING_JSON = JSON.stringify(WARNING_PROMPT).slice(1, -1);
+
 function resetMarkers(fixture: Fixture) {
 	return fixture.sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE);
 }
@@ -262,7 +267,7 @@ function assertFreshRequest(fixture: Fixture, requestIndex: number, oldSentinel:
 	const body = text(fixture.requests[requestIndex]);
 	assert.equal(body.includes(oldSentinel), false, "the new provider request excludes the old window transcript");
 	assert.ok(body.includes(CONTEXT_WINDOW_OPEN_TAG), "the new provider request includes the fresh context-window boot");
-	assert.equal(body.split(CONTINUATION).length - 1, 1, "the fresh window carries exactly one reset message");
+	assert.equal(body.split(CONTINUATION_JSON).length - 1, 1, "the fresh window carries exactly one reset message");
 }
 
 test("real Pi codemode receives typed notes/history outcomes, including expected errors", { timeout: 20000 }, async () => {
@@ -311,10 +316,9 @@ text({ marker: "HISTORY_SMOKE", calls: calls.call_count, complete: calls.complet
 	}
 });
 
-test("real AgentSession: aborted early guidance retries silently with automatic reset disabled", async () => {
+test("real AgentSession: aborted early guidance retries silently", async () => {
 	let fixture!: Fixture;
 	fixture = await openFixture({
-		compactionEnabled: false,
 		script: (request) => assistant(fixture, [{ type: "text", text: `response ${request}` }], request === 2 ? "aborted" : "stop", { usage: usage(50_000) }),
 	});
 	try {
@@ -340,6 +344,53 @@ test("real AgentSession: aborted early guidance retries silently with automatic 
 	}
 });
 
+test("real AgentSession: no low-budget guidance while automatic reset is disabled", async () => {
+	let fixture!: Fixture;
+	fixture = await openFixture({
+		compactionEnabled: false,
+		script: (request) => assistant(fixture, [{ type: "text", text: `response ${request}` }], "stop", { usage: usage(62_000) }),
+	});
+	try {
+		for (const prompt of ["Establish usage below the reminder line.", "Cross the reminder line."]) {
+			await fixture.session.prompt(prompt);
+			await fixture.session.waitForIdle();
+		}
+		const guidance = fixture.sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === GUIDANCE_TYPE);
+		assert.equal(guidance.length, 0, "nothing will be cleared, so nothing is announced");
+	} finally {
+		fixture.close();
+	}
+});
+
+test("real AgentSession: early guidance reaches its crossing request and later requests keep one copy in place", async () => {
+	let fixture!: Fixture;
+	const contexts: string[][] = [];
+	fixture = await openFixture({
+		script: (request, context) => {
+			contexts.push((context?.messages ?? []).map((message) => JSON.stringify(message).includes(GUIDANCE_OPEN_TAG) ? GUIDANCE_TYPE : message.role));
+			// 62k of 100k leaves ~38k: below the reminder line (40,960), above the warning (32,768).
+			return assistant(fixture, [{ type: "text", text: `response ${request}` }], "stop", { usage: usage(62_000) });
+		},
+	});
+	try {
+		await fixture.session.prompt("Establish usage below the reminder line.");
+		await fixture.session.waitForIdle();
+		await fixture.session.prompt("Cross the reminder line.");
+		await fixture.session.waitForIdle();
+		await fixture.session.prompt("Continue in the same window.");
+		await fixture.session.waitForIdle();
+		const crossing = contexts[1]!;
+		assert.equal(crossing.filter((type) => type === GUIDANCE_TYPE).length, 1, "the crossing request carries the reminder");
+		assert.equal(crossing.at(-1), GUIDANCE_TYPE, "the reminder follows the crossing user message");
+		const later = contexts[2]!;
+		assert.equal(later.filter((type) => type === GUIDANCE_TYPE).length, 1, "later requests carry exactly one copy");
+		assert.deepEqual(later.slice(0, crossing.length), crossing, "the durable copy sits where the crossing request had it");
+		assert.equal(later[crossing.length], "assistant", "the anchor reply directly follows the reminder");
+	} finally {
+		fixture.close();
+	}
+});
+
 test("real AgentSession: an aborted final warning stays silent until a successful retry commits it", async () => {
 	let fixture!: Fixture;
 	fixture = await openFixture({
@@ -347,7 +398,7 @@ test("real AgentSession: an aborted final warning stays silent until a successfu
 		script: (request, context) => {
 			if (request === 1) return assistant(fixture, [{ type: "toolCall", id: "abort-budget-probe-1", name: "get_context_remaining", arguments: {} }], "toolUse", { usage: usage(50_000) });
 			if (request === 2) return assistant(fixture, [{ type: "toolCall", id: "abort-budget-probe-2", name: "get_context_remaining", arguments: {} }], "toolUse", { usage: usage(60_000) });
-			assert.ok(text(context).includes(WARNING_PROMPT), "the final warning reaches the model on both attempts");
+			assert.ok(text(context).includes(WARNING_JSON), "the final warning reaches the model on both attempts");
 			return assistant(fixture, [{ type: "text", text: `response ${request}` }], request === 3 ? "aborted" : "stop", { usage: usage(60_000) });
 		},
 	});
@@ -379,7 +430,7 @@ test("real AgentSession: final warning survives its reset boundary and notifies 
 			if (request === 1) return assistant(fixture, [{ type: "toolCall", id: "final-budget-probe-1", name: "get_context_remaining", arguments: {} }], "toolUse", { usage: usage(50_000) });
 			if (request === 2) return assistant(fixture, [{ type: "toolCall", id: "final-budget-probe-2", name: "get_context_remaining", arguments: {} }], "toolUse", { usage: usage(60_000) });
 			if (request === 3) {
-				assert.ok(text(context).includes(WARNING_PROMPT), "the final warning reaches the model");
+				assert.ok(text(context).includes(WARNING_JSON), "the final warning reaches the model");
 				return assistant(fixture, [{ type: "toolCall", id: "final-budget-wipe", name: "clear_memory", arguments: {} }], "toolUse", { usage: usage(60_000) });
 			}
 			return assistant(fixture, [{ type: "text", text: "fresh window ready" }]);
@@ -394,12 +445,12 @@ test("real AgentSession: final warning survives its reset boundary and notifies 
 		assert.equal(fixture.sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === WARNING_TYPE).length, 1);
 		assert.equal(resetMarkers(fixture).length, 1, "the reset commits in the same boundary as the final warning");
 		assert.equal(fixture.budgetNotices(), 1, "the old-window committed warning reaches the UI after reset");
-		assert.equal(fixture.notices.filter((notice) => notice.startsWith("notesoup: memory cleared · ")).length, 1, "reset notification remains intact");
+		assert.equal(fixture.notices.filter((notice) => notice === "🥣 Memory cleared").length, 1, "reset notification remains intact");
 		assert.equal(fixture.notices.some((notice) => notice.includes("Context running low")), false, "early guidance stays silent");
 		await fixture.session.prompt("Continue after reset.");
 		await fixture.session.waitForIdle();
 		assert.equal(fixture.budgetNotices(), 1, "later turns cannot repeat the consumed final warning");
-		assert.equal(fixture.notices.filter((notice) => notice.startsWith("notesoup: memory cleared · ")).length, 1, "the prior reset notification is also deduplicated");
+		assert.equal(fixture.notices.filter((notice) => notice === "🥣 Memory cleared").length, 1, "the prior reset notification is also deduplicated");
 	} finally {
 		fixture.close();
 	}
@@ -419,7 +470,7 @@ test("real AgentSession: explicit tiny-session wipe ignores keepRecentTokens and
 		assert.equal(fixture.notices.length, 0, "startup boot is silent");
 		await fixture.session.prompt("OLD_CONTEXT_SENTINEL: retain this only in durable history.");
 		await fixture.session.waitForIdle();
-		assert.equal(fixture.notices.filter((message) => message.includes("memory cleared")).length, 1, "the reset notifies once");
+		assert.equal(fixture.notices.filter((message) => message.includes("Memory cleared")).length, 1, "the reset notifies once");
 		assert.equal(fixture.requests.length, 2, "the tool starts exactly one continuation");
 		assert.ok(text(fixture.requests[0]).includes("OLD_CONTEXT_SENTINEL"));
 		assertFreshRequest(fixture, 1, "OLD_CONTEXT_SENTINEL");
@@ -448,7 +499,7 @@ test("real AgentSession: manual command spans its tool batch and stops at settle
 		script: (request, context) => {
 			if (request === 1) return assistant(fixture, [{ type: "text", text: "before manual reset" }]);
 			if (request === 2) {
-				assert.ok(text(context).includes(WARNING_PROMPT), "idle /clear-memory sends the shared checkpoint prompt");
+				assert.ok(text(context).includes(WARNING_JSON), "idle /clear-memory sends the shared checkpoint prompt");
 				return assistant(fixture, [{ type: "toolCall", id: "manual-note", name: "notes_write", arguments: { address: "manual-a.md", content: "MANUAL_NOTE_ALPHA" } }], "toolUse");
 			}
 			assert.equal(request, 3, "the close-out turn finishes in the old window");
@@ -505,7 +556,7 @@ test("real AgentSession: clear commands append a prompt after continuation and r
 				assert.equal(request, 3, "exactly one fresh-window request");
 				assert.equal(text(context).includes("PROMPT_RESET_OLD_SENTINEL"), false);
 				assert.equal(text(context).split(prompt).length - 1, 1);
-				assert.ok(text(context).indexOf(CONTINUATION) < text(context).indexOf(prompt), "wake-up prose precedes the appended prompt");
+				assert.ok(text(context).indexOf(CONTINUATION_JSON) < text(context).indexOf(prompt), "wake-up prose precedes the appended prompt");
 				return assistant(fixture, [{ type: "text", text: "prompt handled" }]);
 			},
 		});
@@ -522,7 +573,7 @@ test("real AgentSession: clear commands append a prompt after continuation and r
 			assert.equal(appended.customType, "notesoup/reset-prompt");
 			assert.equal(appended.content, prompt);
 			assert.equal(appended.display, true);
-			assert.ok(fixture.notices.some((notice) => notice.includes("memory cleared")));
+			assert.ok(fixture.notices.some((notice) => notice.includes("Memory cleared")));
 		} finally {
 			fixture.close();
 		}
@@ -575,7 +626,7 @@ test("real AgentSession: streaming clear prompt keeps the first request", { time
 		await fixture.session.waitForIdle();
 		assert.equal(fixture.requests.length, 3);
 		assert.equal(resetMarkers(fixture).length, 1);
-		assert.ok(fixture.notices.some((notice) => notice.includes("already pending")));
+		assert.ok(fixture.notices.some((notice) => notice.includes("already queued")));
 	} finally { release(); fixture.close(); }
 });
 
@@ -601,7 +652,7 @@ test("real AgentSession: manual hard-reserve reset stops clean and mixed-tool tu
 			assert.equal(fixture.requests.length, 2);
 			assert.equal(resetMarkers(fixture).length, 1, "the safety wipe is not repeated at settlement");
 			assert.equal(JSON.stringify(fixture.sessionManager.buildSessionProjection().messages).includes("HARD_RESERVE_OLD_SENTINEL"), false);
-			assert.ok(fixture.notices.some((notice) => notice.includes("memory cleared")));
+			assert.ok(fixture.notices.some((notice) => notice.includes("Memory cleared")));
 			if (mixed) {
 				assert.ok(existsSync(join(fixture.notesRoot, "pi", "session", fixture.sessionManager.getSessionId(), "pressure.md")), "the whole tool batch completes before the cut");
 				assert.equal(fixture.streamSignals.at(-1), true, "Pi's unavoidable tool follow-up is cancelled before provider work");
@@ -668,7 +719,7 @@ test("real AgentSession: manual overflow wipes and stops even with automatic res
 		assert.equal(fixture.requests.length, 2);
 		assert.equal(resetMarkers(fixture).length, 1);
 		assert.equal(JSON.stringify(fixture.sessionManager.buildSessionProjection().messages).includes("MANUAL_OVERFLOW_OLD_SENTINEL"), false);
-		assert.ok(fixture.notices.some((notice) => notice.includes("memory cleared")));
+		assert.ok(fixture.notices.some((notice) => notice.includes("Memory cleared")));
 	} finally {
 		fixture.close();
 	}
@@ -689,7 +740,7 @@ test("real AgentSession: streaming /clear-memory steers a close-out and stops at
 				return assistant(fixture, [{ type: "text", text: "current response finished" }]);
 			}
 			assert.equal(request, 2, "the steered warning gets exactly one close-out turn before the run stops");
-			assert.ok(text(context).includes(WARNING_PROMPT), "the busy warning is delivered to the running agent");
+			assert.ok(text(context).includes(WARNING_JSON), "the busy warning is delivered to the running agent");
 			return assistant(fixture, [{ type: "text", text: "close-out complete" }]);
 		},
 	});
@@ -698,7 +749,7 @@ test("real AgentSession: streaming /clear-memory steers a close-out and stops at
 		await started;
 		await fixture.session.prompt("/clear-memory", { streamingBehavior: "steer" });
 		await fixture.session.prompt("/clear-memory", { streamingBehavior: "followUp" });
-		assert.equal(fixture.notices.filter((notice) => notice.includes("queued; the agent is asked to close out")).length, 1, "the user is notified once while output is ongoing");
+		assert.equal(fixture.notices.filter((notice) => notice.includes("notes first, then it stops")).length, 1, "the user is notified once while output is ongoing");
 		assert.equal(resetMarkers(fixture).length, 0, "the ongoing turn is not interrupted");
 		releaseResponse();
 		await running;
@@ -707,7 +758,7 @@ test("real AgentSession: streaming /clear-memory steers a close-out and stops at
 		assert.equal(fixture.requests.length, 2, "the warning closes out and the run stops — no continuation in the fresh window");
 		assert.equal(fixture.sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === MANUAL_WIPE_TYPE).length, 1, "the busy warning is persisted once");
 		assert.equal(JSON.stringify(fixture.sessionManager.buildSessionProjection().messages).includes("STREAMING_WIPE_OLD_SENTINEL"), false);
-		assert.ok(fixture.notices.some((notice) => notice.includes("memory cleared")), "the committed boundary has a separate success notice");
+		assert.ok(fixture.notices.some((notice) => notice.includes("Memory cleared")), "the committed boundary has a separate success notice");
 	} finally {
 		releaseResponse();
 		fixture.close();
@@ -770,7 +821,7 @@ test("real AgentSession: user abort, synthetic aborted response, and generic err
 			await fixture.session.waitForIdle();
 			assert.equal(resetMarkers(fixture).length, 0, `${mode} does not force a reset`);
 			assert.equal(fixture.sessionManager.getBranch().filter((entry) => entry.type === "compaction").length, 0);
-			assert.equal(fixture.notices.some((notice) => notice.includes("memory cleared")), false);
+			assert.equal(fixture.notices.some((notice) => notice.includes("Memory cleared")), false);
 			if (mode === "ctx-abort") assert.equal(fixture.streamSignals.at(-1), true, "this case aborts the real Pi operation signal");
 			else assert.equal(fixture.streamSignals.at(-1), false, "synthetic abort/error is not a user abort signal");
 			await fixture.session.prompt("AFTER_UNSUCCESSFUL_CLOSEOUT");
@@ -794,12 +845,12 @@ test("real AgentSession: steering and follow-up queued during a manual reset are
 			compactionEnabled: false,
 			script: async (request, context) => {
 				if (request === 1) {
-					assert.ok(text(context).includes(WARNING_PROMPT));
+					assert.ok(text(context).includes(WARNING_JSON));
 					announceStarted();
 					await gate;
 				}
 				if (request === 2) {
-					assert.ok(text(context).includes(WARNING_PROMPT), `${delivery} is answered in the old window before the reset commits`);
+					assert.ok(text(context).includes(WARNING_JSON), `${delivery} is answered in the old window before the reset commits`);
 					assert.equal(text(context).split("QUEUED_DURING_FALLBACK").length - 1, 1, `${delivery} is delivered once`);
 				}
 				return assistant(fixture, [{ type: "text", text: `response ${request}` }]);
@@ -1404,13 +1455,13 @@ test("real AgentSession: persisted budget warning re-arms after a later abort/er
 				if (request === 1) return assistant(fixture, [{ type: "toolCall", id: "rearm-probe-1", name: "get_context_remaining", arguments: {} }], "toolUse", { usage: usage(50_000) });
 				if (request === 2) return assistant(fixture, [{ type: "toolCall", id: "rearm-probe-2", name: "get_context_remaining", arguments: {} }], "toolUse", { usage: usage(60_000) });
 				if (request === 3) {
-					assert.ok(text(context).includes(WARNING_PROMPT), "the low-budget request carries the close-out warning");
+					assert.ok(text(context).includes(WARNING_JSON), "the low-budget request carries the close-out warning");
 					warningTurnStarted();
 					await warningGate;
 					return assistant(fixture, [{ type: "toolCall", id: "rearm-note", name: "notes_write", arguments: { address: "warning-rearm.md", content: "DURABLE_WARNING_CHECKPOINT" } }], "toolUse", { usage: usage(60_000) });
 				}
 				if (request === 4 && mode === "generic-error") {
-					assert.equal(text(context).split(WARNING_PROMPT).length - 1, 1, "the durable warning is not injected a second time");
+					assert.equal(text(context).split(WARNING_JSON).length - 1, 1, "the durable warning is not injected a second time");
 					assert.ok(text(context).includes("REARM_QUEUED_FOLLOWUP"));
 					return assistant(fixture, [{ type: "text", text: "ordinary provider failure" }], "error", { errorMessage: "synthetic non-overflow failure", usage: usage(60_000) });
 				}
@@ -1431,7 +1482,7 @@ test("real AgentSession: persisted budget warning re-arms after a later abort/er
 			assert.equal(afterFailure.filter((entry) => entry.type === "compaction").length, 0);
 			const failedContext = fixture.streamContexts[3];
 			assert.ok(failedContext);
-			assert.equal(text(failedContext).split(WARNING_PROMPT).length - 1, 1, "the persisted warning appears once, without duplicate injection");
+			assert.equal(text(failedContext).split(WARNING_JSON).length - 1, 1, "the persisted warning appears once, without duplicate injection");
 			assert.equal(text(failedContext).split("REARM_QUEUED_FOLLOWUP").length - 1, 1, "queued follow-up reaches the failed request once");
 			assert.equal(fixture.streamSignals.at(-1), mode === "ctx-abort", "the abort case cancels Pi's real signal; the error case does not");
 
@@ -1456,7 +1507,7 @@ test("real AgentSession: warning precedes a durable checkpoint, including failed
 			script: (request, context) => {
 				if (request === 3) {
 					assert.ok(text(context).includes(GUIDANCE_OPEN_TAG), "the warning remains in its hidden guidance wrapper");
-					assert.ok(text(context).includes(WARNING_PROMPT), "the shared close-out warning reaches the provider before checkpoint choice");
+					assert.ok(text(context).includes(WARNING_JSON), "the shared close-out warning reaches the provider before checkpoint choice");
 				}
 				if (request === 1) return assistant(fixture, [{ type: "toolCall", id: "budget-probe-1", name: "get_context_remaining", arguments: {} }], "toolUse", { usage: usage(50_000) });
 				if (request === 2) return assistant(fixture, [{ type: "toolCall", id: "budget-probe-2", name: "get_context_remaining", arguments: {} }], "toolUse", { usage: usage(60_000) });
@@ -1492,7 +1543,7 @@ test("real AgentSession: warning precedes a durable checkpoint, including failed
 				await fixture.session.waitForIdle();
 				assert.equal(resetMarkers(fixture).length, 0);
 				assert.ok(text(fixture.requests.at(-1)).includes(`WARNING_${scenario.toUpperCase()}_SENTINEL`));
-				assert.equal(text(fixture.requests.at(-1)).split(WARNING_PROMPT).length - 1, 1, "the persisted warning remains visible without duplicate injection");
+				assert.equal(text(fixture.requests.at(-1)).split(WARNING_JSON).length - 1, 1, "the persisted warning remains visible without duplicate injection");
 			}
 		} finally {
 			fixture.close();

@@ -14,6 +14,7 @@ type ResetState = {
   identity?: Identity; window: number; turnRunning: boolean; resetting: boolean
   manualPending: boolean; headless: boolean; usageFailureLogged: boolean; preparedBoot?: string; retainedBoot?: string
 }
+const HEADLESS = "Clear-memory is off in headless (-p / SDK) sessions"
 const RESET_INSTRUCTIONS = "notesoup: reset to a fresh notes-only context window."
 const BOOT_TOOLS = {
   notes: `${PREFIX}notes_*`, notesList: `${PREFIX}notes_list`,
@@ -25,7 +26,7 @@ async function buildBoot($: Engine, identity: Identity, window: number) {
   return run($, { op: "boot", identity, window, tools: BOOT_TOOLS }, identity.cwd)
 }
 function log($: Engine, text: string) {
-  try { $.ui.log(`notesoup: ${text}`) } catch { /* UI must not break a turn or reset. */ }
+  try { $.ui.log(`🥣 ${text}`) } catch { /* UI must not break a turn or reset. */ }
 }
 
 function errorResult(message: string): ToolCallResult { return { result: `notesoup: ${message}`, isError: true } }
@@ -67,7 +68,7 @@ export function register(on: On) {
     state.window = 0
     state.turnRunning = state.resetting = state.manualPending = state.usageFailureLogged = false
     state.headless = !e.isInteractive
-    if (state.headless) log($, "reset skipped in headless (-p / SDK) session.")
+    if (state.headless) log($, HEADLESS)
     state.preparedBoot = state.retainedBoot = undefined
     // The engine's history view includes retained boots on resume/reload.
     // Recover their ordinal without treating that view as inference context.
@@ -112,23 +113,23 @@ export function register(on: On) {
   })
   on("command.run", async ($, e, next) => {
     if (e.command !== "clear-memory") return next(e)
-    if (state.headless) return { text: "notesoup: reset skipped in headless (-p / SDK) session." }
-    if (state.resetting || state.manualPending) return { text: "notesoup: reset already pending." }
+    if (state.headless) return { text: `🥣 ${HEADLESS}` }
+    if (state.resetting || state.manualPending) return { text: "🥣 Clear-memory already queued" }
     if (state.turnRunning) {
       state.manualPending = true
-      return { text: "notesoup: reset queued until the turn completes." }
+      return { text: "🥣 Clear-memory queued · runs after this turn" }
     }
     // command.run holds a turn even when idle. Start one hidden close-out
     // turn after it returns; turn.complete is the verified self-hook path.
     state.manualPending = true
     manualSignal.wake?.()
-    return { text: "notesoup: reset requested; closing out the current window." }
+    return { text: "🥣 Clearing memory · notes first, then it stops" }
   })
   on("session.compact", async ($, e, next) => {
     // Do not take over native /compact or another plugin's compaction.
     if (!state.resetting || e.trigger !== "plugin" || e.agentId !== undefined || !identity) return next(e)
     const boot = await buildBoot($, identity, state.window + 1)
-    if (!boot.ok) return { skip: `notesoup: Notes boot failed: ${boot.error}` }
+    if (!boot.ok) return { skip: `notes didn't load: ${boot.error}` }
     state.preparedBoot = String(boot.result)
     return { messages: [{ role: "user", text: state.preparedBoot, toolUses: [] }] }
   })
@@ -142,7 +143,7 @@ export function register(on: On) {
     const boot = await buildBoot($, identity, state.window)
     if (!boot.ok) {
       try {
-        await $.ui.notify("notesoup: Notes boot failed.")
+        await $.ui.notify("🥣 Notes didn't load")
       } catch { /* Notification failure must not suppress the fallback block. */ }
     }
     const block = { name: "notesoup:boot", text: boot.ok ? String(boot.result) : `# notesoup\n${boot.error}` }
@@ -183,7 +184,7 @@ async function finishManual($: Engine, state: ResetState, signal: { wake?: () =>
     }
   } catch {
     state.manualPending = false
-    log($, "manual reset skipped; the close-out turn could not start.")
+    log($, "Couldn't clear memory: the close-out turn didn't start")
   } finally { armManual($, state, signal) }
 }
 
@@ -195,7 +196,7 @@ async function maybeReset($: Engine, state: ResetState, complete: boolean) {
   catch {
     if (!state.usageFailureLogged) {
       state.usageFailureLogged = true
-      log($, "context usage unavailable; automatic reset skipped.")
+      log($, "Context usage unavailable · automatic clear-memory skipped")
     }
   }
   if (state.turnRunning) return
@@ -204,35 +205,29 @@ async function maybeReset($: Engine, state: ResetState, complete: boolean) {
     await reset($, state)
   }
 }
-async function reset($: Engine, state: ResetState): Promise<string> {
-  if (!state.identity) return "notesoup: reset skipped; notes identity unavailable."
-  if (state.headless) return "notesoup: reset skipped in headless (-p / SDK) session."
-  if (state.resetting) return "notesoup: reset already in progress."
+async function reset($: Engine, state: ResetState): Promise<void> {
+  if (!state.identity || state.headless || state.resetting) return
   state.resetting = true
   state.preparedBoot = undefined
   try {
     const result = await $.session.compact({ instructions: RESET_INSTRUCTIONS })
     if (result.skip !== undefined || state.preparedBoot === undefined) {
-      const text = `reset skipped: ${result.skip ?? "notes boot was not retained"}`
-      log($, text)
-      return `notesoup: ${text}`
+      log($, `Memory not cleared · ${result.skip ?? "notes boot was not retained"}`)
+      return
     }
     state.retainedBoot = state.preparedBoot
     state.window++
-    log($, `memory cleared · window ${state.window}`)
-    return `notesoup: memory cleared · window ${state.window}`
+    log($, "Memory cleared")
   } catch (error) {
     const text = String(error)
     if (text.includes("headless (-p / SDK)")) {
       state.headless = true
-      log($, "reset skipped in headless (-p / SDK) session.")
+      log($, HEADLESS)
     } else if (/a turn is (running|in flight)/.test(text)) {
       state.manualPending = true
-      return "notesoup: reset queued until the turn completes."
     } else {
-      log($, `reset failed; keeping the current window: ${text.replace(/[\r\n].*$/s, "")}`)
+      log($, `Couldn't clear memory: ${text.replace(/[\r\n].*$/s, "")}`)
     }
-    return state.headless ? "notesoup: reset skipped in headless (-p / SDK) session." : "notesoup: reset failed; keeping the current window."
   } finally {
     state.preparedBoot = undefined
     state.resetting = false

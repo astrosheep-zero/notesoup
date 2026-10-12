@@ -10,6 +10,7 @@ import { buildResetDrafts } from "./reset/artifacts.js";
 import { BOOT_TYPE, MANUAL_WIPE_TYPE } from "./entries.js";
 import { WARNING_CONTENT } from "./reset/text.js";
 import { ensureBoot, type IncompleteNotesNotifier } from "./boot.js";
+import { errorMessage } from "../error-message.js";
 
 function readPackageVersion(): string {
 	for (const up of ["../../package.json", "../../../package.json"]) {
@@ -44,7 +45,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 			const marker = branch.find((entry): entry is WindowMarker => isWindowMarker(entry) && entry.data.windowId === windowId);
 			if (!marker || !isCheckpointBackedReset(ctx, marker) || !resetBoundaryCommitted(ctx, marker.id, windowId)) continue;
 			pendingResetNotices.delete(windowId);
-			ctx.ui.notify(`notesoup: memory cleared · ${windowId}`, "info");
+			ctx.ui.notify("🥣 Memory cleared", "info");
 		}
 	};
 	pi.on("turn_start", (_event, ctx) => notifyCommittedResets(ctx));
@@ -56,7 +57,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 		if (snapshot.unavailable.length === 0 || incompleteNotesNotified.has(windowId)) return;
 		incompleteNotesNotified.add(windowId);
 		const homes = snapshot.unavailable.map((home) => home.label).join(", ");
-		ctx.ui.notify(`notesoup: notes index incomplete for ${homes}; \`notes_list\` can retry after recovery.`, "warning");
+		ctx.ui.notify(`🥣 Some notes didn't load: ${homes}`, "warning");
 	};
 	const budget = registerBudget(pi, () => enabled, settingsManager, (windowId) => resets.closeOut(windowId, "automatic"));
 
@@ -83,7 +84,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 	pi.on("session_before_tree", (event, ctx) => {
 		if (!event.preparation.userWantsSummary) return undefined;
 		if (!branchHasWindowMarker(ctx) && !branchHasWindowMarker(ctx, event.preparation.targetId)) return undefined;
-		ctx.ui.notify("notesoup: skipped branch summary across a reset window; navigation continues without erased history.", "info");
+		ctx.ui.notify("🥣 Branch summary skipped · it would bring back cleared memory", "info");
 		return { summary: { summary: "" } };
 	});
 
@@ -101,7 +102,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 		} catch (error) {
 			if (missingBootNotice !== windowId) {
 				missingBootNotice = windowId;
-				ctx.ui.notify(`notesoup: active context window ${windowId} has no visible boot; request cancelled safely. Use /clear-memory to start another window.`, "error");
+				ctx.ui.notify("🥣 Request cancelled · this memory window is broken, run /clear-memory", "error");
 			}
 			ctx.abort();
 			const safeHead = getCurrentSystemMessage(event.messages);
@@ -130,7 +131,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 				return;
 			}
 			const remaining = budget.statusFor(cmdCtx).remaining;
-			cmdCtx.ui.notify(`notesoup: ${enabled ? "on" : "off"} · ${buildLabel} · Pi ${VERSION} · window ${currentWindowId(cmdCtx)}${remaining === null ? "" : ` · ${remaining.toLocaleString("en-US")} tokens before close-out`}`, "info");
+			cmdCtx.ui.notify(`🥣 notesoup ${enabled ? "on" : "off"} · ${buildLabel} · Pi ${VERSION}${remaining === null ? "" : ` · ${remaining.toLocaleString("en-US")} tokens left`}`, "info");
 		},
 	});
 
@@ -138,15 +139,13 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 		description: "Close out notes and clear memory; optionally append a prompt to continue in the fresh window",
 		handler: async (args: string, cmdCtx: ExtensionCommandContext) => {
 			if (!enabled) {
-				cmdCtx.ui.notify("notesoup: /clear-memory requires /notesoup on.", "error");
+				cmdCtx.ui.notify("🥣 notesoup is off · run /notesoup on first", "error");
 				return;
 			}
 			const requestedWindowId = currentWindowId(cmdCtx);
-			let idle = cmdCtx.isIdle();
-			if (!idle && !cmdCtx.signal) {
+			if (!cmdCtx.isIdle() && !cmdCtx.signal) {
 				await cmdCtx.waitForIdle();
 				if (!enabled || currentWindowId(cmdCtx) !== requestedWindowId) return;
-				idle = true;
 			}
 			// Manual wipes close out at settlement, then stop or continue with the prompt. The hidden warning goes out in both cases — triggered when idle,
 			// steered into the running turn when busy — so the agent closes out promptly
@@ -154,19 +153,17 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 			const prompt = args.trim() || undefined;
 			const armed = resets.closeOut(requestedWindowId, "manual", prompt);
 			if (armed === "already-pending") {
-				cmdCtx.ui.notify("notesoup: a clear-memory request is already pending; keeping its original prompt and behavior.", "info");
+				cmdCtx.ui.notify("🥣 Clear-memory already queued · the first prompt is kept", "info");
 				return;
 			}
 			cmdCtx.ui.notify(prompt
-				? "notesoup: clear-memory queued; after closing out notes, the agent continues with your prompt in a fresh window."
-				: idle
-				? "notesoup: /clear-memory received; the agent closes out its notes, then stops in a fresh window."
-				: "notesoup: /clear-memory queued; the agent is asked to close out and the reset commits when the run settles.", "info");
+				? "🥣 Clearing memory · notes first, then your prompt runs"
+				: "🥣 Clearing memory · notes first, then it stops", "info");
 			try {
 				pi.sendMessage({ customType: MANUAL_WIPE_TYPE, content: WARNING_CONTENT, display: false }, { triggerTurn: true, deliverAs: "steer" });
 			} catch (error) {
 				resets.clear();
-				cmdCtx.ui.notify(`notesoup: could not start manual close-out (${String(error)}).`, "error");
+				cmdCtx.ui.notify(`🥣 Couldn't start clear-memory: ${errorMessage(error)}`, "error");
 			}
 		},
 	};

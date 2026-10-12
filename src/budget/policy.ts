@@ -23,7 +23,7 @@ export function deriveThresholds(reserveTokens: number, margins: NotesoupSetting
 	else {
 		const parsed = validMargin(margins.reminderMarginTokens);
 		if (parsed === undefined) {
-			warnings.push(`notesoup: ${reminderKey} must be a positive integer; using the default reminder margin.`);
+			warnings.push(`🥣 ${reminderKey} must be a positive integer · using the default`);
 			reminderMargin = DEFAULT_REMINDER_MARGIN_TOKENS;
 		} else reminderMargin = parsed;
 	}

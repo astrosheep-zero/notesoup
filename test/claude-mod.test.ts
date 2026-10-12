@@ -247,8 +247,8 @@ test("Claude Mod boot failure preserves fallback with available, absent, or fail
         ...upstream,
         blocks: [...upstream.blocks, { name: "notesoup:boot", text: "# notesoup\nhelper exited unsuccessfully" }],
       }, "boot failure keeps the original fallback and upstream fields even if notify is absent or fails");
-      const expectedNotifications = mode === "no ui" || mode === "no notify" ? [] : ["notesoup: Notes boot failed."];
-      assert.deepEqual(notifications, expectedNotifications, "one user-facing notification names notesoup and the notes boot failure");
+      const expectedNotifications = mode === "no ui" || mode === "no notify" ? [] : ["🥣 Notes didn't load"];
+      assert.deepEqual(notifications, expectedNotifications, "one user-facing notification reports the notes boot failure");
       assert.equal(bootRequests, 1);
       assert.equal(nextCalls, 1);
 
@@ -320,7 +320,7 @@ test("Claude Mod resets at 85 after the turn, retains one fresh boot and dedupli
   host.session.usage = async () => { throw new Error("usage unavailable"); };
   await invoke("session.measure");
   await invoke("turn.complete");
-  assert.equal(notifications.filter((text) => text.includes("context usage unavailable")).length, 1, "usage failure logs once per session");
+  assert.equal(notifications.filter((text) => text.includes("Context usage unavailable")).length, 1, "usage failure logs once per session");
   host.session.usage = async () => ({ context: { percent } });
   await dispatch({ op: "tool", tool: "notes_write", identity: { ...identity, home, cwd: home, sessionId: "hook-session" }, params: { address: "@human/MAP.md", content: "FRESH_NOTES_AT_RESET" } });
   await invoke("turn.start");
@@ -363,9 +363,9 @@ test("Claude Mod headless detection skips compaction and logs once", async (t) =
   await invoke("session.measure");
   await invoke("turn.complete");
   assert.equal(attempts, 0, "headless sessions skip the unsupported capability from startup");
-  assert.deepEqual(notifications, ["notesoup: reset skipped in headless (-p / SDK) session."]);
+  assert.deepEqual(notifications, ["🥣 Clear-memory is off in headless (-p / SDK) sessions"]);
   const manual = await invoke("command.run", { command: "clear-memory" }) as { text: string };
-  assert.match(manual.text, /reset skipped in headless/);
+  assert.match(manual.text, /off in headless/);
   assert.equal(notifications.length, 1);
   const boot = await handlers.get("prompt.context")!(host, {}, async () => ({ blocks: [] })) as { blocks: Array<{ text: string }> };
   assert.match(boot.blocks[0]!.text, /Current context window id: claude:hook-session:0/);
@@ -390,7 +390,7 @@ test("Claude Mod refuses to wipe on boot failure and can retry without advancing
   host.session.compact = async ({ instructions }) => result = await invoke("session.compact", { trigger: "plugin", instructions }) as typeof result;
   await invoke("turn.start");
   await invoke("turn.complete");
-  assert.match(result.skip!, /Notes boot failed/);
+  assert.match(result.skip!, /notes didn't load/);
   assert.equal(result.messages, undefined, "a failed builder must veto rather than fall through to summary");
   failBoot = false;
   await invoke("turn.start");
@@ -424,7 +424,7 @@ test("Claude Mod manual reset uses one hidden close-out turn, then recovers its 
   (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
   await invoke("session.start", { cwd: home, isInteractive: true });
   const command = await invoke("command.run", { command: "clear-memory" }) as { text: string };
-  assert.match(command.text, /closing out/);
+  assert.match(command.text, /Clearing memory/);
   await Promise.resolve();
   assert.equal(compactions, 0, "command.run must not call compact under its held turn");
   assert.equal(timers.length, 1);

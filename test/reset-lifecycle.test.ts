@@ -287,8 +287,8 @@ test("reset construction failure preserves incoming and budget drafts without co
 	assert.deepEqual(result.entries, [incoming, budgetDraft], "already-built drafts survive reset construction failure");
 	assert.equal(result.continue, false, "a failed reset does not request continuation");
 	assert.equal(notices.at(-1)?.type, "warning");
-	assert.match(notices.at(-1)?.message ?? "", /could not build reset/);
-	assert.match(notices.at(-1)?.message ?? "", /follow-up prompt was not executed/);
+	assert.match(notices.at(-1)?.message ?? "", /Couldn't clear memory/);
+	assert.match(notices.at(-1)?.message ?? "", /your prompt was not sent/);
 });
 
 test("a stale async reset is discarded after a lifecycle switch without staging a notice", async () => {
