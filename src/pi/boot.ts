@@ -1,7 +1,8 @@
 import { PI_TOOL_NAMES } from "./tool-names.js";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { notesIdentityFromPi } from "./notes/adapter.js";
-import { loadNotesSnapshot, type NotesSnapshot } from "../boot/snapshot.js";
+import { agentSlug, modelSlug, notesIdentityFromPi } from "./notes/adapter.js";
+import { loadNotesSnapshot, unavailableNotesSnapshot, type NotesSnapshot } from "../boot/snapshot.js";
+import { isFilesystemError } from "../notes/fs-error.js";
 import { BOOT_TYPE } from "./entries.js";
 import { renderBootBlock } from "../boot/render.js";
 import { currentReset, currentWindowId, isWindowBoot, rootWindowId } from "./window.js";
@@ -28,12 +29,21 @@ export async function buildBootMessage(
 	notifyIncompleteNotes?: IncompleteNotesNotifier,
 	isCurrent: () => boolean = () => true,
 ): Promise<BootMessage> {
-	const identity = notesIdentityFromPi(ctx);
-	const notes = await loadNotesSnapshot(identity, Date.now());
+	const agentName = agentSlug();
+	const modelName = modelSlug(ctx);
+	const sessionId = ctx.sessionManager.getSessionId();
+	const openedAt = Date.now();
+	let notes: NotesSnapshot;
+	try {
+		notes = await loadNotesSnapshot(notesIdentityFromPi(ctx), openedAt);
+	} catch (error) {
+		if (!isFilesystemError(error)) throw error;
+		notes = unavailableNotesSnapshot(openedAt);
+	}
 	if (isCurrent()) notifyIncompleteNotes?.(ctx, windowId, notes);
 	return {
 		customType: BOOT_TYPE,
-		content: renderBootBlock({ agentName: identity.agent, modelName: identity.model, firstWindowId: rootWindowId(identity.sessionId), currentWindowId: windowId, previousWindowId: previousId, notes, tools: PI_TOOL_NAMES }),
+		content: renderBootBlock({ agentName, modelName, firstWindowId: rootWindowId(sessionId), currentWindowId: windowId, previousWindowId: previousId, notes, tools: PI_TOOL_NAMES }),
 		display: false,
 		details: { windowId },
 	};

@@ -19,6 +19,11 @@ export type NotesSnapshot = {
 	readonly unavailable: readonly NotesHome[];
 };
 
+/** Identity resolution failed before any home could be loaded; boot can still explain the failure. */
+export function unavailableNotesSnapshot(openedAt: number): NotesSnapshot {
+	return { openedAt, homes: new Map(), unavailable: NOTES_HOMES };
+}
+
 /**
  * Acquire the five homes once for one boot. Only filesystem-style errno failures are isolated;
  * malformed note data and unrelated construction errors remain visible to the caller.

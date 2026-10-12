@@ -8,7 +8,7 @@ import { renderBootBlock } from "../boot/render.js";
 import { CLAUDE_WIPE_SENTENCE, type BootToolNames } from "../boot/text.js";
 import { CLAUDE_WARNING_PROMPT, CONTINUATION } from "../budget/text.js";
 import { resolveClaudeLimits } from "./thresholds.js";
-import { projectKey } from "../notes/paths.js";
+import { resolveProjectHome } from "../notes/project-home.js";
 import { snapshotNotesIdentity, type NotesIdentity } from "../notes/identity.js";
 import type { NoteChange } from "../notes/store.js";
 import type { Operation, Outcome } from "../tools/result.js";
@@ -28,7 +28,7 @@ type BoundOperation = {
 
 function identity(input: ClaudeIdentityInput): NotesIdentity {
 	if (!input || typeof input !== "object" || typeof input.cwd !== "string") throw new Error("invalid identity");
-	return snapshotNotesIdentity({ home: input.home, sessionId: input.sessionId, projectKey: projectKey(input.cwd), agent: input.agent, model: input.model });
+	return snapshotNotesIdentity({ home: input.home, sessionId: input.sessionId, projectKey: resolveProjectHome(input.cwd, input.home).name, agent: input.agent, model: input.model });
 }
 
 /** The first schema violation, named by parameter so the model can fix that one field. */

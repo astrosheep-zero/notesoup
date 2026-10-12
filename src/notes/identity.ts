@@ -30,7 +30,7 @@ export function snapshotNotesIdentity(value: NotesIdentity): NotesIdentity {
 	const agent = requireString("agent", value.agent);
 	const model = requireString("model", value.model);
 	assertDirectoryComponent("sessionId", sessionId);
-	assertDirectoryComponent("projectKey", projectKey);
+	if (!SLUG_PATTERN.test(projectKey)) throw new TypeError("notes context projectKey must be a canonical lowercase slug");
 	if (!SLUG_PATTERN.test(agent)) throw new TypeError("notes context agent must be a canonical lowercase slug");
 	if (!SLUG_PATTERN.test(model)) throw new TypeError("notes context model must be a canonical lowercase slug");
 	const home = resolve(homeValue);

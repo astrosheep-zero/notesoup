@@ -23,6 +23,7 @@ The address decides who a note belongs to and how long it lasts.
 | `@human/<path>` | human note | how to work with this human, across projects |
 | `@self/<path>` | self note | your reminders; yours alone if you have a name, shared by everyone nameless |
 | `@model/<path>` | model note | what applies to this model only |
+| `@projects/<name>/<path>` | named project, read-only | discover names and root paths with `notes_list` glob `@projects/*/**` |
 
 When notes conflict, the one most relevant to what you're doing applies. If that doesn't settle it, judge the case.
 

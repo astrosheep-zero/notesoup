@@ -10,6 +10,7 @@ import { NoteError } from "./errors.js";
 import { MAX_NOTE_BYTES, MAX_NOTE_PATH_BYTES } from "./constants.js";
 import { isOrigin, isScope, localIso, parseNote, serializeNote, stripLeadingFrontmatter, type NoteMeta, type Origin } from "./frontmatter.js";
 import { namespaceSlugs, noteFileName, physicalPath, scopeDir, SLUG_PATTERN, type Scope } from "./paths.js";
+import { projectHomes, projectReceipt, type ProjectReceipt } from "./project-home.js";
 
 export type { NoteMeta, Origin, Scope };
 
@@ -44,12 +45,12 @@ export type NoteRenameResult = { meta: NoteMeta; replacedCrumpledTarget: boolean
 export type NoteQueryStatus = { homesUnavailable: string[] };
 export type NoteQueryResult<T> = { rows: T[]; status: NoteQueryStatus };
 
-/** Public identity resolved for an operation, never a filesystem path. */
-export function noteIdentity(identity: NotesIdentity, address: string): { address: string; project_key?: string } {
+/** Public note identity; named projects also carry their display root and sibling hints. */
+export function noteIdentity(identity: NotesIdentity, address: string): { address: string; project_key?: string } & ProjectReceipt {
 	const resolved = assertAddress(address);
 	return {
 		address: addressFor(identity, resolved.scope, noteFileName(resolved.path), resolved.who),
-		...(resolved.scope === "project" ? { project_key: identity.projectKey } : {}),
+		...(resolved.scope !== "project" ? {} : resolved.who === undefined ? { project_key: identity.projectKey } : projectReceipt(identity.home, resolved.who)),
 	};
 }
 
@@ -125,11 +126,12 @@ async function homesForPattern(pattern: string | undefined, identity: NotesIdent
 	if (head === "human") return [{ scope: "human" }];
 	if (head === "self") return [{ scope: "agent" }];
 	if (head === "model") return [{ scope: "model" }];
-	if (head === "agents" || head === "models") {
-		const scope: Scope = head === "agents" ? "agent" : "model";
+	if (head === "projects" || head === "agents" || head === "models") {
+		const scope: Scope = head === "projects" ? "project" : head === "agents" ? "agent" : "model";
 		const name = pattern.slice(head.length + 2).split("/")[0] ?? "";
 		if (name.length > 0 && !/[*?]/.test(name)) return [{ scope, who: assertWho(name) }];
-		return (await namespaceSlugs(head, identity.home)).map((who) => ({ scope, who }));
+		const names = head === "projects" ? projectHomes(identity.home).map(home => home.name) : await namespaceSlugs(head, identity.home);
+		return names.map((who) => ({ scope, who }));
 	}
 	return [];
 }
@@ -238,9 +240,10 @@ function frontmatterOf(meta: NoteMeta): string {
 	return serializeNote(meta, "").slice(0, -2);
 }
 
-/** Named agent/model homes are read-only to whoever is not running there. */
+/** Explicit project homes are always read-only; agent/model homes allow their owner. */
 function assertWritableHome(scope: Scope, who: string | undefined, identity: NotesIdentity): void {
 	if (who === undefined) return;
+	if (scope === "project") throw new NoteError("invalid_scope", `@projects/${who}/ is read-only; use @project/ to write to your own project.`);
 	const current = scope === "agent" ? identity.agent : identity.model;
 	if (who === current) return;
 	const home = scope === "agent" ? `@agents/${who}/` : `@models/${who}/`;
@@ -296,6 +299,7 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 			if (raw === undefined) return undefined;
 			const now = Date.now();
 			const parsed = parseNote(raw, now);
+			if (scope === "project" && destination.who !== undefined) return { meta: { ...parsed.meta, scope }, body: parsed.body, resolvedScope: scope };
 			// A read records its own access, exactly as a write records an edit.
 			const meta: NoteMeta = { ...parsed.meta, scope, lastAccessed: now, accessCount: (typeof parsed.meta.accessCount === "number" ? parsed.meta.accessCount : 0) + 1 };
 			await atomicWrite(path, serializeNote(meta, parsed.body));
@@ -407,8 +411,8 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 		try {
 			homes = await homesFor(identity, options);
 		} catch (error) {
-			if (!status || !isFilesystemError(error) || !/^@(agents|models)\//.test(options.glob ?? "")) throw error;
-			status.homesUnavailable.push(options.glob!.startsWith("@agents/") ? "@agents" : "@models");
+			if (!status || !isFilesystemError(error) || !/^@(projects|agents|models)\//.test(options.glob ?? "")) throw error;
+			status.homesUnavailable.push(options.glob!.split("/")[0]!);
 			return;
 		}
 		for (const home of homes) {

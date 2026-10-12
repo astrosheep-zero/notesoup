@@ -8,9 +8,8 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
 import type { TSchema } from "typebox";
 import { Check } from "typebox/value";
@@ -19,7 +18,8 @@ import { projectKey } from "../src/notes/paths.js";
 import { globToRegExp } from "../src/notes/address.js";
 import type { Scope } from "../src/notes/index.js";
 import { listNotes, physicalPath, scopeDir } from "./helpers/notes.js";
-import type { NotesListData, NotesReadData, NotesSearchData, NotesUpdateData, NotesWriteData } from "../src/tools/notes.js";
+import { notesList, notesSearch, type NotesListData, type NotesReadData, type NotesSearchData, type NotesUpdateData, type NotesWriteData } from "../src/tools/notes.js";
+import { notesIdentityFromPi } from "../src/pi/notes/adapter.js";
 import { call, context, explicitBoot, makeExtension, manager, resultData, resultError, resultRead } from "./helpers/extension.js";
 import { installExtensionTestHooks } from "./helpers/extension-test-environment.js";
 
@@ -31,7 +31,7 @@ function freshRoot(): string {
 
 function assertReceiptIdentity(value: { address: string; project_key?: string }, address: string, scope: Scope, ctx: ReturnType<typeof context>): void {
 	assert.equal(value.address, address);
-	assert.equal(value.project_key, scope === "project" ? projectKey(ctx.cwd) : undefined);
+	assert.equal(value.project_key, scope === "project" ? projectKey(ctx.cwd, process.env.PI_NOTES_HOME!) : undefined);
 }
 
 test("exactly the five notes tools are registered; the legacy five are gone", () => {
@@ -124,7 +124,7 @@ test("write lands a real markdown file with harness frontmatter and a pure body"
 	for (const key of ["createdAt", "updatedAt", "lastAccessed"]) {
 		assert.match(raw, new RegExp(`^${key}: \\d{4}-\\d{2}-\\d{2}T`, "m"), `frontmatter renders ${key} via localIso`);
 	}
-	assert.equal(parseNote(raw).meta.project, projectKey(ctx.cwd), "a newly-created session note records its existing project key");
+	assert.equal(parseNote(raw).meta.project, projectKey(ctx.cwd, root), "a newly-created session note records its existing project key");
 	assertReceiptIdentity(result, "a/b.md", "session", ctx);
 	assert.equal(result.outcome, "created");
 	assert.equal(existsSync(join(scopeDir("session", ctx), ".session.json")), false, "ownership is stored in note frontmatter, not a sidecar");
@@ -142,8 +142,8 @@ test("session-note project ownership is per note, persistent across sessions, an
 	const cwdB = join(testEnvironment.cwd, "project-b");
 	mkdirSync(cwdA, { recursive: true });
 	mkdirSync(cwdB, { recursive: true });
-	const projectA = projectKey(cwdA);
-	const projectB = projectKey(cwdB);
+	const projectA = projectKey(cwdA, process.env.PI_NOTES_HOME!);
+	const projectB = projectKey(cwdB, process.env.PI_NOTES_HOME!);
 	assert.notEqual(projectA, projectB);
 
 	const firstSession = manager();
@@ -197,8 +197,8 @@ test("linked git worktrees share the main checkout's project key", () => {
 	git(["commit", "-q", "--allow-empty", "-m", "init"]);
 	const worktree = join(root, "wt");
 	git(["worktree", "add", "-q", "--detach", worktree]);
-	assert.equal(projectKey(worktree), projectKey(main), "a linked worktree resolves to the main checkout's key");
-	assert.equal(projectKey(join(worktree, "gone", "deeper")), projectKey(main), "a nonexistent subdirectory still resolves through its worktree");
+	assert.equal(projectKey(worktree, process.env.PI_NOTES_HOME!), projectKey(main, process.env.PI_NOTES_HOME!), "a linked worktree resolves to the main checkout's key");
+	assert.equal(projectKey(join(worktree, "gone", "deeper"), process.env.PI_NOTES_HOME!), projectKey(main, process.env.PI_NOTES_HOME!), "a nonexistent subdirectory still resolves through its worktree");
 	assert.equal(scopeDir("project", context(manager(), undefined, undefined, true, worktree)), scopeDir("project", context(manager(), undefined, undefined, true, main)), "@project uses the same physical home from both checkouts");
 });
 
@@ -246,7 +246,7 @@ project: 17
 
 invalid owner`);
 	assert.equal(parseNote(readFileSync(invalidFile, "utf8")).meta.project, 17);
-	assert.notEqual(parseNote(readFileSync(invalidFile, "utf8")).meta.project, projectKey(ctx.cwd), "invalid ownership does not match the current project key");
+	assert.notEqual(parseNote(readFileSync(invalidFile, "utf8")).meta.project, projectKey(ctx.cwd, process.env.PI_NOTES_HOME!), "invalid ownership does not match the current project key");
 	await call(captured, "notes_write", { address: "invalid.md", content: "still invalid" }, ctx);
 	assert.equal(parseNote(readFileSync(invalidFile, "utf8")).meta.project, 17, "an invalid value remains unknown and is not replaced with cwd-derived ownership");
 	assert.equal(existsSync(join(scopeDir("session", ctx), ".session.json")), false, "new notes use no ownership sidecar");
@@ -383,14 +383,19 @@ test("empty results distinguish hidden notes and unavailable homes", async () =>
 	await call(captured, "notes_update", { address: "@human/hidden.md", crumpled: true }, ctx);
 	const hidden = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle", glob: "@human/**" }, ctx));
 	assert.deepEqual(hidden.files, [], "a crumpled note is hidden from search");
+	const identity = notesIdentityFromPi(ctx);
 	const broken = scopeDir("project", ctx);
 	mkdirSync(join(broken, ".."), { recursive: true });
+	rmSync(broken, { recursive: true });
 	writeFileSync(broken, "not a directory");
-	const partial = resultData<NotesListData>(await call(captured, "notes_list", { glob: "**" }, ctx));
+	const partialResult = await notesList.execute({ glob: "**" }, identity);
+	assert.ok(partialResult.ok);
+	const partial = partialResult.data;
 	assert.deepEqual(partial.homes_unavailable, ["@project"]);
 	assert.deepEqual(partial.files, []);
-	const searched = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle", glob: "**" }, ctx));
-	assert.deepEqual(searched.homes_unavailable, ["@project"]);
+	const searchResult = await notesSearch.execute({ query: "needle", glob: "**" }, identity);
+	assert.ok(searchResult.ok);
+	assert.deepEqual(searchResult.data.homes_unavailable, ["@project"]);
 	writeFileSync(join(process.env.PI_NOTES_HOME!, "agents"), "not a directory");
 	const namespace = resultData<NotesListData>(await call(captured, "notes_list", { glob: "@agents/*/note.md" }, ctx));
 	assert.deepEqual(namespace.homes_unavailable, ["@agents"]);
@@ -587,17 +592,14 @@ async function withAgent(name: string | undefined, run: () => Promise<void>): Pr
 	}
 }
 
-test("a symlinked checkout hashes the canonical root, so one checkout has one project home", () => {
+test("a symlinked checkout resolves the canonical root, so one checkout has one project home", () => {
 	const root = realpathSync(testEnvironment.cwd);
 	const real = join(root, "real-repo");
 	mkdirSync(join(real, ".git"), { recursive: true });
 	const linked = join(root, "linked-repo");
 	symlinkSync(real, linked);
-	// The formula the key is documented to be: basename plus sha1 of the canonical root.
-	const canonicalKey = `${basename(real)}-${createHash("sha1").update(real).digest("hex").slice(0, 8)}`;
-	assert.equal(projectKey(linked), canonicalKey, "the symlinked spelling hashes the canonical root");
-	assert.equal(projectKey(real), canonicalKey, "the canonical spelling hashes the same root");
-	assert.notEqual(`${basename(linked)}-${createHash("sha1").update(linked).digest("hex").slice(0, 8)}`, canonicalKey, "a path-spelled key would differ");
+	assert.equal(projectKey(linked, process.env.PI_NOTES_HOME!), "real-repo", "the name comes from the canonical root");
+	assert.equal(projectKey(real, process.env.PI_NOTES_HOME!), "real-repo", "both spellings reuse one home");
 });
 
 test("a glob ? matches exactly one non-slash character", () => {

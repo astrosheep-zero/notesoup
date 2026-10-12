@@ -26,7 +26,7 @@ export function notesIdentityFromPi(ctx: ExtensionContext, home = notesRoot()): 
 	return {
 		home,
 		sessionId: ctx.sessionManager.getSessionId(),
-		projectKey: projectKey(ctx.cwd),
+		projectKey: projectKey(ctx.cwd, home),
 		agent: agentSlug(),
 		model: modelSlug(ctx),
 	};

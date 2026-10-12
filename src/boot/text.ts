@@ -44,6 +44,7 @@ An address decides who the note belongs to — and how long it is meant to last.
 - \`@human/<path>\` — the long-term manual for your troublesome human: how to deal with them, which lines not to cross, and what will make them accept the result. If it only applies to one project or situation, say so — or don't write it here at all. Today's mood is weather, not law. If you're unsure whether it belongs here, ask the human.
 - \`@self/<path>\` — yours. It follows you, not them. Reminders, grudges, who owes you a shoe, whatever. Got a name? Private. No name? Then it gets passed around every nameless nobody out there. Strangers. Reading your grudges. Sleep tight~
 - \`@model/<path>\` — different brains get different notes: big brains, small brains, careful ones, careless ones. They don't share homework. When a fallback swaps brains mid-window, the notebook swaps too.
+- \`@projects/<name>/<path>\` — read-only named project notes; discover names and root paths with \`notes_list\` glob \`@projects/*/**\`.
 
 Notes fighting?! HAH! Let them brawl!
 Whichever one is actually about what you're doing wins.
@@ -71,6 +72,7 @@ export type BootToolNames = Readonly<{
 export function renderProtocolBlock(tools: BootToolNames): string {
 	const names: Record<string, string> = {
 		"notes_*": tools.notes,
+		notes_list: tools.notesList,
 		"history_*": tools.history,
 		get_context_remaining: tools.remaining,
 		clear_memory: tools.wipe,
@@ -80,5 +82,5 @@ export function renderProtocolBlock(tools: BootToolNames): string {
 	const block = typeof tools.wipeSentence === "string" && tools.wipeSentence.length > 0
 		? PROTOCOL_BLOCK.replace(PROTOCOL_WIPE_SENTENCE, () => tools.wipeSentence!)
 		: PROTOCOL_BLOCK;
-	return block.replace(/notes_\*|history_\*|get_context_remaining|clear_memory/g, (name) => names[name]!);
+	return block.replace(/notes_\*|notes_list|history_\*|get_context_remaining|clear_memory/g, (name) => names[name]!);
 }

@@ -4,7 +4,7 @@ import { assertVirtualPath, SLUG_PATTERN, type Scope } from "./paths.js";
 
 export type NoteAddress = { scope: Scope; path: string; who?: string };
 
-export const ADDRESS_FORMS = "Use <path> for this session, or @project/, @human/, @self/, or @model/ followed by a path.";
+export const ADDRESS_FORMS = "Use <path> for this session, or @project/, @human/, @self/, or @model/ followed by a path; @projects/<name>/<path> reads a named project home.";
 
 /**
  * Minimal glob over virtual note paths: `*` matches any run within a segment (never
@@ -44,7 +44,7 @@ export function assertGlobPattern(value: unknown): string | undefined {
 
 /**
  * Decode one public note address into its physical home and virtual path. @self and @model
- * are relative; explicit agents/models addresses always name a canonical slug.
+ * are relative; explicit projects/agents/models addresses always name one canonical slug.
  */
 export function assertAddress(value: unknown): NoteAddress {
 	if (typeof value !== "string") throw new NoteError("invalid_address", `${shown(value)} isn't a note address. ${ADDRESS_FORMS}`);
@@ -61,11 +61,11 @@ export function assertAddress(value: unknown): NoteAddress {
 		else if (head === "human") scope = "human";
 		else if (head === "self") scope = "agent";
 		else if (head === "model") scope = "model";
-		else if (head === "agents" || head === "models") {
+		else if (head === "projects" || head === "agents" || head === "models") {
 			const nameEnd = tail.indexOf("/");
 			who = nameEnd === -1 ? tail : tail.slice(0, nameEnd);
 			if (!SLUG_PATTERN.test(who)) throw new NoteError("invalid_address", `${shown(value)} isn't a note address. ${ADDRESS_FORMS}`);
-			scope = head === "agents" ? "agent" : "model";
+			scope = head === "projects" ? "project" : head === "agents" ? "agent" : "model";
 			path = nameEnd === -1 ? "" : tail.slice(nameEnd + 1);
 		} else {
 			throw new NoteError("invalid_address", `${shown(value)} isn't a note address. ${ADDRESS_FORMS}`);
@@ -81,7 +81,7 @@ export function assertAddress(value: unknown): NoteAddress {
 /** Render a virtual path in its one unambiguous address form, used to match patterns. */
 export function canonicalAddressFor(identity: NotesIdentity, scope: Scope, path: string, who?: string): string {
 	if (scope === "session") return path;
-	if (scope === "project") return `@project/${path}`;
+	if (scope === "project") return who === undefined ? `@project/${path}` : `@projects/${who}/${path}`;
 	if (scope === "human") return `@human/${path}`;
 	if (scope === "agent") return `@agents/${who ?? identity.agent}/${path}`;
 	return `@models/${who ?? identity.model}/${path}`;

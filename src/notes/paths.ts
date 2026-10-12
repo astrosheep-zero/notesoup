@@ -1,7 +1,6 @@
-import { createHash } from "node:crypto";
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { join } from "node:path";
+export { projectKey } from "./project-home.js";
 import { NoteError, shown } from "./errors.js";
 import type { NotesIdentity } from "./identity.js";
 
@@ -29,61 +28,6 @@ export function assertVirtualPath(value: unknown): string {
 	return value;
 }
 
-/**
- * `<basename(canonical git root)-sha1(canonical git root)[:8]>`, or the same formula over cwd
- * with no git root. Git writes the canonical spelling into a linked worktree's `.git` pointer,
- * so canonicalizing here is what keeps one repository — and its worktrees — on one home.
- */
-export function projectKey(cwd: string): string {
-	const absolute = resolve(cwd);
-	const spelled = gitRoot(absolute) ?? absolute;
-	let root = spelled;
-	try { root = realpathSync(spelled); } catch { /* An unresolvable path keeps its spelling. */ }
-	const digest = createHash("sha1").update(root).digest("hex").slice(0, 8);
-	return `${basename(root)}-${digest}`;
-}
-
-/**
- * Repository root behind one `.git` entry. A `.git` directory is the main checkout
- * itself. A `.git` file is a worktree or submodule pointer: a linked worktree names
- * `<main>/.git/worktrees/<name>` and resolves to `<main>`, so every worktree of one
- * repository shares one project identity. Submodules, bare repositories, and separate
- * git dirs keep the current directory.
- */
-function repositoryRoot(dir: string): string {
-	let stats;
-	try {
-		stats = statSync(join(dir, ".git"));
-	} catch {
-		return dir;
-	}
-	if (stats.isDirectory()) return dir;
-	let pointer: string;
-	try {
-		pointer = readFileSync(join(dir, ".git"), "utf8");
-	} catch {
-		return dir;
-	}
-	const match = /^gitdir:\s*(.+)$/m.exec(pointer);
-	if (!match) return dir;
-	const parts = resolve(dir, match[1]!.trim()).split(sep);
-	const worktrees = parts.lastIndexOf("worktrees");
-	if (worktrees <= 0 || worktrees !== parts.length - 2) return dir;
-	const common = parts.slice(0, worktrees).join(sep);
-	return basename(common) === ".git" ? dirname(common) : dir;
-}
-
-/** Absolute repository root for cwd, walking upward until a directory holds a `.git` entry. */
-function gitRoot(cwd: string): string | undefined {
-	let dir = resolve(cwd);
-	for (;;) {
-		if (existsSync(join(dir, ".git"))) return repositoryRoot(dir);
-		const parent = dirname(dir);
-		if (parent === dir) return undefined;
-		dir = parent;
-	}
-}
-
 /** Absolute directory holding the per-session note homes. */
 export function sessionHomesRoot(home: string): string {
 	return join(home, "pi", "session");
@@ -92,9 +36,9 @@ export function sessionHomesRoot(home: string): string {
 /** Absolute directory holding one scope's notes. The identity's home is already resolved. */
 export function scopeDir(scope: Scope, identity: NotesIdentity, who?: string): string {
 	if (!["session", "project", "human", "agent", "model"].includes(scope)) throw new TypeError("invalid notes scope");
-	if (who !== undefined && (scope !== "agent" && scope !== "model" || !SLUG_PATTERN.test(who))) throw new TypeError("who must be a canonical agent/model slug");
+	if (who !== undefined && (scope !== "project" && scope !== "agent" && scope !== "model" || !SLUG_PATTERN.test(who))) throw new TypeError("who must be a canonical project/agent/model slug");
 	if (scope === "human") return join(identity.home, "human");
-	if (scope === "project") return join(identity.home, "project", identity.projectKey);
+	if (scope === "project") return join(identity.home, "project", who ?? identity.projectKey);
 	if (scope === "agent") return join(identity.home, "agents", who ?? identity.agent);
 	if (scope === "model") return join(identity.home, "models", who ?? identity.model);
 	return join(sessionHomesRoot(identity.home), identity.sessionId);

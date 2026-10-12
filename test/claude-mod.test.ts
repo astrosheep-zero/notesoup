@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +11,10 @@ import { DEFAULT_CLAUDE_RESET_MARGIN_TOKENS, resolveClaudeLimits } from "../src/
 import { WARNING_RUNWAY_TOKENS } from "../src/budget/constants.js";
 import { PROTOCOL_WIPE_SENTENCE, CLAUDE_WIPE_SENTENCE, renderProtocolBlock } from "../src/boot/text.js";
 import { CLAUDE_WARNING_PROMPT, CONTINUATION } from "../src/budget/text.js";
+import { createNotesStore } from "../src/notes/index.js";
+import { resolveProjectHome } from "../src/notes/project-home.js";
+import { notesIdentityFromPi } from "../src/pi/notes/adapter.js";
+import { context, manager } from "./helpers/extension.js";
 
 const identity = { home: mkdtempSync(join(tmpdir(), "claude-mod-")), sessionId: "session", cwd: process.cwd(), agent: "claude", model: "claude" };
 
@@ -876,6 +880,34 @@ test("Claude identity uses the documented current model and cwd, with a safe mod
   host.session.model = async () => { throw new Error("model unavailable"); };
   await write("@model/model.md", "fallback");
   assert.equal(seen.at(-1)!.identity.model, "claude");
+});
+
+test("Claude current-cwd project resolution shares Pi's remote home across checkout spellings", async (t) => {
+  const { host, home, invoke } = await retainedFixture(t);
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "claude-project-home-")));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const first = join(root, "api");
+  const second = join(root, "renamed");
+  for (const [cwd, remote] of [[first, "git@HOST:team/backend.git"], [second, "https://host/team/backend.git"]]) {
+    mkdirSync(join(cwd!, ".git"), { recursive: true });
+    writeFileSync(join(cwd!, ".git/config"), `[remote "origin"]\nurl = ${remote}\n`);
+  }
+  let cwd = first;
+  host.session.cwd = async () => cwd;
+  const piIdentity = notesIdentityFromPi(context(manager(), undefined, undefined, true, first), home);
+  assert.equal(piIdentity.projectKey, "api");
+  await createNotesStore(piIdentity).write("@project/shared", "Pi body");
+  const call = (tool: string, params: Record<string, unknown>) => invoke("tool.call", {
+    tool: `mcp__notesoup__${tool}`, tool_use_id: "project-call", ...params,
+  }) as Promise<{ result: string; isError?: boolean }>;
+  assert.match((await call("notes_read", { address: "@project/shared" })).result, /Pi body/);
+  cwd = second;
+  const written = await call("notes_write", { address: "@project/shared", content: "Claude body" });
+  assert.equal(written.isError, undefined);
+  assert.equal(written.result, "overwrote @project/shared.md (project api)");
+  assert.equal((await createNotesStore(piIdentity).read("@project/shared"))?.body, "Claude body");
+  assert.deepEqual(JSON.parse(readFileSync(join(home, "project/api/.project"), "utf8")), { id: "host/team/backend", path: second });
+  assert.equal(resolveProjectHome(second, home).name, piIdentity.projectKey);
 });
 
 test("Claude session.end cannot be undone by an in-flight old reset", async (t) => {

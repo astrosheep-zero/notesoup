@@ -15,7 +15,7 @@ const CRUMPLED_PARAMETER = Type.Optional(Type.Boolean({ description: "(optional)
 const CRUMPLED_LIST_PARAMETER = Type.Optional(Type.Boolean({ description: "(optional) true = list only crumpled notes." }));
 const FILE_LIMIT_PARAMETER = Type.Optional(Type.Integer({ minimum: 1, description: "(optional, default as many as fit) Max notes." }));
 const GLOB_PARAMETER = nullableString("(optional) Glob over full addresses.");
-const ADDRESS_DESCRIPTION = "Addresses: a bare path is this session's note; `@project/`, `@human/`, `@self/`, `@model/` are durable homes. Not file paths: never pass them to file tools.";
+const ADDRESS_DESCRIPTION = "Addresses: a bare path is this session's note; `@project/`, `@human/`, `@self/`, `@model/` are durable homes; `@projects/<name>/<path>` reads a named project (discover with glob `@projects/*/**`). Not file paths: never pass them to file tools.";
 
 /**
  * Typed refusal. Every fact a caller needs is already in the message; there is no separate context.
@@ -91,14 +91,23 @@ function renderMetadata(metadata: NoteMetadata): string {
 	return fields.join(" | ");
 }
 
-/** Address plus project key in one line; the project key never replaces the address. */
-function renderIdentity(identity: { address: string; project_key?: string }): string {
-	return identity.project_key === undefined ? identity.address : `${identity.address} (project ${identity.project_key})`;
+/** Keep the address visible, with project context and at most one sibling hint line. */
+function renderIdentity(identity: { address: string; project_key?: string; project_root?: string; project_siblings?: Array<{ name: string; path: string }> }): string {
+	let text = identity.project_key === undefined ? identity.address : `${identity.address} (project ${identity.project_key})`;
+	if (identity.project_root !== undefined) text += ` (project_root ${identity.project_root})`;
+	if (identity.project_siblings !== undefined) text += `\n  Same-basename projects: ${identity.project_siblings.map(sibling => `${sibling.name} (${sibling.path})`).join(", ")}`;
+	return text;
 }
+
+const ProjectReceiptSchema = {
+	project_root: Type.Optional(Type.String()),
+	project_siblings: Type.Optional(Type.Array(Type.Object({ name: Type.String(), path: Type.String() }, { additionalProperties: false }))),
+};
 
 const ListedFileSchema = Type.Object({
 	address: Type.String(),
 	project_key: Type.Optional(Type.String()),
+	...ProjectReceiptSchema,
 	updated_at: Type.String(),
 	crumpled_at: Type.Optional(Type.String()),
 }, { additionalProperties: false });
@@ -138,6 +147,7 @@ export type NotesUpdateData = Static<typeof NotesUpdateDataSchema>;
 export const NotesReadDataSchema = Type.Object({
 	address: Type.String(),
 	project_key: Type.Optional(Type.String()),
+	...ProjectReceiptSchema,
 	metadata: NoteMetadataSchema,
 	...TextWindowSchema.properties,
 }, { additionalProperties: false });
@@ -185,8 +195,8 @@ function snapshot<T extends { address: string }>(
 	return fitsResult(outcome, render) ? outcome : failure("output_too_large", `The list of unreachable homes is itself over ${TOOL_OUTPUT_LIMIT}; narrow \`glob\` to fewer homes.`);
 }
 
-function listedFile(row: Pick<NoteRow, "address" | "scope" | "meta">, identity: NotesIdentity): NotesListData["files"][number] {
-	return { address: row.address, ...(row.scope === "project" ? { project_key: identity.projectKey } : {}), updated_at: localIso(row.meta.updatedAt), ...(row.meta.crumpledAt === undefined ? {} : { crumpled_at: row.meta.crumpledAt }) };
+function listedFile(row: Pick<NoteRow, "address" | "meta">, identity: NotesIdentity): NotesListData["files"][number] {
+	return { ...noteIdentity(identity, row.address), updated_at: localIso(row.meta.updatedAt), ...(row.meta.crumpledAt === undefined ? {} : { crumpled_at: row.meta.crumpledAt }) };
 }
 
 export const notesWriteParameters = Type.Object({ address: Type.String(), content: Type.String(), origin: ORIGIN }, { additionalProperties: false });
