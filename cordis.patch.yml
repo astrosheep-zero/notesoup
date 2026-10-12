@@ -1,0 +1,14 @@
+# Package bundle patch. Explicit llm-deepseek model declarations are also
+# required: copy the example in docs/dsh.profile.patch.yml into your profile.
+- id: compaction-basic
+  disabled: true
+
+- insert:
+    - id: notesoup-engine
+      name: 'notesoup/dsh/engine'
+      config:
+        auto: true
+        thresholdRatio: 0.8
+        headroomTokens: 65536
+    - id: notesoup
+      name: 'notesoup/dsh'

@@ -1,6 +1,6 @@
 {
 	"name": "notesoup",
-	"version": "0.44.0",
+	"version": "0.45.0",
 	"type": "module",
 	"main": "./dist/src/index.js",
 	"types": "./dist/src/index.d.ts",
@@ -13,7 +13,15 @@
 			"types": "./dist/src/notes/index.d.ts",
 			"import": "./dist/src/notes/index.js"
 		},
-		"./package.json": "./package.json"
+		"./package.json": "./package.json",
+		"./dsh": {
+			"types": "./dist/src/dsh/index.d.ts",
+			"import": "./dist/src/dsh/index.js"
+		},
+		"./dsh/engine": {
+			"types": "./dist/src/dsh/engine.d.ts",
+			"import": "./dist/src/dsh/engine.js"
+		}
 	},
 	"description": "Codex-style context windows for Pi: durable reset windows, session history tools, and persistent notes.",
 	"license": "MIT",
@@ -45,7 +53,8 @@
 		"skills",
 		"mods",
 		"!mods/notesoup/types",
-		"!mods/notesoup/tsconfig.json"
+		"!mods/notesoup/tsconfig.json",
+		"cordis.patch.yml"
 	],
 	"bin": {
 		"dream": "dist/src/pi/dream/cli.js"
@@ -61,7 +70,18 @@
 		"@earendil-works/pi-agent-core": "*",
 		"@earendil-works/pi-ai": "*",
 		"@earendil-works/pi-coding-agent": "*",
-		"typebox": "*"
+		"typebox": "*",
+		"@deepseek-ai/cordis": "*",
+		"@deepseek-ai/cordis-plugin-loader": "*",
+		"@deepseek-ai/dsh-agent": "*",
+		"@deepseek-ai/dsh-compaction": "*",
+		"@deepseek-ai/dsh-commands": "*",
+		"@deepseek-ai/dsh-llm": "*",
+		"@deepseek-ai/dsh-session": "*",
+		"@deepseek-ai/dsh-session-query": "*",
+		"@deepseek-ai/dsh-system-prompt": "*",
+		"@deepseek-ai/dsh-token-meter": "*",
+		"@deepseek-ai/dsh-tools": "*"
 	},
 	"peerDependenciesMeta": {
 		"@earendil-works/pi-agent-core": {
@@ -75,9 +95,43 @@
 		},
 		"typebox": {
 			"optional": true
+		},
+		"@deepseek-ai/cordis": {
+			"optional": true
+		},
+		"@deepseek-ai/cordis-plugin-loader": {
+			"optional": true
+		},
+		"@deepseek-ai/dsh-agent": {
+			"optional": true
+		},
+		"@deepseek-ai/dsh-compaction": {
+			"optional": true
+		},
+		"@deepseek-ai/dsh-commands": {
+			"optional": true
+		},
+		"@deepseek-ai/dsh-llm": {
+			"optional": true
+		},
+		"@deepseek-ai/dsh-session": {
+			"optional": true
+		},
+		"@deepseek-ai/dsh-session-query": {
+			"optional": true
+		},
+		"@deepseek-ai/dsh-system-prompt": {
+			"optional": true
+		},
+		"@deepseek-ai/dsh-token-meter": {
+			"optional": true
+		},
+		"@deepseek-ai/dsh-tools": {
+			"optional": true
 		}
 	},
 	"devDependencies": {
+		"@deepseek-ai/dsh": "0.2.1-alpha.2",
 		"@earendil-works/pi-agent-core": "^1.0.0",
 		"@earendil-works/pi-ai": "^1.0.0",
 		"@earendil-works/pi-coding-agent": "^1.0.0",
@@ -88,5 +142,10 @@
 	},
 	"publishConfig": {
 		"access": "public"
+	},
+	"dsh": {
+		"bundle": {
+			"patch": "./cordis.patch.yml"
+		}
 	}
 }

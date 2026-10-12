@@ -1,0 +1,51 @@
+import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { TestContext } from "node:test";
+import { Context } from "@deepseek-ai/cordis";
+import Agents from "@deepseek-ai/dsh-agent";
+import AgentLoop from "@deepseek-ai/dsh-agent-loop";
+import Llm from "@deepseek-ai/dsh-llm";
+import * as DeepSeek from "@deepseek-ai/dsh-llm-deepseek-api-key";
+import Sessions, { SessionId, type SessionEvent } from "@deepseek-ai/dsh-session";
+import Projections from "@deepseek-ai/dsh-session-projection";
+import SystemPrompt from "@deepseek-ai/dsh-system-prompt";
+import Tools from "@deepseek-ai/dsh-tools";
+import Meter from "@deepseek-ai/dsh-token-meter";
+import Query from "@deepseek-ai/dsh-session-query-sqlite";
+import { createLaunchEnvironmentSnapshot } from "@deepseek-ai/dsh-launch-environment";
+import NotesoupEngine, { type EngineConfig } from "../../src/dsh/engine.js";
+import notesoup from "../../src/dsh/index.js";
+import { messagesServer } from "./dsh-messages.js";
+
+export async function dshFixture(t: TestContext, config: EngineConfig = {}) {
+	const directory = await mkdtemp(join(tmpdir(), "ns-dsh-test-"));
+	const mock = await messagesServer();
+	const ctx = new Context();
+	const fibers: { dispose(): Promise<void> }[] = [];
+	t.after(async () => { for (const fiber of fibers.reverse()) await fiber.dispose(); await mock.close(); await ctx.fiber.dispose(); await rm(directory, { recursive: true, force: true }); });
+	ctx.provide("launchEnvironment", createLaunchEnvironmentSnapshot([{ source: "process", values: { DEEPSEEK_API_KEY: "mock-key" } }]));
+	fibers.push(await ctx.plugin(Sessions));
+	fibers.push(await ctx.plugin(Projections));
+	fibers.push(await ctx.plugin(Agents));
+	fibers.push(await ctx.plugin(Llm));
+	fibers.push(await ctx.plugin(SystemPrompt, { includeRuntimeContext: false }));
+	fibers.push(await ctx.plugin(Tools, {}));
+	fibers.push(await ctx.plugin(Meter, {}));
+	fibers.push(await ctx.plugin(Query, { path: ":memory:" }));
+	fibers.push(await ctx.plugin(DeepSeek, { baseURL: mock.url, models: [{ id: "mock-flash", name: "Mock", contextWindow: 200000, maxTokens: 8192 }] } as never));
+	const engineFiber = await ctx.plugin(NotesoupEngine, { notesHome: join(directory, "notes"), ...config });
+	fibers.push(engineFiber);
+	assert.ok(ctx.compaction instanceof NotesoupEngine);
+	const engine = ctx.compaction;
+	fibers.push(await ctx.plugin(notesoup));
+	fibers.push(await ctx.plugin(AgentLoop, { agents: [], maxParallelToolCalls: 10 }));
+	let count = 0;
+	const create = async (seed?: readonly SessionEvent[], id = `session-test-${++count}`) => {
+		const handle = await ctx.agents.create({ sessionId: SessionId(id), meta: { cwd: directory }, agentOptions: { provider: "deepseek-official", model: "mock-flash" }, ...(seed ? { seed } : {}) });
+		fibers.push(handle);
+		return handle.agent;
+	};
+	return { ctx, engine, engineFiber, directory, mock, create };
+}

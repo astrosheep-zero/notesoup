@@ -76,6 +76,7 @@ The dreamer model is configured under the same key; `--dreamer <model pattern>` 
 - [Tool results](docs/tool-results.md) — receipts, paging, and error shapes
 - [Standalone notes library](docs/notes-library.md) — use the notes store from Node, no Pi required
 - [SDK integration](docs/sdk-integration.md) — binding notesoup to a host-built session
+- [DeepSeek Harness](docs/dsh.md) — adapter and profile patch for dsh 0.2.1-alpha.2
 - [Claude Code Mod](docs/claude-code-mod.md) — early-access notes tools for Claude Code
 - [Skills, dream, and the notes doctor](docs/skills.md) — `/skill:memory`, `/skill:dream`, `dream doctor`, the dream lock
 

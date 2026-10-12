@@ -1,0 +1,34 @@
+# Add to $DSH_HOME/profiles/<profile>/cordis.patch.yml after installing notesoup.
+# For a source checkout, run npm ci --ignore-scripts && npm run build, then replace
+# notesoup/dsh[/engine] below with absolute file:///.../dist/src/dsh/...js paths.
+- id: compaction-basic
+  disabled: true
+
+# Explicit models avoid the shipped deepseek-flash in-history prompt update.
+# Choose capacity and output limits for your provider; these are the tested values.
+- id: llm-deepseek
+  name: '@deepseek-ai/dsh-llm-deepseek-api-key'
+  config:
+    models:
+      - id: deepseek-flash
+        name: DeepSeek Flash
+        contextWindow: 200000
+        maxTokens: 8192
+
+- id: agent-default-model
+  config:
+    provider: deepseek-official
+    model: deepseek-flash
+
+- insert:
+    - id: notesoup-engine
+      name: 'notesoup/dsh/engine'
+      config:
+        auto: true
+        thresholdRatio: 0.7
+        headroomTokens: 32768
+        reminderMarginTokens: 24576
+        agentName: dsh
+        # notesHome: /absolute/path/to/notes
+    - id: notesoup
+      name: 'notesoup/dsh'

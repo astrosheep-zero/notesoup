@@ -16,6 +16,7 @@ notesoup uses Pi's session branch as the durable source of truth. It does not ma
 | `tools/notes.ts`, `tools/history.ts`, `tools/schema.ts`, `tools/result.ts`, `tools/output.ts` | Schema-derived outcomes, note/history operations, bounded result selection and pure text rendering | Explicit identity/projection; one bounded result feeds both text and structured output |
 | `settings.ts`, `dream/settings.ts` | Settings keys, per-key merge and dreamer validation | Parsed values only; no SDK or I/O |
 | `dream/` | Jail, crumpled-only physical deletion, locks, gates, Git audit, doctor, playbook and result/report logic | Independent filesystem/policy functions; no reverse import into Pi |
+| `dsh/` | Cordis registration, frozen prompt sections, plugin records/checkpoint recovery, token-meter budget, native reset transaction and session-query decoding | Host adapter; imports shared domains, never Pi or Claude |
 | `pi/extension.ts`, `pi/runtime.ts` | Compose registration, lifecycle hooks, commands, provider operations and UI | Public Pi SDK |
 | `pi/entries.ts` | Persisted native custom-entry/message tags | Pi persistence vocabulary, not an omnibus protocol barrel |
 | `pi/window.ts`, `pi/session-reader.ts` | Native `WindowMarker`, checkpoint validation, root/fork identity, branch scans, provider projection and usage | Pi entries/messages and read-only native session traversal |
@@ -26,9 +27,11 @@ notesoup uses Pi's session branch as the durable source of truth. It does not ma
 | `pi/reset/artifacts.ts`, `pi/reset/committed.ts` | Construct boundaries, repair only safe suffixes, independently confirm committed native boundaries | Active native branch; no shadow commit database |
 | `pi/dream/` | Pi dream sessions, native tool wrappers, settings reads and executable CLI composition | Pi backend over independent dream policy/filesystem functions |
 
-Dependencies flow from Pi composition into the domains, never back. Shared code cannot import an SDK, `src/pi`, or the root entry, even through erased types, re-exports, literal dynamic/import-type edges or intermediate modules. `test/dependencies.test.ts` uses TypeScript resolution and AST traversal, checks every shared source (including root settings/text matching), and tests rejecting indirect/aliased paths. Shared external packages must be declared in the package manifest. `typebox` is declared as a peer and development dependency rather than imported through Pi's SDK.
+Dependencies flow from host composition into the domains, never back. Shared code cannot import an SDK, `src/pi`, `src/claude`, `src/dsh`, or the root entry, even through erased types, re-exports, literal dynamic/import-type edges or intermediate modules. `test/dependencies.test.ts` uses TypeScript resolution and AST traversal, checks every shared source (including root settings/text matching; excludes the three host adapters), and tests rejecting indirect/aliased paths. Shared external packages must be declared in the package manifest. `typebox` is declared as a peer and development dependency rather than imported through Pi's SDK.
 
 The configured extension is `src/index.ts`, loaded straight from TypeScript — no bundling step, so git installs work without a build. Its `pi-ai/utils/estimate` dependency is vendored in `src/pi/estimate.ts` because Pi's root-package aliases misresolve that public subpath on source loads; host-owned SDK APIs stay external. `/notes` is the intentional standalone library API. The CLI is `dist/src/pi/dream/cli.js`. Old internal bags, `NotesContext`, root history helpers and the deep-entry export alias are removed. This breaks source/import paths, not storage: note homes, metadata, session paths and raw history remain intact. There is no universal Harness, host-event emulator, registry, daemon or speculative second backend. No `src/window` exists because the current window responsibilities are genuinely native.
+
+For the native dsh reset transaction, prompt ordering, capability checks and limits, see [DeepSeek Harness](dsh.md). Its adapter keeps the shared domains unchanged and uses only dsh public services.
 
 ## State and persistence
 

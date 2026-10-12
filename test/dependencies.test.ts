@@ -30,13 +30,30 @@ test("all shared domains resolve without any direct or transitive SDK, Pi adapte
 	const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root);
 	assert.deepEqual(parsed.errors, []);
 	const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-	const shared = sources(join(root, "src")).filter((file) => !file.startsWith(join(root, "src/pi/")) && file !== join(root, "src/index.ts"));
+	const shared = sources(join(root, "src")).filter((file) => !["pi", "claude", "dsh"].some((adapter) => file.startsWith(join(root, "src", adapter) + "/")) && file !== join(root, "src/index.ts"));
 	for (const domain of ["notes", "boot", "history", "budget", "tools", "dream"]) assert.ok(shared.some((file) => file.startsWith(join(root, "src", domain) + "/")), `${domain} is included`);
 	assert.deepEqual(dependencyViolations(root, shared, parsed.options, new Set(["typebox"])), []);
 	for (const name of ["@earendil-works/pi-agent-core", "@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "typebox"]) {
 		assert.equal(manifest.dependencies?.[name], undefined, `${name} is supplied by the host`);
 		assert.equal(manifest.peerDependencies[name], "*", `${name} follows Pi's host dependency contract`);
 	}
+});
+
+test("dsh resolves into shared domains without Pi, Claude, dream or the root entry", () => {
+	const root = repository();
+	const seen = new Set<string>();
+	const inspect = (file: string) => {
+		if (seen.has(file)) return;
+		seen.add(file);
+		assert.ok(!["pi", "claude", "dream"].some((adapter) => file.startsWith(join(root, "src", adapter) + "/")) && file !== join(root, "src/index.ts"), file);
+		const source = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
+		for (const reference of moduleReferences(source)) {
+			assert.ok(!/^@(?:earendil-works|mariozechner)\/pi-/.test(reference), reference);
+			const resolved = ts.resolveModuleName(reference, file, options, ts.sys).resolvedModule;
+			if (resolved && resolved.resolvedFileName.startsWith(join(root, "src") + "/")) inspect(resolved.resolvedFileName);
+		}
+	};
+	for (const file of sources(join(root, "src/dsh"))) inspect(file);
 });
 
 test("dependency guard follows indirect types, re-exports, dynamic imports and import-type edges through resolved aliases", (t) => {
@@ -59,6 +76,13 @@ test("dependency guard follows indirect types, re-exports, dynamic imports and i
 		"src/dream/jail.ts -> src/index.ts",
 		"src/boot/snapshot.ts -> src/pi/native.ts",
 		"src/history/query.ts -> src/history/decoder.ts -> @earendil-works/pi-coding-agent",
+	]);
+	put("src/boot/snapshot.ts", 'export type Snapshot = import("../dsh/native.js").Native;');
+	put("src/dsh/native.ts", "export type Native = string;");
+	put("src/history/query.ts", 'export type { Session } from "@deepseek-ai/dsh-session";');
+	assert.deepEqual(dependencyViolations(root, ["src/boot/snapshot.ts", "src/history/query.ts"], fixtureOptions, new Set()), [
+		"src/boot/snapshot.ts -> src/dsh/native.ts",
+		"src/history/query.ts -> @deepseek-ai/dsh-session",
 	]);
 	put("src/notes/bridge.ts", 'export type { Value as Native } from "./safe.js";');
 	put("src/notes/safe.ts", "export type Value = string;");

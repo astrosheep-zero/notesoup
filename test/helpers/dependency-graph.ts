@@ -4,7 +4,7 @@ import { relative, resolve, sep } from "node:path";
 import ts from "typescript";
 
 const builtins = new Set(builtinModules.map((name) => name.replace(/^node:/, "")));
-const piPackage = /^(?:@earendil-works|@mariozechner)\/pi-(?:ai|agent-core|coding-agent)(?:\/|$)/;
+const hostPackage = /^(?:(?:@earendil-works|@mariozechner)\/pi-(?:ai|agent-core|coding-agent)|@deepseek-ai\/(?:dsh(?:-[^/]+)?|cordis(?:-[^/]+)?))(?:\/|$)/;
 
 /** AST edges include erased types and re-exports, not merely emitted runtime imports. */
 export function moduleReferences(source: ts.SourceFile): string[] {
@@ -35,7 +35,7 @@ export function dependencyViolations(root: string, entries: string[], options: t
 	const cache = ts.createModuleResolutionCache(root, (path) => path, options);
 	const sourceRoot = resolve(root, "src");
 	const display = (path: string) => relative(root, path).split(sep).join("/");
-	const native = (path: string) => path === resolve(sourceRoot, "index.ts") || path.startsWith(resolve(sourceRoot, "pi") + sep) || /node_modules\/(?:@earendil-works|@mariozechner)\/pi-(?:ai|agent-core|coding-agent)(?:\/|$)/.test(path.split(sep).join("/"));
+	const native = (path: string) => path === resolve(sourceRoot, "index.ts") || ["pi", "claude", "dsh"].some((adapter) => path.startsWith(resolve(sourceRoot, adapter) + sep)) || /node_modules\/(?:(?:@earendil-works|@mariozechner)\/pi-(?:ai|agent-core|coding-agent)|@deepseek-ai\/(?:dsh(?:-[^/]+)?|cordis(?:-[^/]+)?))(?:\/|$)/.test(path.split(sep).join("/"));
 	const walk = (file: string, chain: string[]): void => {
 		file = realpathSync(file);
 		if (native(file)) { violations.push([...chain, display(file)].join(" -> ")); return; }
@@ -45,7 +45,7 @@ export function dependencyViolations(root: string, entries: string[], options: t
 		const source = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
 		for (const specifier of moduleReferences(source)) {
 			if (specifier.startsWith("node:") || builtins.has(specifier)) continue;
-			if (piPackage.test(specifier)) { violations.push([...here, specifier].join(" -> ")); continue; }
+			if (hostPackage.test(specifier)) { violations.push([...here, specifier].join(" -> ")); continue; }
 			const resolution = ts.resolveModuleName(specifier, file, options, ts.sys, cache).resolvedModule;
 			if (!resolution) { violations.push([...here, `unresolved ${specifier}`].join(" -> ")); continue; }
 			// A shared dependency must be intentional, not accidentally supplied by a Pi peer/dev dependency.
