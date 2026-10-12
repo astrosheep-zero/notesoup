@@ -1,6 +1,6 @@
 /** Host-neutral history operations: one bounded payload for text and structured results. */
 import { Type, type Static } from "typebox";
-import { HISTORY_PREVIEW_CHARS } from "./output.js";
+import { HISTORY_PREVIEW_CHARS, TOOL_OUTPUT_LIMIT } from "./output.js";
 import { failure, fitsResult, resultSchema, readTextWindow, renderOutcome, renderTextWindow, success, TextWindowRequestSchema, TextWindowSchema, type Operation, type Outcome } from "./result.js";
 import { historyRoles, searchQuery } from "./schema.js";
 import { HistoryPageSchema, selectPage, type HistoryPage } from "../history/query.js";
@@ -66,7 +66,7 @@ function renderFoldedRow(row: HistoryFoldedRow): string {
 
 function renderPage(page: HistoryPage): string {
 	// An empty selection has no anchors either, so it would otherwise render as nothing at all.
-	if (page.items.length === 0) return "no events match this selection";
+	if (page.items.length === 0) return "No events match these filters.";
 	const body = page.items.map((item) => (isFoldedRow(item) ? renderFoldedRow(item) : renderPageItem(item))).join("\n\n");
 	const cursors = [
 		page.page_older === null ? "" : `→ older: ${JSON.stringify(page.page_older)}`,
@@ -94,7 +94,7 @@ const MAX_REPORTED_WINDOWS = 5;
 
 /** At most `MAX_REPORTED_WINDOWS` known ids, appended to an unknown_window_id message. */
 function knownWindowSuffix(known: string[]): string {
-	return known.length === 0 ? "" : `; known: ${known.slice(0, MAX_REPORTED_WINDOWS).join(", ")}`;
+	return known.length === 0 ? "" : `; its windows: ${known.slice(0, MAX_REPORTED_WINDOWS).join(", ")}`;
 }
 
 export const PREVIOUS_WINDOW = "@previous";
@@ -105,13 +105,13 @@ function resolveWindowId(projection: HistoryProjection, windowId: string | undef
 	const previous = projection.windows.at(-2);
 	if (previous !== undefined) return { ok: true, window_id: previous.windowId };
 	const known = projection.windows.map((current) => current.windowId);
-	return { ok: false, outcome: failure("unknown_window_id", `unknown window_id "${PREVIOUS_WINDOW}": this session has no window before the current one${knownWindowSuffix(known)}`) };
+	return { ok: false, outcome: failure("unknown_window_id", `"${PREVIOUS_WINDOW}" has nothing to point at: this session has no window before the current one${knownWindowSuffix(known)}.`) };
 }
 
 function badWindowId(projection: HistoryProjection, params: HistoryFilter): Outcome<never> | undefined {
 	const badWindow = unknownWindowId(projection, params);
 	if (!badWindow) return undefined;
-	return failure("unknown_window_id", `${badWindow.message}${knownWindowSuffix(badWindow.known)}`);
+	return failure("unknown_window_id", `${badWindow.message}${knownWindowSuffix(badWindow.known)}.`);
 }
 
 /* ------------------------------------------------------------------ history_windows */
@@ -139,14 +139,14 @@ export const historyWindows: Operation<typeof historyWindowsParameters, HistoryW
 			data.windows.push(row);
 			data.more--;
 		}
-		return fits(data) ? success(data) : failure("output_too_large", "The session identity does not fit one `history_windows` response.");
+		return fits(data) ? success(data) : failure("output_too_large", `The session id alone fills the ${TOOL_OUTPUT_LIMIT} a call can carry.`);
 	},
 	render: (result) => renderOutcome(result, renderWindows),
 };
 
 function renderWindows(data: HistoryWindowsData): string {
 	const lines = [`session ${data.session_id}`, ...data.windows.map((window) => `window ${window.window_id} | seqs ${window.first_seq ?? "-"}-${window.last_seq ?? "-"}`)];
-	if (data.more > 0) lines.push(`${data.more} more windows not shown; \`history_list\` also reports window ids on events`);
+	if (data.more > 0) lines.push(`${data.more} more windows not shown; every \`history_list\` event also names its window.`);
 	return lines.join("\n");
 }
 
@@ -197,22 +197,22 @@ export const historyRead: Operation<typeof historyReadParameters, HistoryReadDat
 		// Address checks run in one order: past the end of the file, off this branch, then
 		// consumed by a pairing. Only the last two can mention what is at the address.
 		if (item === undefined && params.seq > projection.highestSeq) {
-			return failure("unknown_seq", `unknown seq ${params.seq}: this session's items run 1..${projection.highestSeq}`);
+			return failure("unknown_seq", `There is no seq ${params.seq}; this session runs from seq 1 to ${projection.highestSeq}.`);
 		}
 		if (!projection.branchSeqs.has(params.seq)) {
-			return failure("not_on_branch", `seq ${params.seq} is on another branch and is not readable here`);
+			return failure("not_on_branch", `Seq ${params.seq} is on another branch of this session; it can't be read from here.`);
 		}
 		if (item === undefined) {
 			const callSeq = projection.pairedResults.get(params.seq);
 			if (callSeq !== undefined) {
-				return failure("not_an_event", `seq ${params.seq} is a tool result already shown inside the call at seq ${callSeq}; read that seq instead`);
+				return failure("not_an_event", `Seq ${params.seq} is a tool result, shown together with its call; read seq ${callSeq} instead.`);
 			}
-			return failure("unknown_seq", `seq ${params.seq} is on this branch but carries no readable event`);
+			return failure("unknown_seq", `Seq ${params.seq} holds nothing to read.`);
 		}
 		const document = eventDocument(item);
 		const totalChars = Array.from(document).length;
 		if (typeof params.offset_chars === "number" && params.offset_chars > totalChars) {
-			return failure("invalid_offset", `offset_chars ${params.offset_chars} is past the end: the item has ${totalChars} chars; the largest legal offset is ${totalChars} (an empty end-read)`);
+			return failure("invalid_offset", `This event ends at char ${totalChars}; offset_chars ${params.offset_chars} is past the last word.`);
 		}
 		return readTextWindow(
 			document,

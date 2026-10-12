@@ -1,6 +1,6 @@
 /** Internal outcomes, compact wire results, and bounded read windows. */
 import { Type, type Static, type TSchema } from "typebox";
-import { DEFAULT_READ_WINDOW_CHARS, MAX_READ_WINDOW_CHARS, TOOL_OUTPUT_MAX_BYTES, withinTextBudget } from "./output.js";
+import { DEFAULT_READ_WINDOW_CHARS, MAX_READ_WINDOW_CHARS, TOOL_OUTPUT_LIMIT, TOOL_OUTPUT_MAX_BYTES, withinTextBudget } from "./output.js";
 
 /** The one refusal shape: `code` is a stable internal identifier, `message` the bounded reading. */
 export const OperationErrorSchema = Type.Object({
@@ -116,7 +116,7 @@ export function readTextWindow<T>(
 		if (fits(mid)) low = mid;
 		else high = mid - 1;
 	}
-	if (low === 0) return failure("output_too_large", "The response metadata leaves no room for a progressing read window.");
+	if (low === 0) return failure("output_too_large", `Its header alone fills the ${TOOL_OUTPUT_LIMIT} a call can carry; no room left for the text.`);
 	return success(makeData(window(low)));
 }
 

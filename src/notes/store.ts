@@ -228,12 +228,17 @@ async function atomicWrite(path: string, content: string): Promise<void> {
 /** The byte cap is a write-time boundary rule, never a path-jail rule. */
 function assertWritablePath(vpath: string): void {
 	const bytes = Buffer.byteLength(vpath, "utf8");
-	if (bytes > MAX_NOTE_PATH_BYTES) throw new NoteError("too_large", `note path exceeds ${MAX_NOTE_PATH_BYTES} UTF-8 bytes (got ${bytes})`);
+	if (bytes > MAX_NOTE_PATH_BYTES) throw new NoteError("too_large", `Path too long: ${bytes} bytes; the limit is ${MAX_NOTE_PATH_BYTES}.`);
+}
+
+/** Rounded up, so a note just over the limit never reads as exactly at it. */
+function megabytes(bytes: number): string {
+	return `${Math.ceil(bytes / 10_000) / 100} MB`;
 }
 
 function assertSerializedSize(content: string): void {
 	const bytes = Buffer.byteLength(content, "utf8");
-	if (bytes > MAX_NOTE_BYTES) throw new NoteError("too_large", `note exceeds ${MAX_NOTE_BYTES} UTF-8 bytes (serialized ${bytes})`);
+	if (bytes > MAX_NOTE_BYTES) throw new NoteError("too_large", `This note would be ${megabytes(bytes)}, over the ${megabytes(MAX_NOTE_BYTES)} limit per note; split it into several notes.`);
 }
 
 /** Frontmatter block only (the body separator stripped), for metadata-only change inputs. */
@@ -247,7 +252,7 @@ function assertWritableHome(scope: Scope, who: string | undefined, identity: Not
 	const current = scope === "agent" ? identity.agent : identity.model;
 	if (who === current) return;
 	const home = scope === "agent" ? `@agents/${who}/` : `@models/${who}/`;
-	throw new NoteError("invalid_scope", `${home} is not your home: writable homes are this session, @project/, @human/, @self/, and the current @model/ home`);
+	throw new NoteError("invalid_scope", `${home} is someone else's home; you can write to this session, @project/, @human/, @self/, or @model/.`);
 }
 
 /** Normalize parsed metadata exactly as a read does, including its access mutation. */
@@ -319,12 +324,12 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 		const scope = destination.scope;
 		assertWritableHome(scope, destination.who, identity);
 		if (operations.length === 0 && stableOptions.origin === undefined && stableOptions.crumpled === undefined) {
-			throw new NoteError("nothing_to_do", "nothing to do: provide edits or at least one of origin, crumpled");
+			throw new NoteError("nothing_to_do", "Nothing to change: pass edits, origin, crumpled, or rename_to.");
 		}
 		const path = physicalPath(scope, destination.path, identity, destination.who);
 		return withPathQueue(path, async () => {
 			const raw = await readFileIfExists(path);
-			if (raw === undefined) throw new NoteError("not_found", "note not found");
+			if (raw === undefined) throw new NoteError("not_found", `No note at ${noteIdentity(identity, address).address}.`);
 			const { meta, body } = parseNote(raw);
 			meta.scope = scope;
 			const beforeMeta: NoteMeta = { ...meta };
@@ -333,12 +338,12 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 			operations.forEach((operation, index) => {
 				const oldText = operation?.oldText;
 				const newText = operation?.newText;
-				if (typeof oldText !== "string" || oldText.length === 0) throw new NoteError("no_match", `edit ${index}: oldText must be a non-empty string`, { editIndex: index });
-				if (typeof newText !== "string") throw new NoteError("no_match", `edit ${index}: newText must be a string`, { editIndex: index });
+				if (typeof oldText !== "string" || oldText.length === 0) throw new NoteError("no_match", `edits[${index}].oldText is empty.`, { editIndex: index });
+				if (typeof newText !== "string") throw new NoteError("no_match", `edits[${index}].newText must be a string.`, { editIndex: index });
 				const lines = matchLineNumbers(next, oldText);
-				if (lines.length === 0) throw new NoteError("no_match", `edit ${index}: oldText does not occur in the note body`, { editIndex: index });
+				if (lines.length === 0) throw new NoteError("no_match", `edits[${index}].oldText isn't in the note${index > 0 ? " (after the earlier edits)" : ""}. Nothing was saved.`, { editIndex: index });
 				if (lines.length > 1 && !stableOptions.replaceAll) {
-					throw new NoteError("ambiguous_edit", `edit ${index}: oldText occurs ${lines.length} times (${anchorLines(lines)}); pass replace_all to replace every occurrence`, { lineNumbers: lines, editIndex: index });
+					throw new NoteError("ambiguous_edit", `edits[${index}].oldText appears ${lines.length} times (${anchorLines(lines)}); add surrounding text to pick one, or set replace_all. Nothing was saved.`, { lineNumbers: lines, editIndex: index });
 				}
 				if (oldText !== newText) applied++;
 				// Positional splicing preserves user replacement text byte-for-byte.
@@ -384,14 +389,14 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 		assertWritableHome(toScope, to.who, identity);
 		const fromPath = physicalPath(fromScope, from.path, identity, from.who);
 		const toPath = physicalPath(toScope, to.path, identity, to.who);
-		if (resolve(fromPath) === resolve(toPath)) throw new NoteError("nothing_to_do", "rename_to resolves to the same note");
+		if (resolve(fromPath) === resolve(toPath)) throw new NoteError("nothing_to_do", "rename_to points at the note itself.");
 		const [first, second] = [fromPath, toPath].sort();
 		return withPathQueue(first!, () => withPathQueue(second!, async () => {
 			const raw = await readFileIfExists(fromPath);
-			if (raw === undefined) throw new NoteError("not_found", "note not found");
+			if (raw === undefined) throw new NoteError("not_found", `No note at ${noteIdentity(identity, fromAddress).address}.`);
 			const targetRaw = await readFileIfExists(toPath);
 			if (targetRaw !== undefined && parseNote(targetRaw).meta.crumpledAt === undefined) {
-				throw new NoteError("already_exists", "rename_to target is a live note; crumple it first or pick another address");
+				throw new NoteError("already_exists", `${noteIdentity(identity, toAddress).address} already holds a note; crumple it first or pick another address.`);
 			}
 			const { meta, body } = parseNote(raw);
 			meta.scope = toScope;

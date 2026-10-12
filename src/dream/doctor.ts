@@ -54,7 +54,7 @@ export function doctor(home: string): string[] {
 					: root;
 				if (!targetHome) { report(path, `${address}: project context unavailable; use a resolvable reference`); continue; }
 				if (!existsSync(join(targetHome, parsed.path))) report(path, `${address}: target missing; update or remove the reference`);
-			} catch { report(path, `${address}: invalid address; ${ADDRESS_FORMS}`); }
+			} catch { report(path, `${address} isn't a note address. ${ADDRESS_FORMS}`); }
 		}
 	};
 	const walk = (dir: string, root: string, project?: string) => {

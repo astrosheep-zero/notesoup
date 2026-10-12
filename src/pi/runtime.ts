@@ -176,7 +176,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 		description: "Clear your in-context memory and start a fresh context window. Your session, notes, and history survive.",
 		parameters: Type.Object({}, { additionalProperties: false }),
 		async execute(_id, _params, _signal, _update, ctx) {
-			if (!enabled) return output({ error: "notesoup is off (/notesoup on to enable)" });
+			if (!enabled) return output({ error: "notesoup is off, so memory can't be cleared; the user can turn it on with `/notesoup on`." });
 			return output({ status: resets.request(currentWindowId(ctx)) }, undefined, true);
 		},
 	}));

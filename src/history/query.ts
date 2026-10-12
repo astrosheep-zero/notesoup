@@ -1,7 +1,7 @@
 /** Stable-anchor paging, folding and literal matching. The operation supplies the full-response budget check. */
 import { Type, type Static } from "typebox";
 import { failure, success, type Outcome } from "../tools/result.js";
-import { earliestMatchOffsetChars, prefixFit } from "../tools/output.js";
+import { earliestMatchOffsetChars, prefixFit, TOOL_OUTPUT_LIMIT } from "../tools/output.js";
 import { InvalidQueryError, searchQueries } from "../tools/schema.js";
 import { allItems, eventDocument, filteredItems, inSelection, visibleItem, HistoryFoldedRowSchema, HistoryPageItemSchema, MAX_FOLD_TOOL_NAMES, MAX_FOLD_TOOL_NAME_CHARS, type HistoryEvent, type HistoryFilter, type HistoryFoldedRow, type HistoryPageItem, type HistoryProjection } from "./history.js";
 
@@ -40,7 +40,7 @@ function isoUtcMs(value: string): number | undefined {
 function timeBound(name: "since" | "until", value: string | undefined): Outcome<number | undefined> {
 	if (value === undefined) return success(undefined);
 	const at = isoUtcMs(value);
-	return at === undefined ? failure("invalid_time", `${name} is not an ISO 8601 timestamp: "${value}"`) : success(at);
+	return at === undefined ? failure("invalid_time", `\`${name}\` isn't an ISO 8601 time: "${value}".`) : success(at);
 }
 
 /** Parse `since`/`until`; a malformed or inverted pair refuses here. */
@@ -50,7 +50,7 @@ function resolveTimeBounds(params: HistorySelection): Outcome<{ sinceMs?: number
 	const until = timeBound("until", params.until);
 	if (!until.ok) return until;
 	if (since.data !== undefined && until.data !== undefined && since.data >= until.data) {
-		return failure("invalid_time", "since must be earlier than until");
+		return failure("invalid_time", "`since` must be earlier than `until`.");
 	}
 	return success({ ...(since.data === undefined ? {} : { sinceMs: since.data }), ...(until.data === undefined ? {} : { untilMs: until.data }) });
 }
@@ -67,8 +67,8 @@ export const HistoryNewerSchema = Type.Object({
 
 export const HistoryPageSchema = Type.Object({
 	items: Type.Array(Type.Union([HistoryPageItemSchema, HistoryFoldedRowSchema])),
-	page_older: Type.Union([HistoryOlderSchema, Type.Null()], { description: "Params for the next page; null at the end." }),
-	page_newer: Type.Union([HistoryNewerSchema, Type.Null()], { description: "Params for the next page; null at the end." }),
+	page_older: Type.Union([HistoryOlderSchema, Type.Null()]),
+	page_newer: Type.Union([HistoryNewerSchema, Type.Null()]),
 }, { additionalProperties: false });
 
 /** One whole page payload, before it becomes an outcome. */
@@ -216,7 +216,7 @@ export function selectPage(projection: HistoryProjection, params: HistorySelecti
 	}
 	const page = pageData(projection, scoped, allVisible, kept, maxChars, folds);
 	if (!fits(page)) {
-		return failure("page_too_large", `${page.items.length} history rows and their fold summary do not fit one response even at their smallest; narrow with before_seq/after_seq or since/until, or read one seq`);
+		return failure("page_too_large", `Even trimmed to their shortest, these ${page.items.length} rows and their folded runs fill the ${TOOL_OUTPUT_LIMIT} a call can carry; narrow with \`before_seq\`/\`after_seq\` or \`since\`/\`until\`, pass \`roles\` to skip folding, or \`history_read\` one seq.`);
 	}
 	return success(page);
 }

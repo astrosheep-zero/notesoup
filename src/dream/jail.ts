@@ -12,11 +12,11 @@ export async function jailWritePath(notesHome: string, path: string, options: { 
 	try {
 		realNotesHome = await realpath(notesHome);
 	} catch {
-		throw new Error(`write jail: cannot resolve notes home ${notesHome}`);
+		throw new Error(`Can't open the notes home ${notesHome}.`);
 	}
 	const target = resolve(realNotesHome, path);
 	const targetParent = dirname(target);
-	if (isOutside(realNotesHome, targetParent)) throw new Error(`write jail: ${path} is outside notes home ${notesHome}`);
+	if (isOutside(realNotesHome, targetParent)) throw new Error(`${path} is outside the notes home ${notesHome}; dreams only write inside it.`);
 	// write creates parent directories itself. Create only after the lexical check, then
 	// canonicalize the parent so a symlink cannot lead the underlying tool out of home.
 	// delete passes createParent:false: the parent must already exist for there to be anything to remove.
@@ -25,25 +25,25 @@ export async function jailWritePath(notesHome: string, path: string, options: { 
 	try {
 		realTargetParent = await realpath(targetParent);
 	} catch {
-		throw new Error(`write jail: cannot resolve target parent in notes home ${notesHome}`);
+		throw new Error(`Can't open the folder of ${path} in the notes home.`);
 	}
-	if (isOutside(realNotesHome, realTargetParent)) throw new Error(`write jail: ${path} is outside notes home ${notesHome}`);
+	if (isOutside(realNotesHome, realTargetParent)) throw new Error(`${path} is outside the notes home ${notesHome}; dreams only write inside it.`);
 	let targetStats;
 	try {
 		targetStats = await lstat(target);
 	} catch (error: any) {
-		if (error.code !== "ENOENT") throw new Error(`write jail: cannot inspect target in notes home ${notesHome}`);
+		if (error.code !== "ENOENT") throw new Error(`Can't check ${path} in the notes home.`);
 	}
 	if (targetStats?.isSymbolicLink()) {
 		let realTarget: string;
 		try {
 			realTarget = await realpath(target);
 		} catch {
-			throw new Error(`write jail: cannot resolve target in notes home ${notesHome}`);
+			throw new Error(`Can't follow the link at ${path} in the notes home.`);
 		}
-		if (isOutside(realNotesHome, realTarget)) throw new Error(`write jail: ${path} is outside notes home ${notesHome}`);
+		if (isOutside(realNotesHome, realTarget)) throw new Error(`${path} is outside the notes home ${notesHome}; dreams only write inside it.`);
 	}
-	if (targetStats && targetStats.nlink > 1) throw new Error(`write jail: ${path} has hard links and is not allowed in notes home ${notesHome}`);
+	if (targetStats && targetStats.nlink > 1) throw new Error(`${path} has other hard links, which may reach outside the notes home; leave it alone.`);
 	return target;
 }
 
@@ -54,9 +54,9 @@ export async function deleteCrumpledNote(notesHome: string, path: string) {
 	try {
 		raw = await readFile(target, "utf8");
 	} catch (error: any) {
-		throw new Error(`delete: cannot read ${path} in notes home: ${error.message}`);
+		throw new Error(`Can't read ${path} in the notes home: ${error.message}`);
 	}
-	if (parseNote(raw).meta.crumpledAt === undefined) throw new Error(`delete: ${path} is not a crumpled note; only the wastebasket rule permits deletion`);
+	if (parseNote(raw).meta.crumpledAt === undefined) throw new Error(`${path} isn't crumpled; only crumpled notes can be deleted.`);
 	await unlink(target);
 	return { content: [{ type: "text" as const, text: `deleted ${path}` }], details: undefined };
 }

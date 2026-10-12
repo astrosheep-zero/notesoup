@@ -86,11 +86,11 @@ test("dreamer delete is jailed to the notes home and refuses live notes", async 
 	const ctx = { cwd: home } as any;
 	await del.execute("d1", { path: "global/dead.md" }, undefined, undefined, ctx);
 	assert.equal(existsSync(join(home, "global/dead.md")), false);
-	await assert.rejects(() => del.execute("d2", { path: "global/live.md" }, undefined, undefined, ctx), /not a crumpled note/);
+	await assert.rejects(() => del.execute("d2", { path: "global/live.md" }, undefined, undefined, ctx), /global\/live\.md/);
 	assert.equal(existsSync(join(home, "global/live.md")), true);
-	await assert.rejects(() => del.execute("d3", { path: join("..", basename(outside), "keep.md") } as any, undefined, undefined, ctx), /write jail/);
+	await assert.rejects(() => del.execute("d3", { path: join("..", basename(outside), "keep.md") } as any, undefined, undefined, ctx), /outside the notes home/);
 	symlinkSync(join(outside, "keep.md"), join(home, "link.md"));
-	await assert.rejects(() => del.execute("d4", { path: "link.md" }, undefined, undefined, ctx), /write jail/);
+	await assert.rejects(() => del.execute("d4", { path: "link.md" }, undefined, undefined, ctx), /outside the notes home/);
 	assert.equal(existsSync(join(outside, "keep.md")), true);
 });
 

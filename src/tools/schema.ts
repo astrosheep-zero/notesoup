@@ -24,8 +24,8 @@ export class InvalidQueryError extends Error {
  */
 export function searchQueries(query: unknown): string[] {
 	const candidates = typeof query === "string" ? [query] : query;
-	if (!Array.isArray(candidates) || candidates.length === 0) throw new InvalidQueryError("query must be a string or a non-empty array of strings");
-	if (!candidates.every((candidate) => typeof candidate === "string")) throw new InvalidQueryError("query array elements must be strings");
-	if (candidates.some((candidate) => candidate === "")) throw new InvalidQueryError("query strings must be non-empty: an empty query matches everything");
+	if (!Array.isArray(candidates) || candidates.length === 0) throw new InvalidQueryError("`query` must be a string or a non-empty list of strings.");
+	if (!candidates.every((candidate) => typeof candidate === "string")) throw new InvalidQueryError("Every item in the `query` list must be a string.");
+	if (candidates.some((candidate) => candidate === "")) throw new InvalidQueryError("`query` can't be an empty string; it would match everything.");
 	return candidates as string[];
 }

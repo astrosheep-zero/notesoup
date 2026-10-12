@@ -3,7 +3,7 @@ import { Type, type Static } from "typebox";
 import { localIso } from "../notes/frontmatter.js";
 import { isFilesystemError } from "../notes/fs-error.js";
 import { createNotesStore, NoteError, noteIdentity, type NoteChange, type NoteMeta, type NoteQueryStatus, type NoteRow, type Scope } from "../notes/index.js";
-import { prefixFit } from "./output.js";
+import { prefixFit, TOOL_OUTPUT_LIMIT } from "./output.js";
 import { failure, fitsResult, resultSchema, readTextWindow, renderOutcome, renderTextWindow, structuredBytes, success, TextWindowRequestSchema, TextWindowSchema, type Outcome } from "./result.js";
 import { nullableString, InvalidQueryError, searchQueries, searchQuery } from "./schema.js";
 
@@ -171,7 +171,7 @@ export type NotesSearchData = Static<typeof NotesSearchDataSchema>;
 type Snapshot<T> = Omit<NotesListData, "files"> & { files: T[] };
 
 /** Keep identities intact. Only search previews may shrink to make the first row fit. */
-function snapshot<T>(
+function snapshot<T extends { address: string }>(
 	rows: T[],
 	limit: number | undefined,
 	status: NoteQueryStatus,
@@ -191,11 +191,11 @@ function snapshot<T>(
 			const reduced = shrink(item, fits);
 			if (fits(reduced)) files.push(reduced);
 		}
-		if (files.length === 0) return failure("output_too_large", "The first matching note cannot fit in a response without losing its identity.");
+		if (files.length === 0) return failure("output_too_large", `\`${item.address}\` won't fit on the list (${TOOL_OUTPUT_LIMIT} per call); narrow \`glob\` to leave it out.`);
 		break;
 	}
 	const outcome = success(data(files));
-	return fitsResult(outcome, render) ? outcome : failure("output_too_large", "The notes snapshot metadata exceeds the response budget.");
+	return fitsResult(outcome, render) ? outcome : failure("output_too_large", `The list of unreachable homes is itself over ${TOOL_OUTPUT_LIMIT}; narrow \`glob\` to fewer homes.`);
 }
 
 function listedFile(row: Pick<NoteRow, "address" | "scope" | "meta">, identity: NotesIdentity): NotesListData["files"][number] {
@@ -210,7 +210,7 @@ function renderWriteData(data: NotesWriteData): string {
 
 export const notesWrite = {
 	name: "notes_write", label: "Notes write",
-	description: `Create or replace a note's body, keeping metadata; uncrumples a crumpled note. Name it for what it holds and when to use it. Store what git and history can't recover. ${ADDRESS_DESCRIPTION}`,
+	description: `Create or replace a note. Name it for what it holds and when to use it. Store what git and history can't recover. ${ADDRESS_DESCRIPTION}`,
 	parameters: notesWriteParameters, outputSchema: resultSchema(NotesWriteDataSchema), executionMode: "sequential",
 	async execute(params: Static<typeof notesWriteParameters>, identity: NotesIdentity): Promise<Outcome<NotesWriteData>> {
 		try {
@@ -246,18 +246,20 @@ function renderUpdate(result: Outcome<NotesUpdateData>): string {
 /** A shortened diff still says so in the receipt's own text, on both surfaces. */
 export const DIFF_SHORTENED_MARKER = "[diff truncated; update applied]";
 
+const RECEIPT_TOO_LONG = `Saved, but the receipt is too long to hand back (${TOOL_OUTPUT_LIMIT} per call). Check the note with \`notes_read\`.`;
+
 /** Bound a mutation receipt on both surfaces; a huge diff is cut to the longest fitting prefix and marked. */
 function boundedUpdate(data: NotesUpdateData): Outcome<NotesUpdateData> {
 	if (fitsResult(success(data), renderUpdate)) return success(data);
-	if (data.diff === "") return failure("output_too_large", "The update was applied, but its receipt metadata exceeds the response budget.");
+	if (data.diff === "") return failure("output_too_large", RECEIPT_TOO_LONG);
 	const diff = prefixFit(data.diff, (candidate) => fitsResult(success({ ...data, diff: `${candidate}\n${DIFF_SHORTENED_MARKER}` }), renderUpdate));
 	const result = success({ ...data, diff: `${diff}\n${DIFF_SHORTENED_MARKER}` });
-	return fitsResult(result, renderUpdate) ? result : failure("output_too_large", "The update was applied, but its receipt metadata exceeds the response budget.");
+	return fitsResult(result, renderUpdate) ? result : failure("output_too_large", RECEIPT_TOO_LONG);
 }
 
 export const notesUpdate = {
 	name: "notes_update", label: "Notes update",
-	description: `Edit a note's body, change its origin or crumpled state, or move it. Each \`oldText\` must match exactly once unless \`replace_all\` is true; frontmatter can't be edited. Returns a diff. ${ADDRESS_DESCRIPTION}`,
+	description: `Edit a note, change its origin or crumpled state, or move it. Each \`oldText\` must match exactly once unless \`replace_all\` is true. ${ADDRESS_DESCRIPTION}`,
 	parameters: notesUpdateParameters, outputSchema: resultSchema(NotesUpdateDataSchema), executionMode: "sequential",
 	async execute(params: Static<typeof notesUpdateParameters>, identity: NotesIdentity, renderDiff: (change: NoteChange) => string): Promise<Outcome<NotesUpdateData>> {
 		try {
@@ -288,15 +290,15 @@ function renderReadData(data: NotesReadData): string {
 
 export const notesRead = {
 	name: "notes_read", label: "Notes read",
-	description: `Read a note's metadata and body, without frontmatter. ${ADDRESS_DESCRIPTION}`,
+	description: `Read a note. ${ADDRESS_DESCRIPTION}`,
 	parameters: notesReadParameters, outputSchema: resultSchema(NotesReadDataSchema),
 	async execute(params: Static<typeof notesReadParameters>, identity: NotesIdentity): Promise<Outcome<NotesReadData>> {
 		try {
 			const note = await createNotesStore(identity).read(params.address);
-			if (!note) return failure("not_found", "note not found");
-			const totalChars = Array.from(note.body).length;
-			if (params.offset_chars !== undefined && params.offset_chars > totalChars) return failure("invalid_offset", `offset_chars ${params.offset_chars} is past the end of the body: the note has ${totalChars} body chars; the largest legal offset is ${totalChars} (an empty end-read)`);
 			const resolved = noteIdentity(identity, params.address);
+			if (!note) return failure("not_found", `No note at ${resolved.address}.`);
+			const totalChars = Array.from(note.body).length;
+			if (params.offset_chars !== undefined && params.offset_chars > totalChars) return failure("invalid_offset", `This note ends at char ${totalChars}; offset_chars ${params.offset_chars} is past the last word.`);
 			const metadata = noteMetadata(note.meta);
 			return readTextWindow(note.body, params.offset_chars, params.max_chars, (window) => ({ ...resolved, metadata, ...window }), (result) => renderOutcome(result, renderReadData));
 		} catch (error) { return failureOf(error); }

@@ -1,15 +1,17 @@
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import type { Static, TSchema } from "typebox";
-import { Check } from "typebox/value";
+import { Check, Errors } from "typebox/value";
 import { notesList, notesRead, notesSearch, notesUpdate, notesWrite } from "../tools/notes.js";
 import { loadNotesSnapshot } from "../boot/snapshot.js";
 import { renderBootBlock } from "../boot/render.js";
+import { CLAUDE_WIPE_SENTENCE, type BootToolNames } from "../boot/text.js";
+import { CLAUDE_WARNING_PROMPT, CONTINUATION } from "../budget/text.js";
+import { resolveClaudeLimits } from "./thresholds.js";
 import { projectKey } from "../notes/paths.js";
 import { snapshotNotesIdentity, type NotesIdentity } from "../notes/identity.js";
 import type { NoteChange } from "../notes/store.js";
 import type { Operation, Outcome } from "../tools/result.js";
-import type { BootToolNames } from "../boot/text.js";
 
 const MAX_REQUEST_BYTES = 512 * 1024;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
@@ -28,6 +30,15 @@ function identity(input: ClaudeIdentityInput): NotesIdentity {
 	if (!input || typeof input !== "object" || typeof input.cwd !== "string") throw new Error("invalid identity");
 	return snapshotNotesIdentity({ home: input.home, sessionId: input.sessionId, projectKey: projectKey(input.cwd), agent: input.agent, model: input.model });
 }
+/** The first schema violation, named by parameter so the model can fix that one field. */
+function paramProblem(schema: TSchema, params: unknown): string {
+	// A false subschema reports "schema is false"; its parent's additionalProperties error names the field instead.
+	const first = Errors(schema, params).find((error) => error.keyword !== "boolean");
+	if (!first) return "unrecognized shape";
+	const extra = first.keyword === "additionalProperties" ? `: ${(first.params as { additionalProperties: string[] }).additionalProperties.join(", ")}` : "";
+	const field = first.instancePath.replace(/^\//, "").replaceAll("/", ".");
+	return `${field ? `${field} ` : ""}${first.message}${extra}`;
+}
 function jsonValue(value: unknown): unknown { return JSON.parse(JSON.stringify(value)); }
 
 /** Bind one shared operation to the identity Claude supplies. Validate untyped Claude parameters against the shared operation schema before execution. */
@@ -40,7 +51,7 @@ function boundOperation<TParams extends TSchema, TData, TRest extends readonly u
 		parameters: operation.parameters,
 		async call(params, id) {
 			// Refuse before the operation can act: a rejected shape never reaches a write.
-			if (!Check(operation.parameters, params)) throw new Error(`invalid ${operation.name} parameters`);
+			if (!Check(operation.parameters, params)) throw new Error(`invalid ${operation.name} parameters: ${paramProblem(operation.parameters, params)}`);
 			// The same business outcome and the same renderer as the Pi tool; only the envelope differs.
 			const outcome = await operation.execute(params as Static<TParams>, id, ...rest);
 			return { text: operation.render(outcome), outcome };
@@ -65,6 +76,12 @@ export async function dispatch(request: unknown): Promise<unknown> {
 	if (!request || typeof request !== "object" || Array.isArray(request)) throw new Error("malformed request");
 	const value = request as Record<string, unknown>;
 	if (value.op === "schemas") return TOOL_NAMES.map((name) => ({ name, description: OPERATIONS[name].description, inputSchema: jsonValue(OPERATIONS[name].parameters) }));
+	// The shared reset prose lives here, not in the sandboxed hooks module, so Pi and Claude
+	// cannot drift apart. The hooks module caches one copy per session.
+	if (value.op === "texts") return { warning: CLAUDE_WARNING_PROMPT, continuation: CONTINUATION, wipeSentence: CLAUDE_WIPE_SENTENCE };
+	// Threshold derivation crosses the boundary as raw facts: everything the engine could
+	// read, unvalidated. resolveClaudeLimits guards every field and never throws.
+	if (value.op === "limits") return resolveClaudeLimits(value.facts);
 	if (value.op === "tool") {
 		if (typeof value.tool !== "string" || !(TOOL_NAMES as readonly string[]).includes(value.tool)) throw new Error("unknown tool");
 		const id = identity(value.identity as ClaudeIdentityInput);

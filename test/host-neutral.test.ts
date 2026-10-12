@@ -307,7 +307,7 @@ test("an unknown window_id names at most five known windows in its message", asy
 	assert.equal(outcome.ok, false);
 	if (!outcome.ok) {
 		assert.equal(outcome.error.code, "unknown_window_id");
-		assert.match(outcome.error.message, /unknown window_id "pcw:absent"; known: pcw:w0, pcw:w1, pcw:w2, pcw:w3, pcw:w4/, "the message names the known windows itself");
+		assert.match(outcome.error.message, /"pcw:absent".*pcw:w0, pcw:w1, pcw:w2, pcw:w3, pcw:w4\.$/, "the message names the known windows itself");
 		assert.equal(outcome.error.message.includes("pcw:w5"), false, "at most five known windows are named");
 	}
 });

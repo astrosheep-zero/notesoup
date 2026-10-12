@@ -4,7 +4,7 @@ import { SLUG_PATTERN, type Scope } from "./paths.js";
 
 export type NoteAddress = { scope: Scope; path: string; who?: string };
 
-export const ADDRESS_FORMS = "use <path> with no @ for this session, or @project/, @human/, @self/, or @model/ followed by a path";
+export const ADDRESS_FORMS = "Use <path> for this session, or @project/, @human/, @self/, or @model/ followed by a path.";
 
 /** A refusal names the offending input; JSON quoting keeps control chars visible, and stringify misses get String(). */
 function shown(value: unknown): string {
@@ -13,10 +13,10 @@ function shown(value: unknown): string {
 }
 
 export function assertVirtualPath(value: unknown): string {
-	if (typeof value !== "string" || value.length === 0) throw new NoteError("invalid_address", `invalid address ${shown(value)}: path must be a non-empty string`);
-	if (value.includes("\0") || value.includes("\\") || value.startsWith("/")) throw new NoteError("invalid_address", `invalid address ${shown(value)}: paths reject backslashes, leading "/", and NUL`);
+	if (typeof value !== "string" || value.length === 0) throw new NoteError("invalid_address", "The address is empty; give the note a path.");
+	if (value.includes("\0") || value.includes("\\") || value.startsWith("/")) throw new NoteError("invalid_address", `${shown(value)}: a note path can't start with "/" or contain "\\" or NUL.`);
 	const parts = value.split("/");
-	if (parts.some((part) => part.length === 0 || part === "." || part === "..")) throw new NoteError("invalid_address", `invalid address ${shown(value)}: paths reject "..", ".", and empty segments`);
+	if (parts.some((part) => part.length === 0 || part === "." || part === "..")) throw new NoteError("invalid_address", `${shown(value)}: a note path can't have empty, ".", or ".." folder names.`);
 	return value;
 }
 
@@ -49,8 +49,8 @@ export function globToRegExp(pattern: string): RegExp {
 /** Glob patterns are not virtual paths (`*` is legal), so they get their own guard. */
 export function assertGlobPattern(value: unknown): string | undefined {
 	if (value === undefined || value === null || value === "") return undefined;
-	if (typeof value !== "string") throw new NoteError("invalid_pattern", `invalid pattern ${shown(value)}: glob patterns must be strings`);
-	if (value.includes("\0") || value.includes("\\")) throw new NoteError("invalid_pattern", `invalid pattern ${shown(value)}: glob patterns reject NUL and backslashes`);
+	if (typeof value !== "string") throw new NoteError("invalid_pattern", `glob ${shown(value)} must be a string.`);
+	if (value.includes("\0") || value.includes("\\")) throw new NoteError("invalid_pattern", `glob ${shown(value)} can't contain "\\" or NUL.`);
 	return value;
 }
 
@@ -59,7 +59,7 @@ export function assertGlobPattern(value: unknown): string | undefined {
  * are relative; explicit agents/models addresses always name a canonical slug.
  */
 export function assertAddress(value: unknown): NoteAddress {
-	if (typeof value !== "string") throw new NoteError("invalid_address", `invalid address ${shown(value)}: ${ADDRESS_FORMS}`);
+	if (typeof value !== "string") throw new NoteError("invalid_address", `${shown(value)} isn't a note address. ${ADDRESS_FORMS}`);
 	let scope: Scope = "session";
 	let path = value;
 	let who: string | undefined;
@@ -76,16 +76,16 @@ export function assertAddress(value: unknown): NoteAddress {
 		else if (head === "agents" || head === "models") {
 			const nameEnd = tail.indexOf("/");
 			who = nameEnd === -1 ? tail : tail.slice(0, nameEnd);
-			if (!SLUG_PATTERN.test(who)) throw new NoteError("invalid_address", `invalid address ${shown(value)}: ${ADDRESS_FORMS}`);
+			if (!SLUG_PATTERN.test(who)) throw new NoteError("invalid_address", `${shown(value)} isn't a note address. ${ADDRESS_FORMS}`);
 			scope = head === "agents" ? "agent" : "model";
 			path = nameEnd === -1 ? "" : tail.slice(nameEnd + 1);
 		} else {
-			throw new NoteError("invalid_address", `invalid address ${shown(value)}: ${ADDRESS_FORMS}`);
+			throw new NoteError("invalid_address", `${shown(value)} isn't a note address. ${ADDRESS_FORMS}`);
 		}
-		if (path === "" && scope !== "agent" && scope !== "model") throw new NoteError("invalid_address", `invalid address ${shown(value)}: ${ADDRESS_FORMS}`);
-		if (path === "" && who === undefined) throw new NoteError("invalid_address", `invalid address ${shown(value)}: ${ADDRESS_FORMS}`);
+		if (path === "" && scope !== "agent" && scope !== "model") throw new NoteError("invalid_address", `${shown(value)} isn't a note address. ${ADDRESS_FORMS}`);
+		if (path === "" && who === undefined) throw new NoteError("invalid_address", `${shown(value)} isn't a note address. ${ADDRESS_FORMS}`);
 	}
-	if (path.includes("@")) throw new NoteError("invalid_address", `invalid address ${shown(value)}: ${ADDRESS_FORMS}`);
+	if (path.includes("@")) throw new NoteError("invalid_address", `${shown(value)} isn't a note address. ${ADDRESS_FORMS}`);
 	assertVirtualPath(path);
 	return { scope, path, who };
 }

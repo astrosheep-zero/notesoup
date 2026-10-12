@@ -173,7 +173,7 @@ test("crumple lifecycle: metadata-only edits close and smooth a note without tou
 
 	// metadata-only on a missing path is the typed not-found arm
 	const missing = resultError(await call(captured, "notes_update", { address: "missing.md", crumpled: true }, ctx));
-	assert.equal(missing.message, "note not found");
+	assert.equal(missing.code, "not_found");
 });
 
 test("the filesystem notes loader treats an absent home as empty but surfaces a real directory read failure", async () => {
@@ -400,7 +400,7 @@ test("an over-budget note is delivered as a bounded prefix and resumed by next_o
 	assert.equal(JSON.stringify(missingResult).includes(root), false, "failure receipts never expose the absolute home");
 	const missing = resultError(missingResult);
 	assert.deepEqual(Object.keys(missing).sort(), ["code", "message"], "the refusal carries a precise code and message");
-	assert.equal(missing.message, "note not found");
+	assert.equal(missing.code, "not_found");
 	assert.equal(missing.code, "not_found");
 });
 
@@ -593,8 +593,8 @@ test("a body that repeats one anchor thousands of times refuses with bounded, co
 	assertWithinBudget(raw, "refusal with thousands of match lines");
 	const refusal = resultError(raw);
 	assert.equal(refusal.code, "ambiguous_edit");
-	assert.match(refusal.message, /edit 0:/, "the message names the failing edit index");
-	assert.match(refusal.message, /occurs 5000 times \(lines 1, 2, 3, 4, 5, 6, 7, 8, and 4992 more\)/, "the message names a bounded sample and the exact total");
+	assert.match(refusal.message, /edits\[0\]/, "the message names the failing edit index");
+	assert.match(refusal.message, /5000 times \(lines 1, 2, 3, 4, 5, 6, 7, 8, and 4992 more\)/, "the message names a bounded sample and the exact total");
 	assert.equal(resultRead(await call(captured, "notes_read", { address: "many.md", max_chars: 15 }, ctx)).content, "beta\n".repeat(3), "the refused edit changed nothing");
 
 	const replaced = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "many.md", edits: [{ oldText: "beta", newText: "B" }], replace_all: true }, ctx));

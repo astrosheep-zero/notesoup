@@ -259,7 +259,7 @@ export function allItems(projection: HistoryProjection): HistoryEvent[] {
 export function unknownWindowId(projection: HistoryProjection, params: HistoryFilter): { message: string; known: string[] } | undefined {
 	if (typeof params.window_id !== "string") return undefined;
 	const known = projection.windows.map((current) => current.windowId);
-	return known.includes(params.window_id) ? undefined : { message: `unknown window_id "${params.window_id}"`, known };
+	return known.includes(params.window_id) ? undefined : { message: `No window "${params.window_id}" in this session`, known };
 }
 
 /**

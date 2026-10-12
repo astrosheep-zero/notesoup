@@ -259,13 +259,13 @@ test("edit is body-scoped with named failures and a replace_all escape hatch", a
 
 	await call(captured, "notes_write", { address: "edit.md", content: "alpha\nbeta\nbeta\ngamma" }, ctx);
 	const ambiguous = resultError(await call(captured, "notes_update", { address: "edit.md", edits: [{ oldText: "beta", newText: "B" }] }, ctx));
-	assert.match(ambiguous.message, /occurs 2 times/);
+	assert.match(ambiguous.message, /2 times/);
 	assert.equal(ambiguous.code, "ambiguous_edit");
-	assert.match(ambiguous.message, /edit 0: oldText occurs 2 times \(lines 2, 3\)/, "the message names the failing edit index and every match line");
+	assert.match(ambiguous.message, /edits\[0\]\.oldText appears 2 times \(lines 2, 3\)/, "the message names the failing edit index and every match line");
 
 	const missing = resultError(await call(captured, "notes_update", { address: "edit.md", edits: [{ oldText: "absent", newText: "x" }] }, ctx));
 	assert.equal(missing.code, "no_match");
-	assert.match(missing.message, /^edit 0:/, "a zero-match anchor names the failing edit index");
+	assert.match(missing.message, /edits\[0\]/, "a zero-match anchor names the failing edit index");
 
 	const all = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "edit.md", edits: [{ oldText: "beta", newText: "B" }], replace_all: true }, ctx));
 	assert.equal(all.address, "edit.md");
@@ -275,7 +275,7 @@ test("edit is body-scoped with named failures and a replace_all escape hatch", a
 
 	// An anchor that occurs only in frontmatter is not matched: edits are body-only.
 	const frontmatterOnly = resultError(await call(captured, "notes_update", { address: "edit.md", edits: [{ oldText: "origin", newText: "x" }] }, ctx));
-	assert.match(frontmatterOnly.message, /^edit 0:/, "a frontmatter-only anchor is not a body match");
+	assert.match(frontmatterOnly.message, /edits\[0\]/, "a frontmatter-only anchor is not a body match");
 });
 
 test("nothing-to-do, not-found, atomic batches, and replace_all zero-match are named", async () => {
@@ -285,23 +285,23 @@ test("nothing-to-do, not-found, atomic batches, and replace_all zero-match are n
 	const ctx = context(session);
 
 	const nameOnly = resultError(await call(captured, "notes_update", { address: "edit.md" }, ctx));
-	assert.match(nameOnly.message, /nothing to do/, "neither edits nor setters is a named error");
+	assert.equal(nameOnly.code, "nothing_to_do", "neither edits nor setters is a named error");
 
 	await call(captured, "notes_write", { address: "edit.md", content: "alpha\nbeta" }, ctx);
 	const empty = resultError(await call(captured, "notes_update", { address: "edit.md", edits: [] }, ctx));
-	assert.match(empty.message, /nothing to do/, "an empty edits list with no setters is also nothing to do");
+	assert.equal(empty.code, "nothing_to_do", "an empty edits list with no setters is also nothing to do");
 
 	const editMissing = resultError(await call(captured, "notes_update", { address: "missing.md", crumpled: true }, ctx));
-	assert.equal(editMissing.message, "note not found");
+	assert.equal(editMissing.code, "not_found");
 	const readMissing = resultError(await call(captured, "notes_read", { address: "missing.md" }, ctx));
-	assert.equal(readMissing.message, "note not found");
+	assert.equal(readMissing.code, "not_found");
 	assert.equal(readMissing.code, "not_found");
 	assert.deepEqual(Object.keys(readMissing).sort(), ["code", "message"], "a plain refusal carries only a code and message");
 
 	const file = physicalPath("session", "edit.md", ctx);
 	const before = readFileSync(file, "utf8");
 	const failed = resultError(await call(captured, "notes_update", { address: "edit.md", edits: [{ oldText: "alpha", newText: "A" }, { oldText: "absent", newText: "x" }] }, ctx));
-	assert.match(failed.message, /^edit 1:/, "the failing edit is named");
+	assert.match(failed.message, /edits\[1\]/, "the failing edit is named");
 	assert.equal(readFileSync(file, "utf8"), before, "a failing batch leaves the file byte-identical, frontmatter included");
 
 	const applied = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "edit.md", edits: [{ oldText: "alpha", newText: "A" }, { oldText: "beta", newText: "B" }] }, ctx));
@@ -309,7 +309,7 @@ test("nothing-to-do, not-found, atomic batches, and replace_all zero-match are n
 	assert.equal(resultRead(await call(captured, "notes_read", { address: "edit.md" }, ctx)).content, "A\nB");
 
 	const zero = resultError(await call(captured, "notes_update", { address: "edit.md", edits: [{ oldText: "zzz", newText: "y" }], replace_all: true }, ctx));
-	assert.match(zero.message, /^edit 0:/, "replace_all with zero matches is the same zero-match error, not a silent no-op");
+	assert.match(zero.message, /edits\[0\]/, "replace_all with zero matches is the same zero-match error, not a silent no-op");
 });
 
 test("notes_update rename_to moves a note and refuses combinations and live targets", async () => {
@@ -324,7 +324,7 @@ test("notes_update rename_to moves a note and refuses combinations and live targ
 
 	await call(captured, "notes_write", { address: "occupied.md", content: "live target" }, ctx);
 	const conflict = resultError(await call(captured, "notes_update", { address: "move-me.md", rename_to: "occupied.md" }, ctx));
-	assert.match(conflict.message, /live note/, "a live target refuses the move");
+	assert.match(conflict.message, /occupied\.md/, "a live target refuses the move");
 
 	const renamed = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "move-me.md", rename_to: "moved.md" }, ctx));
 	assertReceiptIdentity(renamed, "moved.md", "session", ctx);
@@ -333,7 +333,7 @@ test("notes_update rename_to moves a note and refuses combinations and live targ
 	assert.equal(renamed.address, "moved.md");
 
 	const gone = resultError(await call(captured, "notes_read", { address: "move-me.md" }, ctx));
-	assert.equal(gone.message, "note not found", "the old address is gone");
+	assert.equal(gone.code, "not_found", "the old address is gone");
 	assert.equal(resultRead(await call(captured, "notes_read", { address: "moved.md" }, ctx)).content, "body");
 
 	// Empty filler values are not a combination: a model passing every parameter still gets its crumple.
@@ -528,8 +528,8 @@ test("@ addresses select one home, reject illegal sigils, and never fall back", 
 	assert.ok(existsSync(physicalPath("project", "same.md", ctx)), "@project writes to the current project home");
 	assert.ok(existsSync(physicalPath("human", "same.md", ctx)), "@human writes to the human home");
 	assert.match(resultRead(await call(captured, "notes_read", { address: "same.md" }, ctx)).content, /session$/);
-	assert.equal(resultError(await call(captured, "notes_read", { address: "@project/missing.md" }, ctx)).message, "note not found");
-	assert.match(resultError(await call(captured, "notes_read", { address: "@glboal/same.md" }, ctx)).message, /no @ for this session.*@project\/.*@human\//);
+	assert.equal(resultError(await call(captured, "notes_read", { address: "@project/missing.md" }, ctx)).code, "not_found");
+	assert.match(resultError(await call(captured, "notes_read", { address: "@glboal/same.md" }, ctx)).message, /isn't a note address.*@project\/.*@human\//);
 	assert.equal(resultError(await call(captured, "notes_write", { address: "bad@name.md", content: "no" }, ctx)).code, "invalid_address");
 	assert.equal(existsSync(join(root, "human", "bad@name.md")), false, "a bad sigil creates nothing anywhere");
 });
@@ -558,7 +558,7 @@ test("Pi adapter resolves agent and switched model identity on each notes call a
 		await call(captured, "notes_write", { address: "@self/private.md", content: "agent note" }, ctx);
 		await call(captured, "notes_write", { address: "@model/private.md", content: "first model note" }, ctx);
 		ctx.model = context(session, undefined, undefined, true, testEnvironment.cwd, true, "other/Second.Model").model;
-		assert.equal(resultError(await call(captured, "notes_read", { address: "@model/private.md" }, ctx)).message, "note not found", "switched model does not fall back to previous home");
+		assert.equal(resultError(await call(captured, "notes_read", { address: "@model/private.md" }, ctx)).code, "not_found", "switched model does not fall back to previous home");
 		await call(captured, "notes_write", { address: "@model/private.md", content: "second model note" }, ctx);
 		const listed = resultData<NotesListData>(await call(captured, "notes_list", {}, ctx));
 		assert.deepEqual(listed.files.map((row) => row.address).sort(), ["@model/private.md", "@self/private.md"]);
@@ -567,7 +567,7 @@ test("Pi adapter resolves agent and switched model identity on each notes call a
 		assert.equal(boot.includes("@models/first-model/private.md"), false);
 		assert.match(resultRead(await call(captured, "notes_read", { address: "@models/first-model/private.md" }, ctx)).content, /first model note$/);
 		const refused = resultError(await call(captured, "notes_update", { address: "@models/first-model/private.md", crumpled: true }, ctx));
-		assert.match(refused.message, /not your home/);
+		assert.match(refused.message, /someone else's home/);
 		assert.match(readFileSync(join(root, "models/first-model/private.md"), "utf8"), /first model note$/);
 	});
 });

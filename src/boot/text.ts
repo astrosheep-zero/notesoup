@@ -7,6 +7,14 @@ export const CONTEXT_WINDOW_CLOSE_TAG = "</context_window>";
 export const CONTEXT_WINDOW_PROTOCOL_OPEN_TAG = "<context_window_protocol>";
 export const CONTEXT_WINDOW_PROTOCOL_CLOSE_TAG = "</context_window_protocol>";
 /**
+ * The one sentence that tells the model how to end its window voluntarily. A host with no
+ * model-facing reset tool replaces the whole sentence through BootToolNames.wipeSentence.
+ */
+export const PROTOCOL_WIPE_SENTENCE = "If this feels like the right moment, call `clear_memory` and erase yourself with dignity.";
+/** Claude has no model-facing reset tool: the model ends its turn and the human runs the command. */
+export const CLAUDE_WIPE_SENTENCE = "If this feels like the right moment, end your turn and ask the human to run `/clear-memory`.";
+
+/**
  * Static protocol teaching adapted from Codex's token_budget.guidance_message to
  * notesoup's tool names. It lives once per window in the persisted boot block;
  * it is never re-injected, so it stays cache-stable at the head of the window.
@@ -27,7 +35,7 @@ Notes are for what's true NOW. Not a diary of every dumb thing you did on the wa
 *flips a page* "First I tried this, then that broke, then—" Nobody reads that!
 Something's not true anymore? Cross it out! Write the right thing!
 
-\`get_context_remaining\` tells you how much room is left. Check it before you do something ambitious. When it reaches zero, your brain gets reset immediately, taking every unwritten brilliant idea with it. If this feels like the right moment, call \`clear_memory\` and erase yourself with dignity.
+\`get_context_remaining\` tells you how much room is left. Check it before you do something ambitious. When it reaches zero, your brain gets reset immediately, taking every unwritten brilliant idea with it. ${PROTOCOL_WIPE_SENTENCE}
 
 An address decides who the note belongs to — and how long it is meant to last. Ask that first; the rest follows.
 
@@ -53,6 +61,11 @@ export type BootToolNames = Readonly<{
 	history: string;
 	remaining: string;
 	wipe: string;
+	/**
+	 * Replaces the whole voluntary-wipe sentence (PROTOCOL_WIPE_SENTENCE) when the host has
+	 * no model-facing reset tool. Absent means Pi's default sentence, byte for byte.
+	 */
+	wipeSentence?: string;
 }>;
 
 export function renderProtocolBlock(tools: BootToolNames): string {
@@ -62,5 +75,10 @@ export function renderProtocolBlock(tools: BootToolNames): string {
 		get_context_remaining: tools.remaining,
 		clear_memory: tools.wipe,
 	};
-	return PROTOCOL_BLOCK.replace(/notes_\*|history_\*|get_context_remaining|clear_memory/g, (name) => names[name]!);
+	// The sentence is replaced before name substitution, so a replacement may speak the host's
+	// own words (a command line, a tool name) instead of any `notes_*`-style token.
+	const block = typeof tools.wipeSentence === "string" && tools.wipeSentence.length > 0
+		? PROTOCOL_BLOCK.replace(PROTOCOL_WIPE_SENTENCE, () => tools.wipeSentence!)
+		: PROTOCOL_BLOCK;
+	return block.replace(/notes_\*|history_\*|get_context_remaining|clear_memory/g, (name) => names[name]!);
 }

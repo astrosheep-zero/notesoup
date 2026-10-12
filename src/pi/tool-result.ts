@@ -16,8 +16,8 @@ export function piOperationResult<TData>(render: Renderer<TData>, outcome: Outco
 }
 
 export type ToolNamespace = { name: string; description: string };
-export const NOTES_NAMESPACE: ToolNamespace = { name: "notes", description: "Notes you choose to keep across context windows. See /skill:memory." };
-export const HISTORY_NAMESPACE: ToolNamespace = { name: "history", description: "What happened in this session, read-only. See /skill:memory." };
+export const NOTES_NAMESPACE: ToolNamespace = { name: "notes", description: "Notes you choose to keep across context windows. See the memory skill." };
+export const HISTORY_NAMESPACE: ToolNamespace = { name: "history", description: "What happened in this session, read-only. See the memory skill." };
 
 /** Register `operation` as a Pi tool; `run` supplies only the host context it needs. */
 export function registerOperation<TParams extends TSchema, TData, TRest extends readonly unknown[]>(

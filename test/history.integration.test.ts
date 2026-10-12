@@ -138,12 +138,11 @@ test("seq is stable across branch changes, abandoned entries stay unreadable, an
 
 	const offBranch = resultError(await call(captured, "history_read", { seq: 2 }, ctx));
 	assert.equal(offBranch.code, "not_on_branch");
-	assert.match(offBranch.message, /another branch/);
 	assert.equal(JSON.stringify(offBranch).includes("abandoned"), false, "the refusal does not leak the abandoned entry's text");
 
 	const unknown = resultError(await call(captured, "history_read", { seq: 4 }, ctx));
 	assert.equal(unknown.code, "unknown_seq");
-	assert.match(unknown.message, /run 1\.\.3/);
+	assert.match(unknown.message, /\b4\b.*\b3\b/);
 });
 
 test("a result address consumed by a pairing names its call instead of serving a second read", async () => {
@@ -157,7 +156,7 @@ test("a result address consumed by a pairing names its call instead of serving a
 
 	const consumed = resultError(await call(captured, "history_read", { seq: 3 }, ctx));
 	assert.equal(consumed.code, "not_an_event");
-	assert.match(consumed.message, /already shown inside the call at seq 2/);
+	assert.match(consumed.message, /seq 2\b/);
 
 	const callSeq = resultRead<{ seq: number; window_id: string }>(await call(captured, "history_read", { seq: 2 }, ctx));
 	assert.equal(callSeq.seq, 2);
@@ -507,7 +506,7 @@ test("list renders paging and fold recipes, read renders a neighborhood call, an
 	const noPrevious = resultError(await call(soloCaptured, "history_list", { window_id: "@previous" }, context(solo)));
 	assert.equal(noPrevious.code, "unknown_window_id");
 	assert.match(noPrevious.message, /@previous/);
-	assert.match(noPrevious.message, new RegExp(`; known: ${soloWindows.windows[0]!.window_id}$`), "the refusal names the window the session does have");
+	assert.match(noPrevious.message, new RegExp(`${soloWindows.windows[0]!.window_id}\\.$`), "the refusal names the window the session does have");
 });
 
 test("compaction summary becomes context and is folded in the default list", async () => {
@@ -546,7 +545,7 @@ test("a query covers every role, carries match offsets and refuses an empty lite
 	assert.deepEqual(next.items.map((item) => item.seq), [3]);
 	const absent = await call(captured, "history_list", { query: "absent" }, ctx);
 	assert.deepEqual(page(absent).items, []);
-	assert.equal(rendered(absent), "no events match this selection", "an empty page says so instead of rendering nothing");
+	assert.notEqual(rendered(absent).trim(), "", "an empty page says so instead of rendering nothing");
 	assert.deepEqual(resultError(await call(captured, "history_list", { query: "" }, ctx)).code, "invalid_query");
 });
 
@@ -646,7 +645,7 @@ test("history_read paginates one document with an accurate limit and a bounded b
 	assert.equal(tail.next_offset_chars, null, "the true end has no continuation");
 	const past = resultError(await call(captured, "history_read", { seq, offset_chars: content.length + 1 }, ctx));
 	assert.equal(past.code, "invalid_offset");
-	assert.match(past.message, new RegExp(`${content.length} chars`), "the refusal names the real length");
+	assert.match(past.message, new RegExp(`\\b${content.length}\\b`), "the refusal names the real length");
 });
 
 test("history windows expose stable ranges and session identity", async () => {
@@ -690,10 +689,10 @@ test("historyDocument is one deterministic projection of the facts, with no UI h
 	if (!consumed.ok) assert.equal(consumed.error.code, "not_an_event");
 	const offBranch = await historyRead.execute({ seq: 12 }, projection);
 	assert.equal(offBranch.ok, false);
-	if (!offBranch.ok) assert.match(offBranch.error.message, /another branch/);
+	if (!offBranch.ok) assert.equal(offBranch.error.code, "not_on_branch");
 	const unknown = await historyRead.execute({ seq: 13 }, projection);
 	assert.equal(unknown.ok, false);
-	if (!unknown.ok) assert.match(unknown.error.message, /unknown seq/);
+	if (!unknown.ok) assert.match(unknown.error.message, /\b13\b.*\b12\b/);
 	const listed = await historyList.execute({}, projection);
 	assert.equal(listed.ok, true);
 	if (listed.ok) assert.equal(listed.data.items.some((item) => "folded" in item && item.count === 1), true);

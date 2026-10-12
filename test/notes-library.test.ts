@@ -229,7 +229,7 @@ test("a massively ambiguous edit still reports every match line to a library cal
 			assert.equal(error.lineNumbers?.length, 2000, "the domain keeps every match line rather than a sample");
 			assert.deepEqual(error.lineNumbers?.slice(0, 3), [1, 2, 3]);
 			assert.equal(error.lineNumbers?.[1999], 2000);
-			assert.match(error.message, /occurs 2000 times \(lines 1, 2, 3, 4, 5, 6, 7, 8, and 1992 more\)/, "the message names the exact total and a bounded sample");
+			assert.match(error.message, /2000 times \(lines 1, 2, 3, 4, 5, 6, 7, 8, and 1992 more\)/, "the message names the exact total and a bounded sample");
 			assert.ok(Buffer.byteLength(error.message, "utf8") < 300, "the message stays small however many lines matched");
 			return true;
 		},
