@@ -10,7 +10,7 @@ import { dispatch, handleLine, type ClaudeToolResult } from "../src/claude/helpe
 import { DEFAULT_CLAUDE_RESET_MARGIN_TOKENS, resolveClaudeLimits } from "../src/claude/thresholds.js";
 import { WARNING_RUNWAY_TOKENS } from "../src/budget/constants.js";
 import { PROTOCOL_WIPE_SENTENCE, CLAUDE_WIPE_SENTENCE, renderProtocolBlock } from "../src/boot/text.js";
-import { CLAUDE_WARNING_PROMPT, CONTINUATION } from "../src/pi/reset/text.js";
+import { CLAUDE_WARNING_PROMPT, CONTINUATION } from "../src/budget/text.js";
 
 const identity = { home: mkdtempSync(join(tmpdir(), "claude-mod-")), sessionId: "session", cwd: process.cwd(), agent: "claude", model: "claude" };
 
@@ -30,16 +30,18 @@ type HookEngine = {
   env: { get: (name: string) => Promise<string | undefined> };
   session: {
     id: () => Promise<string>;
+    cwd: () => Promise<string>;
+    model: () => Promise<string>;
     messages: () => Promise<Array<{ role: string; text: string }>>;
-    usage: (options?: { breakdown?: boolean }) => Promise<{ context: HookUsageContext }>;
+    usage: (options?: { breakdown?: "summary" | "full" }) => Promise<{ context: HookUsageContext }>;
     compact: (options: { instructions: string }) => Promise<{ skip?: string; messages?: Array<{ role: string; text: string }> }>;
   };
-  settings?: { read: () => Promise<unknown> };
+  settings: { read: () => Promise<unknown> };
   command: { register: (spec: { name: string; description: string; immediate?: boolean }) => Promise<unknown> };
   clock: { after: (ms: number, callback: () => void | Promise<void>) => unknown };
   prompt: { submit: (input: { text: string }) => Promise<unknown> };
   tool: { register: (spec: HookToolSpec) => Promise<{ tool: string }> };
-  ui?: { notify?: (text: string, options?: { title?: string }) => Promise<unknown>; log?: (text: string) => void };
+  ui?: { toast?: (text: string, options?: { title?: string }) => Promise<unknown>; log?: (text: string) => void };
   process: { run: (argv: readonly string[], init?: { cwd?: string; stdin?: string }) => Promise<{ exitCode: number; stdout: string }> };
 };
 
@@ -75,12 +77,13 @@ function fakeEngine(home: string): { host: HookEngine; registered: HookToolSpec[
     notifications,
     host: {
       env: { get: async (name) => name === "PI_NOTES_HOME" ? home : undefined },
-      session: { id: async () => "hook-session", messages: async () => [], usage: async () => ({ context: {} }), compact: async () => ({ skip: "test default" }) },
+      session: { id: async () => "hook-session", cwd: async () => home, model: async () => "claude", messages: async () => [], usage: async () => ({ context: {} }), compact: async () => ({ skip: "test default" }) },
+      settings: { read: async () => ({}) },
       command: { register: async (spec) => ({ command: spec.name }) },
       clock: { after: () => { throw new Error("test has no pending manual timer") } },
       prompt: { submit: async () => undefined },
       tool: { register: async (spec) => { registered.push(structuredClone(spec)); return { tool: `mcp__notesoup__${spec.name}` }; } },
-      ui: { notify: async (text) => { notifications.push(text); }, log: (text) => { notifications.push(text); } },
+      ui: { toast: async (text) => { notifications.push(text); }, log: (text) => { notifications.push(text); } },
       process: { run: async (argv, init) => ({
         exitCode: 0,
         stdout: execFileSync(argv[0]!, argv.slice(1), { cwd: init?.cwd, input: init?.stdin, encoding: "utf8" }),
@@ -207,7 +210,14 @@ test("Claude limits derive from Claude's own auto-compact point, never a fixed p
   assert.equal(percent.unit, "percent");
   assert.ok(Math.abs(percent.native - 83.5) < 1e-9 && Math.abs(percent.reset - 79.404) < 1e-9 && Math.abs(percent.warn - 71.212) < 1e-9, "83.5 / 79.4 / 71.2 on 200K");
   assert.equal(limitPoints({ env: { pctOverride: "50" } }).native, 50);
-  assert.equal(limitPoints({ usage: { window: 8_000 } }).unit, "percent", "a window too small for the reserve degrades to percent");
+  // A real window is never re-expressed on the assumed 200K window, and no point is zero:
+  // the mod treats `measured >= reset` as due, so a zero point would clear memory every turn.
+  const tiny = limitPoints({ usage: { window: 8_000 } });
+  assert.deepEqual({ source: tiny.source, unit: tiny.unit }, { source: "window", unit: "tokens" }, "a real window answers even below the reserves");
+  assert.ok(tiny.reset >= 1 && tiny.warn >= 1, "a window smaller than the reserves still has a point");
+  const absurdMargin = limitPoints({ settings: { notesoup: { resetMarginTokens: 400_000 } } });
+  assert.equal(absurdMargin.source, "percent");
+  assert.ok(absurdMargin.reset > 0 && absurdMargin.warn > 0, "an absurd margin cannot zero the percent fallback either");
 });
 
 test("Claude limits read margins from the notesoup settings shape and ignore garbage", () => {
@@ -316,16 +326,16 @@ test("Claude Mod appends boot once and reuses persisted blocks after re-registra
 });
 
 test("Claude Mod boot failure preserves fallback with available, absent, or failing notifications", async (t) => {
-  for (const mode of ["available", "no ui", "no notify", "throws", "rejects"] as const) {
+  for (const mode of ["available", "no ui", "no toast", "throws", "rejects"] as const) {
     await t.test(mode, async (t) => {
       const hooks = await loadHookModule(t);
       const home = mkdtempSync(join(tmpdir(), "claude-hook-home-"));
       t.after(() => rmSync(home, { recursive: true, force: true }));
       const { host, notifications } = fakeEngine(home);
       if (mode === "no ui") delete host.ui;
-      else if (mode === "no notify") host.ui = {};
+      else if (mode === "no toast") host.ui = {};
       else if (mode === "throws" || mode === "rejects") {
-        host.ui = { notify: (text) => {
+        host.ui = { toast: (text) => {
           notifications.push(text);
           if (mode === "throws") throw new Error("notification unavailable");
           return Promise.reject(new Error("notification unavailable"));
@@ -354,7 +364,7 @@ test("Claude Mod boot failure preserves fallback with available, absent, or fail
         ...upstream,
         blocks: [...upstream.blocks, { name: "notesoup:boot", text: "# notesoup\nYour notes didn't load this time (helper exited unsuccessfully). Try `mcp__notesoup__notes_list`; if it fails too, tell the human." }],
       }, "boot failure keeps the original fallback and upstream fields even if notify is absent or fails");
-      const expectedNotifications = mode === "no ui" || mode === "no notify" ? [] : ["🥣 Notes didn't load"];
+      const expectedNotifications = mode === "no ui" || mode === "no toast" ? [] : ["🥣 Notes didn't load"];
       assert.deepEqual(notifications, expectedNotifications, "one user-facing notification reports the notes boot failure");
       assert.equal(bootRequests, 1);
       assert.equal(nextCalls, 1);
@@ -664,7 +674,11 @@ test("Claude Mod skips the automatic reset when thresholds cannot be resolved", 
   assert.equal(notifications.filter((text) => text.includes("Context thresholds unavailable")).length, 1, "one line, not one per turn");
 });
 
-test("Claude dream skill projection stays byte-identical to canonical shared files", () => {
+test("Claude skill projections stay byte-identical to canonical shared files", () => {
+  assert.deepEqual(
+    readFileSync(join(process.cwd(), "mods/notesoup/skills/memory/SKILL.md")),
+    readFileSync(join(process.cwd(), "skills/memory/SKILL.md")),
+  );
   assert.deepEqual(
     readFileSync(join(process.cwd(), "mods/notesoup/skills/dream/SKILL.md")),
     readFileSync(join(process.cwd(), "skills/dream/SKILL.md")),
@@ -676,4 +690,216 @@ test("Claude dream skill projection stays byte-identical to canonical shared fil
   const skill = readFileSync(join(process.cwd(), "mods/notesoup/skills/dream/SKILL.md"), "utf8");
   assert.match(skill, /\.\.\/\.\.\/playbook\.md/);
   assert.doesNotMatch(skill, /Claude.*runner|dream runner/i);
+});
+
+test("Claude Mod keeps the turn latch through subagent turns", async (t) => {
+	const home = mkdtempSync(join(tmpdir(), "claude-subagent-home-"));
+	t.after(() => rmSync(home, { recursive: true, force: true }));
+	const { host } = fakeEngine(home);
+	const handlers = new Map<string, HookHandler>();
+	(await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
+	const invoke = (name: string, e: Record<string, unknown> = {}) => handlers.get(name)!(host, e, async () => ({}));
+	let compactions = 0;
+	host.session.usage = async () => ({ context: { tokens: 190_000, window: 200_000 } });
+	host.session.compact = async ({ instructions }) => { compactions++; return await invoke("session.compact", { trigger: "plugin", instructions }) as { skip?: string; messages?: Array<{ role: string; text: string }> }; };
+	await invoke("session.start", { cwd: home, isInteractive: true });
+	await invoke("turn.start");
+	await invoke("turn.start", { agentId: "sub-1" });
+	await invoke("turn.complete", { agentId: "sub-1" });
+	await invoke("session.measure");
+	assert.equal(compactions, 0, "a subagent turn cannot release the main turn's latch");
+	await invoke("turn.complete");
+	assert.equal(compactions, 1, "the main turn still resets at its own end");
+});
+
+test("Claude Mod treats DISABLE_COMPACT=off as not disabled", async (t) => {
+	const home = mkdtempSync(join(tmpdir(), "claude-flag-off-home-"));
+	t.after(() => rmSync(home, { recursive: true, force: true }));
+	const { host, notifications } = fakeEngine(home);
+	host.env = { get: async (name) => name === "PI_NOTES_HOME" ? home : name === "DISABLE_COMPACT" ? "off" : undefined };
+	const handlers = new Map<string, HookHandler>();
+	(await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
+	const invoke = (name: string, e: Record<string, unknown> = {}) => handlers.get(name)!(host, e, async () => ({}));
+	let compactions = 0;
+	host.session.usage = async () => ({ context: { tokens: 190_000, window: 200_000 } });
+	host.session.compact = async ({ instructions }) => { compactions++; return await invoke("session.compact", { trigger: "plugin", instructions }) as { skip?: string; messages?: Array<{ role: string; text: string }> }; };
+	await invoke("session.start", { cwd: home, isInteractive: true });
+	assert.deepEqual(notifications.filter((text) => text.includes("DISABLE_COMPACT")), [], "an explicit off is not a disable");
+	await invoke("turn.start");
+	await invoke("turn.complete");
+	assert.equal(compactions, 1, "the automatic reset still runs");
+});
+
+test("Claude Mod retries an unresolvable threshold inside the same window", async (t) => {
+	const home = mkdtempSync(join(tmpdir(), "claude-retry-home-"));
+	t.after(() => rmSync(home, { recursive: true, force: true }));
+	const { host } = fakeEngine(home);
+	const helper = host.process.run;
+	let limitsCalls = 0;
+	host.process.run = async (argv, init) => {
+		const request = JSON.parse(String(init?.stdin ?? "{}")) as { op?: string };
+		if (request.op === "limits" && ++limitsCalls === 1) return { exitCode: 1, stdout: "" };
+		return await helper(argv, init);
+	};
+	const handlers = new Map<string, HookHandler>();
+	(await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
+	const invoke = (name: string, e: Record<string, unknown> = {}) => handlers.get(name)!(host, e, async () => ({}));
+	let compactions = 0;
+	host.session.usage = async () => ({ context: { tokens: 190_000, window: 200_000 } });
+	host.session.compact = async ({ instructions }) => { compactions++; return await invoke("session.compact", { trigger: "plugin", instructions }) as { skip?: string; messages?: Array<{ role: string; text: string }> }; };
+	await invoke("session.start", { cwd: home, isInteractive: true });
+	await invoke("turn.start");
+	await invoke("turn.complete");
+	assert.equal(limitsCalls, 1, "the first limits round trip failed");
+	assert.equal(compactions, 0, "one failed resolution does not disable the window");
+	await invoke("turn.start");
+	await invoke("turn.complete");
+	assert.equal(limitsCalls, 2, "the retry runs in the same window");
+	assert.equal(compactions, 1, "the retried resolution resets at the turn's end");
+});
+
+/** Start from a real retained boot, as after notesoup reset or a plugin reload. */
+async function retainedFixture(t: test.TestContext) {
+  const home = mkdtempSync(join(tmpdir(), "claude-lifecycle-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const { host } = fakeEngine(home);
+  const boot = await dispatch({ op: "boot", identity: { ...identity, home, cwd: home, sessionId: "hook-session" }, window: 2, tools: {
+    notes: "mcp__notesoup__notes_*", notesList: "mcp__notesoup__notes_list",
+    history: "unavailable", remaining: "unavailable", wipe: "/clear-memory",
+  } }) as string;
+  host.session.messages = async () => [{ role: "user", text: `# notesoup:boot\n${boot}` }];
+  const handlers = new Map<string, HookHandler>();
+  (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
+  const invoke = (name: string, e: Record<string, unknown> = {}, result: unknown = {}) =>
+    handlers.get(name)!(host, e, async () => result);
+  const context = async () => await invoke("prompt.context", {}, { blocks: [] }) as { blocks: Array<{ name: string; text: string }> };
+  await invoke("session.start", { cwd: home, isInteractive: true });
+  assert.deepEqual((await context()).blocks, [], "the existing boot is retained, not injected twice");
+  return { home, host, invoke, context, boot };
+}
+
+test("Claude session.end gives /clear, /resume and /branch a fresh boot and identity", async (t) => {
+  for (const action of ["clear", "resume", "branch"]) {
+    await t.test(action, async (t) => {
+      const { host, invoke, context } = await retainedFixture(t);
+      host.session.usage = async () => ({ context: { tokens: 142_424, window: 200_000 } });
+      assert.equal((await context()).blocks[0]?.name, "notesoup:warning", "the old window has already warned");
+      await invoke("turn.start");
+      await invoke("command.run", { command: "clear-memory" });
+      const ended = { sentinel: action };
+      assert.equal(await invoke("session.end", { reason: action === "clear" ? "clear" : "resume", sessionId: "hook-session" }, ended), ended);
+      host.session.id = async () => `after-${action}`;
+      host.session.messages = async () => [];
+      // Clear the old running-turn and queued-reset state, not just the retained boot.
+      let compactions = 0;
+      host.session.compact = async () => { compactions++; return {}; };
+      await invoke("turn.complete");
+      assert.equal(compactions, 0, "the old queued reset cannot spill into the new session");
+      const fresh = await context();
+      assert.deepEqual(fresh.blocks.map((block) => block.name), ["notesoup:boot", "notesoup:warning"]);
+      assert.match(fresh.blocks[0]!.text, new RegExp(`Current context window id: claude:after-${action}:0`));
+      assert.doesNotMatch(fresh.blocks[0]!.text, /claude:hook-session:/);
+      const requests: Array<{ identity?: { sessionId: string }; params?: Record<string, unknown> }> = [];
+      const run = host.process.run;
+      host.process.run = async (argv, init) => { requests.push(JSON.parse(init!.stdin!)); return run(argv, init); };
+      const written = await invoke("tool.call", { tool: "mcp__notesoup__notes_write", tool_use_id: "new-session", address: "session.md", content: action }) as { result: string };
+      assert.equal(written.result, "created session.md");
+      assert.equal(requests[0]!.identity?.sessionId, `after-${action}`, "tools also use the new session home");
+    });
+  }
+});
+
+test("Claude lazy identity detects a switched session without session.start or session.end", async (t) => {
+  const { host, context } = await retainedFixture(t);
+  host.session.id = async () => "lazy-session";
+  host.session.messages = async () => [];
+  const fresh = await context();
+  assert.deepEqual(fresh.blocks.map((block) => block.name), ["notesoup:boot"]);
+  assert.match(fresh.blocks[0]!.text, /Current context window id: claude:lazy-session:0/);
+});
+
+test("Claude native compaction invalidates only a removed main-conversation retained boot", async (t) => {
+  for (const mode of ["manual", "auto", "foreign plugin", "veto", "precompute", "subagent", "kept boot"]) {
+    await t.test(mode, async (t) => {
+      const { host, invoke, context } = await retainedFixture(t);
+      const before = { role: "user", text: "OLD" };
+      const trigger = mode === "foreign plugin" ? "plugin" : mode === "precompute" ? "precompute" : mode === "auto" ? "auto" : "manual";
+      const event = { trigger, messages: [before], ...(mode === "subagent" ? { agentId: "child" } : {}) };
+      const upstream = mode === "veto" ? { skip: "user veto" } : {
+        messages: mode === "kept boot" ? await host.session.messages() : [{ role: "user", text: "SUMMARY" }], sentinel: mode,
+      };
+      assert.equal(await invoke("session.compact", event, upstream), upstream, "native compaction is passed through unchanged");
+      const after = await context();
+      if (["manual", "auto", "foreign plugin"].includes(mode)) {
+        assert.deepEqual(after.blocks.map((block) => block.name), ["notesoup:boot"]);
+        assert.match(after.blocks[0]!.text, /Current context window id: claude:hook-session:2/);
+      } else {
+        assert.deepEqual(after.blocks, [], "veto, precompute and subagent leave the main boot alone");
+      }
+    });
+  }
+});
+
+test("Claude serves every registered notes tool to subagents without leaking event fields into params", async (t) => {
+  const { invoke } = await retainedFixture(t);
+  const call = (tool: string, params: Record<string, unknown>) => invoke("tool.call", {
+    tool: `mcp__notesoup__${tool}`, tool_use_id: "child-call", agentId: "child", ...params,
+  }) as Promise<{ result: string; isError?: boolean }>;
+  assert.equal((await call("notes_write", { address: "child.md", content: "child body" })).result, "created child.md");
+  assert.match((await call("notes_read", { address: "child.md" })).result, /child body/);
+  assert.equal((await call("notes_update", { address: "child.md", edits: [{ oldText: "child body", newText: "updated body" }] })).isError, undefined);
+  assert.match((await call("notes_list", {})).result, /child\.md/);
+  assert.match((await call("notes_search", { query: "updated body" })).result, /child\.md/);
+  assert.equal((await call("notes_read", { address: "absent.md" })).isError, true, "refusals retain the error discriminator in subagents");
+});
+
+test("Claude identity uses the documented current model and cwd, with a safe model fallback", async (t) => {
+  const { host, home, invoke } = await retainedFixture(t);
+  let model = "Claude Opus 4.6";
+  let cwd = home;
+  host.session.model = async () => model;
+  host.session.cwd = async () => cwd;
+  const seen: Array<{ identity: { model: string; cwd: string }; params: unknown }> = [];
+  const run = host.process.run;
+  host.process.run = async (argv, init) => { seen.push(JSON.parse(init!.stdin!)); return run(argv, init); };
+  const write = (address: string, content: string) => invoke("tool.call", { tool: "mcp__notesoup__notes_write", tool_use_id: "model-call", address, content }) as Promise<{ result: string }>;
+  assert.equal((await write("@model/model.md", "opus")).result, "created @model/model.md");
+  assert.equal(seen.at(-1)!.identity.model, "claude-opus-4-6");
+  assert.ok(readFileSync(join(home, "models/claude-opus-4-6/model.md"), "utf8").includes("opus"));
+  model = "Claude Sonnet 4.6";
+  cwd = mkdtempSync(join(tmpdir(), "claude-cwd-"));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  await write("@model/model.md", "sonnet");
+  assert.equal(seen.at(-1)!.identity.model, "claude-sonnet-4-6");
+  assert.equal(seen.at(-1)!.identity.cwd, cwd, "a /cd or worktree move is not frozen at session.start");
+  assert.ok(readFileSync(join(home, "models/claude-sonnet-4-6/model.md"), "utf8").includes("sonnet"));
+  host.session.model = async () => { throw new Error("model unavailable"); };
+  await write("@model/model.md", "fallback");
+  assert.equal(seen.at(-1)!.identity.model, "claude");
+});
+
+test("Claude session.end cannot be undone by an in-flight old reset", async (t) => {
+  const { host, invoke, context } = await retainedFixture(t);
+  let prepared!: () => void;
+  const ready = new Promise<void>((resolve) => { prepared = resolve; });
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => { release = resolve; });
+  host.session.usage = async () => ({ context: { tokens: 170_000, window: 200_000 } });
+  host.session.compact = async ({ instructions }) => {
+    const result = await invoke("session.compact", { trigger: "plugin", instructions }) as { messages: Array<{ role: string; text: string }> };
+    prepared();
+    await hold;
+    return result;
+  };
+  const finishing = invoke("turn.complete");
+  await ready;
+  await invoke("session.end", { reason: "clear", sessionId: "hook-session" });
+  host.session.id = async () => "after-flight";
+  host.session.messages = async () => [];
+  host.session.usage = async () => ({ context: {} });
+  release();
+  await finishing;
+  const fresh = await context();
+  assert.deepEqual(fresh.blocks.map((block) => block.name), ["notesoup:boot"]);
+  assert.match(fresh.blocks[0]!.text, /Current context window id: claude:after-flight:0/);
 });

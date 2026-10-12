@@ -13,3 +13,9 @@ export class NoteError extends Error {
 		this.editIndex = extra.editIndex;
 	}
 }
+
+/** A refusal names the offending input; JSON quoting keeps control chars visible, and stringify misses get String(). */
+export function shown(value: unknown): string {
+	const json = JSON.stringify(value);
+	return json === undefined ? String(value) : json;
+}

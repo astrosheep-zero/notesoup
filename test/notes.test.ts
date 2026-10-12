@@ -8,13 +8,15 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import test from "node:test";
 import type { TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { parseNote } from "../src/notes/frontmatter.js";
 import { projectKey } from "../src/notes/paths.js";
+import { globToRegExp } from "../src/notes/address.js";
 import type { Scope } from "../src/notes/index.js";
 import { listNotes, physicalPath, scopeDir } from "./helpers/notes.js";
 import type { NotesListData, NotesReadData, NotesSearchData, NotesUpdateData, NotesWriteData } from "../src/tools/notes.js";
@@ -184,9 +186,8 @@ test("session-note project ownership is per note, persistent across sessions, an
 
 test("linked git worktrees share the main checkout's project key", () => {
 	freshRoot();
-	// realpath keeps the fixture's gitdir pointer and the asserted paths on one spelling
-	// (macOS temp roots live under the /var -> /private/var symlink).
-	const root = realpathSync(testEnvironment.cwd);
+	// The fixture root is used as spelled: a symlinked temp root must still hash to one key.
+	const root = testEnvironment.cwd;
 	const main = join(root, "repo");
 	mkdirSync(main, { recursive: true });
 	const git = (args: string[]): void => {
@@ -585,3 +586,23 @@ async function withAgent(name: string | undefined, run: () => Promise<void>): Pr
 		else process.env.PI_NOTES_AGENT = previous;
 	}
 }
+
+test("a symlinked checkout hashes the canonical root, so one checkout has one project home", () => {
+	const root = realpathSync(testEnvironment.cwd);
+	const real = join(root, "real-repo");
+	mkdirSync(join(real, ".git"), { recursive: true });
+	const linked = join(root, "linked-repo");
+	symlinkSync(real, linked);
+	// The formula the key is documented to be: basename plus sha1 of the canonical root.
+	const canonicalKey = `${basename(real)}-${createHash("sha1").update(real).digest("hex").slice(0, 8)}`;
+	assert.equal(projectKey(linked), canonicalKey, "the symlinked spelling hashes the canonical root");
+	assert.equal(projectKey(real), canonicalKey, "the canonical spelling hashes the same root");
+	assert.notEqual(`${basename(linked)}-${createHash("sha1").update(linked).digest("hex").slice(0, 8)}`, canonicalKey, "a path-spelled key would differ");
+});
+
+test("a glob ? matches exactly one non-slash character", () => {
+	const pattern = globToRegExp("a?.md");
+	assert.equal(pattern.test("ab.md"), true, "? matches one ordinary character");
+	assert.equal(pattern.test("a.md"), false, "? is not optional");
+	assert.equal(pattern.test("a/b.md"), false, "? never matches a path separator");
+});

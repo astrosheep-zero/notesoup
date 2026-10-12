@@ -51,7 +51,7 @@ Still a tie? *shrugs* You've got a brain. Use it.
 
 Any other @ address is fake. End of discussion. @ addresses are not file paths: never pass them to file tools like \`read\`, \`write\`, \`edit\`, or \`bash\`.
 
-\`@project/MAP.md\`, \`@human/MAP.md\`, \`@self/MAP.md\`, and \`@model/MAP.md\` are special: their bodies are shown in your brain every time you wake. Each one maps the durable notes that belong to it: one line per note, with an unambiguous address and a short gist. Keep each one current.
+\`@project/MAP.md\`, \`@human/MAP.md\`, \`@self/MAP.md\`, and \`@model/MAP.md\` are special: their bodies are shown in your brain every time you wake. Each may carry a short Cheatsheet of rules that always apply (about 5 lines); the rest is the note index, with addresses and gists for lookup. Keep each one current.
 ${CONTEXT_WINDOW_PROTOCOL_CLOSE_TAG}`;
 
 /** Logical tool names are supplied by the composing host, not discovered here. */

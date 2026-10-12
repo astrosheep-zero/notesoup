@@ -1,6 +1,6 @@
 import type { NotesIdentity } from "../notes/identity.js";
 import { isFilesystemError } from "../notes/fs-error.js";
-import { createNotesStore, type NoteRow, type NotesQuery, type Scope } from "../notes/index.js";
+import { createNotesStore, type NoteRow, type Scope } from "../notes/index.js";
 
 const NOTES_HOMES = [
 	{ scope: "session", label: "this session" },
@@ -19,18 +19,13 @@ export type NotesSnapshot = {
 	readonly unavailable: readonly NotesHome[];
 };
 
-function queryForScope(scope: Scope): NotesQuery {
-	if (scope === "agent" || scope === "model") return { scope };
-	return { scope };
-}
-
 /**
  * Acquire the five homes once for one boot. Only filesystem-style errno failures are isolated;
  * malformed note data and unrelated construction errors remain visible to the caller.
  */
 export async function loadNotesSnapshot(identity: NotesIdentity, openedAt: number, loadHome?: NotesLoader): Promise<NotesSnapshot> {
 	const store = createNotesStore(identity);
-	const load = loadHome ?? ((scope: Scope) => store.list(queryForScope(scope)));
+	const load = loadHome ?? ((scope: Scope) => store.list({ scope }));
 	const homes = new Map<Scope, readonly NoteRow[]>();
 	const unavailable: NotesHome[] = [];
 	for (const home of NOTES_HOMES) {

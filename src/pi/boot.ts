@@ -17,18 +17,6 @@ export type BootMessage = {
 	readonly details: { windowId: string };
 };
 
-/** Render the boot block from one pre-await identity and acquired notes snapshot. */
-function bootContent(
-	agentName: string,
-	modelName: string,
-	firstWindowId: string,
-	currentId: string,
-	previousId: string | undefined,
-	notes: NotesSnapshot,
-): string {
-	return renderBootBlock({ agentName, modelName, firstWindowId, currentWindowId: currentId, previousWindowId: previousId, notes, tools: PI_TOOL_NAMES });
-}
-
 /**
  * Acquire one notes snapshot and build the boot custom message for a window. All identity
  * fields are captured synchronously before the first filesystem await.
@@ -45,7 +33,7 @@ export async function buildBootMessage(
 	if (isCurrent()) notifyIncompleteNotes?.(ctx, windowId, notes);
 	return {
 		customType: BOOT_TYPE,
-		content: bootContent(identity.agent, identity.model, rootWindowId(identity.sessionId), windowId, previousId, notes),
+		content: renderBootBlock({ agentName: identity.agent, modelName: identity.model, firstWindowId: rootWindowId(identity.sessionId), currentWindowId: windowId, previousWindowId: previousId, notes, tools: PI_TOOL_NAMES }),
 		display: false,
 		details: { windowId },
 	};

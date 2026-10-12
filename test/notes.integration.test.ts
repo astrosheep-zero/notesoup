@@ -327,20 +327,19 @@ test("the boot block gives awake agents the notes-home file layout", async () =>
 	assert.match(rendered, /`<path>`, no @[\s\S]*`@project\/<path>`[\s\S]*`@human\/<path>`/);
 });
 
-test("the boot protocol carries the approved copy and cuts an over-cap MAP with the approved notice", async () => {
+test("the boot binds its tools and bounds an over-cap MAP with a lookup pointer", async () => {
 	const session = manager();
 	const captured = makeExtension(session);
 	const ctx = context(session);
 	await call(captured, "notes_write", { address: "MAP.md", content: "M".repeat(MAP_BOOT_MAX_CHARS + 10) }, ctx);
 	const rendered = await explicitBoot(ctx, "pcw:test:root", undefined);
 
-	assert.ok(rendered.includes("History can still be dug up, probably: use `history_*` to excavate the mess, from old decisions to yesterday's missing socks. Found something? Write its seq down, or enjoy digging twice."), "the History paragraph is the approved copy");
-	assert.ok(rendered.includes("- `@project/<path>` — this project's long memory: what stays true after the current thing is over, what future work must respect, and the rakes already stepped on. **Decisions, not diaries.** Commit hashes, test counts, dates, the story of how you got here: git and history already have them, and last week's news filed as current law is worse than no note. Don't copy what other docs already say."), "the @project bullet is the approved copy");
-	assert.ok(rendered.includes("- `<path>`, no @") && rendered.includes("- `@human/<path>`") && rendered.includes("- `@self/<path>`") && rendered.includes("- `@model/<path>`"), "every address bullet is backticked");
-	assert.ok(rendered.includes("Any other @ address is fake. End of discussion. @ addresses are not file paths: never pass them to file tools like `read`, `write`, `edit`, or `bash`."), "the fake-address paragraph is the approved copy");
-
-	assert.ok(rendered.includes(`[truncated at ${MAP_BOOT_MAX_CHARS} chars; slim this MAP down, full body at \`MAP.md\`]`), "an over-cap MAP is cut with the approved notice");
-	assert.equal(rendered.includes("MAP cut at"), false, "the retired cut notice is gone");
+	for (const tool of ["notes_*", "history_*", "get_context_remaining", "clear_memory"]) {
+		assert.ok(rendered.includes(`\`${tool}\``), `${tool} is bound in the protocol`);
+	}
+	assert.ok(rendered.includes("M".repeat(MAP_BOOT_MAX_CHARS)), "the existing MAP cap keeps a bounded prefix");
+	assert.equal(rendered.includes("M".repeat(MAP_BOOT_MAX_CHARS + 1)), false, "the over-cap suffix is not inlined");
+	assert.ok(rendered.includes("`MAP.md`"), "the full MAP remains available by address");
 	for (const retired of ["history_windows", "history_list", "history_read"]) {
 		assert.equal(rendered.includes(retired), false, `${retired} no longer appears in the boot block`);
 	}

@@ -1,6 +1,6 @@
 {
 	"name": "notesoup",
-	"version": "0.42.0",
+	"version": "0.43.0",
 	"type": "module",
 	"main": "./dist/src/index.js",
 	"types": "./dist/src/index.d.ts",
@@ -43,14 +43,16 @@
 		"README.md",
 		"playbook.md",
 		"skills",
-		"mods"
+		"mods",
+		"!mods/notesoup/types",
+		"!mods/notesoup/tsconfig.json"
 	],
 	"bin": {
 		"dream": "dist/src/pi/dream/cli.js"
 	},
 	"scripts": {
 		"build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json && node scripts/build-extension.mjs && node -e \"require('node:fs').chmodSync('dist/src/pi/dream/cli.js', 0o755)\"",
-		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"typecheck": "tsc -p tsconfig.json --noEmit && tsc -p mods/notesoup/tsconfig.json",
 		"test": "npm run build && node --test dist/test/*.test.js",
 		"prepublishOnly": "npm run typecheck",
 		"prepack": "npm run build"

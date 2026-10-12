@@ -11,7 +11,7 @@ export function notesRoot(): string {
 }
 
 /** Translate the current Pi runtime into a fresh, explicit identity snapshot. */
-export function agentSlug(_ctx: ExtensionContext): string {
+export function agentSlug(): string {
 	return slugify(process.env.PI_NOTES_AGENT ?? "anonymous");
 }
 
@@ -27,7 +27,7 @@ export function notesIdentityFromPi(ctx: ExtensionContext, home = notesRoot()): 
 		home,
 		sessionId: ctx.sessionManager.getSessionId(),
 		projectKey: projectKey(ctx.cwd),
-		agent: agentSlug(ctx),
+		agent: agentSlug(),
 		model: modelSlug(ctx),
 	};
 }

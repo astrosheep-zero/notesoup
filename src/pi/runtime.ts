@@ -8,16 +8,14 @@ import { currentReset, currentWindowId, isCheckpointBackedReset, isWindowBoot, i
 import { registerResetLifecycle } from "./reset/lifecycle.js";
 import { buildResetDrafts } from "./reset/artifacts.js";
 import { BOOT_TYPE, MANUAL_WIPE_TYPE } from "./entries.js";
-import { WARNING_CONTENT } from "./reset/text.js";
+import { WARNING_CONTENT } from "../budget/text.js";
 import { ensureBoot, type IncompleteNotesNotifier } from "./boot.js";
 import { errorMessage } from "../error-message.js";
 
 function readPackageVersion(): string {
 	for (const up of ["../../package.json", "../../../package.json"]) {
-		try {
-			const parsed = JSON.parse(readFileSync(new URL(up, import.meta.url), "utf8")) as { version?: string };
-			if (parsed.version) return parsed.version;
-		} catch { /* try the next candidate */ }
+		try { const { version } = JSON.parse(readFileSync(new URL(up, import.meta.url), "utf8")) as { version?: string }; if (version) return version; }
+		catch { /* try the next candidate */ }
 	}
 	return "dev";
 }
@@ -59,7 +57,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 		const homes = snapshot.unavailable.map((home) => home.label).join(", ");
 		ctx.ui.notify(`🥣 Some notes didn't load: ${homes}`, "warning");
 	};
-	const budget = registerBudget(pi, () => enabled, settingsManager, (windowId) => resets.closeOut(windowId, "automatic"));
+	const budget = registerBudget(pi, () => enabled, settingsManager);
 
 	pi.on("session_start", async (_event, ctx) => {
 		const generation = ++lifecycleGeneration;
@@ -124,6 +122,8 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 				enabled = false;
 				lifecycleGeneration++;
 				pendingResetNotices.clear();
+				incompleteNotesNotified.clear();
+				missingBootNotice = undefined;
 				budget.clear();
 				resets.clear();
 			} else if (arg !== "") {
@@ -194,4 +194,5 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 		},
 		budget,
 	});
+	budget.setCloseOut((windowId) => resets.closeOut(windowId, "automatic"));
 }

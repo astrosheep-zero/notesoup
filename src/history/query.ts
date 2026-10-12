@@ -1,7 +1,8 @@
 /** Stable-anchor paging, folding and literal matching. The operation supplies the full-response budget check. */
 import { Type, type Static } from "typebox";
 import { failure, success, type Outcome } from "../tools/result.js";
-import { earliestMatchOffsetChars, prefixFit, TOOL_OUTPUT_LIMIT } from "../tools/output.js";
+import { prefixFit, TOOL_OUTPUT_LIMIT } from "../tools/output.js";
+import { earliestMatchOffsetChars } from "../text-match.js";
 import { InvalidQueryError, searchQueries } from "../tools/schema.js";
 import { allItems, eventDocument, filteredItems, inSelection, visibleItem, HistoryFoldedRowSchema, HistoryPageItemSchema, MAX_FOLD_TOOL_NAMES, MAX_FOLD_TOOL_NAME_CHARS, type HistoryEvent, type HistoryFilter, type HistoryFoldedRow, type HistoryPageItem, type HistoryProjection } from "./history.js";
 
@@ -28,19 +29,12 @@ export type HistorySelection = HistoryFilter & {
 /** ISO 8601 date or date-time; the offset is optional (group 1) and a missing one is read as UTC. */
 const ISO_8601 = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?(Z|[+-]\d{2}:?\d{2})?$/;
 
-/** Epoch ms for one ISO 8601 value, with a missing offset read as UTC. */
-function isoUtcMs(value: string): number | undefined {
-	const match = ISO_8601.exec(value);
-	if (match === null) return undefined;
-	const at = Date.parse(match[1] === undefined ? `${value}Z` : value);
-	return Number.isNaN(at) ? undefined : at;
-}
-
 /** Epoch ms for one optional time param, or a refusal naming it. */
 function timeBound(name: "since" | "until", value: string | undefined): Outcome<number | undefined> {
 	if (value === undefined) return success(undefined);
-	const at = isoUtcMs(value);
-	return at === undefined ? failure("invalid_time", `\`${name}\` isn't an ISO 8601 time: "${value}".`) : success(at);
+	const match = ISO_8601.exec(value);
+	const at = match === null ? undefined : Date.parse(match[1] === undefined ? `${value}Z` : value);
+	return at === undefined || Number.isNaN(at) ? failure("invalid_time", `\`${name}\` isn't an ISO 8601 time: "${value}".`) : success(at);
 }
 
 /** Parse `since`/`until`; a malformed or inverted pair refuses here. */
@@ -181,16 +175,6 @@ function selectionCandidates(projection: HistoryProjection, params: HistorySelec
 }
 
 /**
- * Take the limit from the end `from` names, starting there so a budget for one row keeps the most
- * important row. The selection is already filtered to its range; `from` never states a direction.
- */
-function orderedCandidates(vis: Candidate[], params: HistorySelection, limit: number): Candidate[] {
-	const ascending = [...vis].sort((a, b) => a.event.seq - b.event.seq);
-	const selected = params.from === "oldest" ? ascending.slice(0, limit) : ascending.slice(-limit);
-	return params.from === "oldest" ? selected : selected.reverse();
-}
-
-/**
  * Resolve the time bounds once, then filter and fold against the same [sinceMs, untilMs) window.
  * Grow the page in selection order; shorten the first preview only when no full row fits.
  */
@@ -201,9 +185,12 @@ export function selectPage(projection: HistoryProjection, params: HistorySelecti
 	const candidates = selectionCandidates(projection, scoped);
 	if (!candidates.ok) return candidates;
 	const vis = candidates.data;
-	const limit = scoped.limit ?? 20;
+	// Take the limit from the end `from` names, so a budget for one row keeps the most important one.
+	// At least one: `slice(-0)` would otherwise return the whole selection.
+	const limit = Math.max(1, scoped.limit ?? 20);
 	const folds = foldsRuns(scoped);
-	const ordered = orderedCandidates(vis, scoped, limit);
+	const ascending = [...vis].sort((a, b) => a.event.seq - b.event.seq);
+	const ordered = scoped.from === "oldest" ? ascending.slice(0, limit) : ascending.slice(-limit).reverse();
 	const allVisible = vis.map((candidate) => candidate.event).sort((a, b) => a.seq - b.seq);
 	const kept: Candidate[] = [];
 	for (const candidate of ordered) {

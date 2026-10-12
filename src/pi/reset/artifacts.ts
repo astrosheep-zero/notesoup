@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext, SessionBoundaryDraft, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { BOOT_TYPE, CONTINUATION_TYPE, RESET_MARKER_TYPE, RESET_PROMPT_TYPE } from "../entries.js";
-import { CONTINUATION } from "./text.js";
-import { currentWindowId, isWindowBootEntry, isWindowMarker, previousWindowId, type WindowMarker } from "../window.js";
+import { CONTINUATION } from "../../budget/text.js";
+import { currentWindowId, isForeignResetTailEntry, isWindowBootEntry, isWindowMarker, previousWindowId, type WindowMarker } from "../window.js";
 import { buildBootMessage, sendBoot, type IncompleteNotesNotifier } from "../boot.js";
 
 export type ResetTailState = { readonly boot: boolean; readonly continuation: boolean };
@@ -13,7 +13,7 @@ export function isWindowContinuationEntry(entry: SessionEntry): boolean {
 }
 
 /** The single continuation sender: the only reset prose persisted for a window. */
-export function sendContinuation(pi: ExtensionAPI): void {
+function sendContinuation(pi: ExtensionAPI): void {
 	pi.sendMessage(
 		{ customType: CONTINUATION_TYPE, content: CONTINUATION, display: false },
 		{ triggerTurn: false },
@@ -74,7 +74,7 @@ export function inspectResetTail(ctx: ExtensionContext, markerId: string, window
 			continuation = true;
 			continue;
 		}
-		if (isWindowMarker(entry) || entry.type === "message" || entry.type === "custom_message" || entry.type === "compaction" || entry.type === "branch_summary") {
+		if (isForeignResetTailEntry(entry)) {
 			return undefined;
 		}
 	}

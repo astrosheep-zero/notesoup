@@ -71,6 +71,14 @@ function hasWindowId(details: unknown, windowId: string): boolean {
 		(details as { windowId: string }).windowId === windowId;
 }
 
+/**
+ * An entry that cannot appear between a reset marker and its boot/continuation without
+ * breaking the closed reset shape. Shared so confirmation and repair cannot drift apart.
+ */
+export function isForeignResetTailEntry(entry: SessionEntry): boolean {
+	return isWindowMarker(entry) || entry.type === "message" || entry.type === "custom_message" || entry.type === "compaction" || entry.type === "branch_summary";
+}
+
 /** Match a provider-facing boot message, optionally by window identity. */
 export function isWindowBoot(message: AgentMessage, windowId?: string): boolean {
 	return message.role === "custom" && message.customType === BOOT_TYPE && (windowId === undefined || hasWindowId(message.details, windowId));

@@ -6,7 +6,7 @@ import type { Static, TSchema } from "typebox";
 import { wireResult, type Operation, type Outcome, type Renderer } from "../tools/result.js";
 
 /** Operation data is schema-derived JSON; only the unresolved generic needs a JsonValue assertion. */
-export function piOperationResult<TData>(render: Renderer<TData>, outcome: Outcome<TData>): AgentToolResult<undefined> {
+function piOperationResult<TData>(render: Renderer<TData>, outcome: Outcome<TData>): AgentToolResult<undefined> {
 	return {
 		content: [{ type: "text", text: render(outcome) }],
 		structuredContent: wireResult(outcome) as unknown as JsonValue,

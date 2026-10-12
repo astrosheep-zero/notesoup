@@ -40,6 +40,7 @@ export type NoteChange =
 	| { kind: "body" | "metadata"; before: string; after: string };
 export type NoteEditResult = { meta: NoteMeta; applied: number; resolvedScope: Scope; change: NoteChange };
 export type NoteRenameResult = { meta: NoteMeta; replacedCrumpledTarget: boolean };
+/** A home, or one unreadable note inside it, that a status-reporting query could not read. */
 export type NoteQueryStatus = { homesUnavailable: string[] };
 export type NoteQueryResult<T> = { rows: T[]; status: NoteQueryStatus };
 
@@ -114,11 +115,6 @@ async function walkMarkdown(dir: string, base = dir): Promise<string[]> {
 	return paths;
 }
 
-function matcherFor(pattern: unknown): RegExp | undefined {
-	const normalized = assertGlobPattern(pattern);
-	return normalized === undefined ? undefined : globToRegExp(normalized);
-}
-
 /** Which homes one call iterates; reserved heads narrow traversal before any file is read. */
 type HomeRef = { scope: Scope; who?: string };
 
@@ -146,11 +142,6 @@ function normalizePattern(pattern: string | undefined, identity: NotesIdentity):
 	return pattern;
 }
 
-function assertScope(value: unknown): Scope {
-	if (!isScope(value)) throw new NoteError("invalid_scope", `scope must be one of session, project, human, agent, model (got ${JSON.stringify(value)})`);
-	return value;
-}
-
 function assertOrigin(value: unknown): Origin {
 	if (!isOrigin(value)) throw new NoteError("invalid_origin", `origin must be one of user, self, external (got ${JSON.stringify(value)})`);
 	return value;
@@ -165,7 +156,8 @@ function assertWho(value: unknown): string {
 
 async function homesFor(identity: NotesIdentity, opts: NotesQuery): Promise<HomeRef[]> {
 	if (opts.scope !== undefined) {
-		const scope = assertScope(opts.scope);
+		if (!isScope(opts.scope)) throw new NoteError("invalid_scope", `scope must be one of session, project, human, agent, model (got ${JSON.stringify(opts.scope)})`);
+		const scope = opts.scope;
 		if (opts.who !== undefined) {
 			const who = assertWho(opts.who);
 			if (scope !== "agent" && scope !== "model") throw new NoteError("invalid_scope", "who is only valid with agent or model scope");
@@ -255,14 +247,6 @@ function assertWritableHome(scope: Scope, who: string | undefined, identity: Not
 	throw new NoteError("invalid_scope", `${home} is someone else's home; you can write to this session, @project/, @human/, @self/, or @model/.`);
 }
 
-/** Normalize parsed metadata exactly as a read does, including its access mutation. */
-function accessedMeta(meta: NoteMeta, scope: Scope, now: number): NoteMeta {
-	const next = { ...meta, scope };
-	next.lastAccessed = now;
-	next.accessCount = (typeof next.accessCount === "number" ? next.accessCount : 0) + 1;
-	return next;
-}
-
 /** Create a store over one validated, immutable snapshot of the supplied explicit identity. */
 export function createNotesStore(input: NotesIdentity): NotesStore {
 	const identity = snapshotNotesIdentity(input);
@@ -273,7 +257,9 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 		assertWritablePath(destination.path);
 		const scope = destination.scope;
 		assertWritableHome(scope, destination.who, identity);
-		const origin = assertOrigin(stableOptions.origin ?? "self");
+		// Absent means "keep whatever the note already says": replacing a note must not silently
+		// re-attribute a user-written note to the agent that happened to rewrite it.
+		const origin = stableOptions.origin === undefined ? undefined : assertOrigin(stableOptions.origin);
 		const path = physicalPath(scope, destination.path, identity, destination.who);
 		return withPathQueue(path, async () => {
 			const now = writeStamp();
@@ -283,7 +269,7 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 			const outcome = existing === undefined ? "created" : existing.crumpledAt === undefined ? "overwrote" : "uncrumpled";
 			const meta: NoteMeta = existing ?? {
 				scope,
-				origin,
+				origin: origin ?? "self",
 				createdAt: now,
 				updatedAt: now,
 				lastAccessed: now,
@@ -291,7 +277,7 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 				...(scope === "session" ? { project: identity.projectKey } : {}),
 			};
 			meta.scope = scope;
-			meta.origin = origin;
+			if (origin !== undefined) meta.origin = origin;
 			delete meta.crumpledAt;
 			meta.updatedAt = now;
 			const serialized = serializeNote(meta, cleanBody);
@@ -310,7 +296,8 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 			if (raw === undefined) return undefined;
 			const now = Date.now();
 			const parsed = parseNote(raw, now);
-			const meta = accessedMeta(parsed.meta, scope, now);
+			// A read records its own access, exactly as a write records an edit.
+			const meta: NoteMeta = { ...parsed.meta, scope, lastAccessed: now, accessCount: (typeof parsed.meta.accessCount === "number" ? parsed.meta.accessCount : 0) + 1 };
 			await atomicWrite(path, serializeNote(meta, parsed.body));
 			return { meta, body: parsed.body, resolvedScope: scope };
 		});
@@ -413,7 +400,9 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 	}
 
 	async function* scan(options: NotesQuery, status?: NoteQueryStatus): AsyncGenerator<Omit<NoteRow, "sizeBytes">> {
-		const matcher = matcherFor(normalizePattern(options.glob, identity));
+		const pattern = normalizePattern(options.glob, identity);
+		const normalized = assertGlobPattern(pattern);
+		const matcher = normalized === undefined ? undefined : globToRegExp(normalized);
 		let homes: HomeRef[];
 		try {
 			homes = await homesFor(identity, options);
@@ -425,24 +414,32 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 		for (const home of homes) {
 			const scope = home.scope;
 			const root = scopeDir(scope, identity, home.who);
-			const homeRows: Array<Omit<NoteRow, "sizeBytes">> = [];
+			let paths: string[];
 			try {
-				for (const path of await walkMarkdown(root)) {
-					if (matcher && !matcher.test(canonicalAddressFor(identity, scope, path, home.who))) continue;
-					const address = addressFor(identity, scope, path, home.who);
-					const fullPath = join(root, path);
-					const raw = await withPathQueue(fullPath, () => readFile(fullPath, "utf8"));
-					const { meta, body } = parseNote(raw);
-					meta.scope = scope;
-					if ((meta.crumpledAt !== undefined) !== (options.crumpled === true)) continue;
-					homeRows.push({ address, scope, path, meta, body });
-				}
+				paths = await walkMarkdown(root);
 			} catch (error) {
 				if (!status || !isFilesystemError(error)) throw error;
 				status.homesUnavailable.push(addressFor(identity, scope, "", home.who).replace(/\/$/, "") || "session");
 				continue;
 			}
-			for (const row of homeRows) yield row;
+			for (const path of paths) {
+				if (matcher && !matcher.test(canonicalAddressFor(identity, scope, path, home.who))) continue;
+				const address = addressFor(identity, scope, path, home.who);
+				const fullPath = join(root, path);
+				let raw: string;
+				try {
+					raw = await withPathQueue(fullPath, () => readFile(fullPath, "utf8"));
+				} catch (error) {
+					// One unreadable note is named on its own; its home's readable notes still list.
+					if (!status || !isFilesystemError(error)) throw error;
+					status.homesUnavailable.push(address);
+					continue;
+				}
+				const { meta, body } = parseNote(raw);
+				meta.scope = scope;
+				if ((meta.crumpledAt !== undefined) !== (options.crumpled === true)) continue;
+				yield { address, scope, path, meta, body };
+			}
 		}
 	}
 

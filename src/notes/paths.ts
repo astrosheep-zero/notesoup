@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
+import { NoteError, shown } from "./errors.js";
 import type { NotesIdentity } from "./identity.js";
 
 export type Scope = "session" | "project" | "human" | "agent" | "model";
@@ -15,10 +16,29 @@ export function slugify(value: string): string {
 	return slug.length > 0 ? slug : "root";
 }
 
-/** `<basename(absGitRoot)-sha1(absGitRoot)[:8]>`, or the same formula over cwd with no git root. */
+/**
+ * The one virtual-path grammar: a relative, `/`-separated path with no empty, `.` or `..`
+ * segment. Both the address decoder and the physical-path builder enforce it here, so a
+ * caller that reaches a path without going through an address still cannot escape a home.
+ */
+export function assertVirtualPath(value: unknown): string {
+	if (typeof value !== "string" || value.length === 0) throw new NoteError("invalid_address", "The address is empty; give the note a path.");
+	if (value.includes("\0") || value.includes("\\") || value.startsWith("/")) throw new NoteError("invalid_address", `${shown(value)}: a note path can't start with "/" or contain "\\" or NUL.`);
+	const parts = value.split("/");
+	if (parts.some((part) => part.length === 0 || part === "." || part === "..")) throw new NoteError("invalid_address", `${shown(value)}: a note path can't have empty, ".", or ".." folder names.`);
+	return value;
+}
+
+/**
+ * `<basename(canonical git root)-sha1(canonical git root)[:8]>`, or the same formula over cwd
+ * with no git root. Git writes the canonical spelling into a linked worktree's `.git` pointer,
+ * so canonicalizing here is what keeps one repository — and its worktrees — on one home.
+ */
 export function projectKey(cwd: string): string {
 	const absolute = resolve(cwd);
-	const root = gitRoot(absolute) ?? absolute;
+	const spelled = gitRoot(absolute) ?? absolute;
+	let root = spelled;
+	try { root = realpathSync(spelled); } catch { /* An unresolvable path keeps its spelling. */ }
 	const digest = createHash("sha1").update(root).digest("hex").slice(0, 8);
 	return `${basename(root)}-${digest}`;
 }
@@ -103,7 +123,5 @@ export function noteFileName(vpath: string): string {
 
 /** Absolute file path for a virtual path in a scope. Callers validate the vpath first. */
 export function physicalPath(scope: Scope, vpath: string, identity: NotesIdentity, who?: string): string {
-	if (typeof vpath !== "string" || vpath.length === 0 || vpath.includes("\0") || vpath.includes("\\") || vpath.startsWith("/")) throw new TypeError("path must be a safe virtual relative path");
-	if (vpath.split("/").some((part) => part.length === 0 || part === "." || part === "..")) throw new TypeError("path contains an unsupported component");
 	return join(scopeDir(scope, identity, who), ...noteFileName(vpath).split("/"));
 }

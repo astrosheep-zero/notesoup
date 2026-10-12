@@ -15,15 +15,16 @@ export type NotesoupSettings = {
 	dreamer?: unknown;
 };
 
-function isSettingsObject(value: unknown): value is Record<string, unknown> {
+/** A plain settings object; arrays and null are not one. */
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Read the raw "notesoup" object from one parsed settings scope. */
 function notesoupSettings(settings: unknown): Record<string, unknown> {
-	if (!isSettingsObject(settings)) return {};
+	if (!isPlainObject(settings)) return {};
 	const value = settings[NOTESOUP_SETTINGS_KEY];
-	return isSettingsObject(value) ? value : {};
+	return isPlainObject(value) ? value : {};
 }
 
 /** Merge the global and project "notesoup" objects per key; project wins, mirroring Pi's deep merge. */

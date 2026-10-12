@@ -6,7 +6,6 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
-import { loadPlaybook } from "../src/dream/playbook.js";
 
 function packageRoot(): string {
 	let dir = dirname(fileURLToPath(import.meta.url));
@@ -41,7 +40,7 @@ test("dream skill is publicly discoverable and resolves the CLI's shared playboo
 	const packagePlaybook = resolve(root, "playbook.md");
 	assert.equal(skillPlaybook, packagePlaybook);
 	const playbook = readFileSync(packagePlaybook, "utf8");
-	assert.equal(loadPlaybook(skillPlaybook), playbook);
+	assert.equal(readFileSync(skillPlaybook, "utf8"), playbook);
 
 });
 
@@ -69,8 +68,7 @@ test("npm tarball keeps the skill's relative playbook path portable after extrac
 		const installedSkill = discoverSkill(join(installedRoot, "skills"), "dream");
 		const referencedPlaybook = resolve(installedSkill.baseDir, "../../playbook.md");
 		assert.equal(referencedPlaybook, resolve(installedRoot, "playbook.md"));
-		assert.equal(loadPlaybook(referencedPlaybook), readFileSync(referencedPlaybook, "utf8"));
-		assert.equal(loadPlaybook(referencedPlaybook), readFileSync(join(root, "playbook.md"), "utf8"));
+		assert.equal(readFileSync(referencedPlaybook, "utf8"), readFileSync(join(root, "playbook.md"), "utf8"));
 	} finally {
 		rmSync(fixture, { recursive: true, force: true });
 	}

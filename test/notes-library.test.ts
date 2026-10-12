@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -235,4 +235,35 @@ test("a massively ambiguous edit still reports every match line to a library cal
 		},
 	);
 	assert.equal((await notes.read("many"))?.body.startsWith("beta\nbeta"), true, "the refused edit left the body alone");
+});
+
+test("one unreadable note is named without hiding its readable siblings", async (t) => {
+	if (process.getuid?.() === 0 || process.platform === "win32") return t.skip("chmod 000 is not a read refusal for this user");
+	const { home, notes } = fixture(t);
+	await notes.write("@project/bad.md", "bad body");
+	await notes.write("@project/good.md", "good body");
+	chmodSync(join(home, "project", "project-12345678", "bad.md"), 0o000);
+	const result = await notes.listWithStatus({ scope: "project" });
+	assert.deepEqual(result.rows.map((row) => row.address), ["@project/good.md"], "the readable sibling still lists");
+	assert.deepEqual(result.status.homesUnavailable, ["@project/bad.md"], "the unreadable note is named on its own");
+	await assert.rejects(() => notes.list({ scope: "project" }), (error: unknown) => (error as NodeJS.ErrnoException).code === "EACCES", "a caller that asked for no status still sees the failure");
+});
+
+test("a hand-written quoted numeric extra survives a rewrite as a string", async (t) => {
+	const { home, notes } = fixture(t);
+	await notes.write("typed", "body");
+	const path = join(home, "pi/session/session-a/typed.md");
+	writeFileSync(path, readFileSync(path, "utf8").replace("\n---\n\n", "\ncount: \"1\"\n---\n\n"));
+	assert.equal((await notes.read("typed"))?.meta.count, "1", "a quoted scalar is read as text");
+	const raw = readFileSync(path, "utf8");
+	assert.match(raw, /^count: "1"$/m, "a bare 1 would read back as a number");
+	assert.match(raw, /^origin: self$/m, "an ordinary string still stays bare");
+});
+
+test("writing keeps an existing note's origin unless the caller names one", async (t) => {
+	const { notes } = fixture(t);
+	await notes.write("owned", "first", { origin: "user" });
+	assert.equal((await notes.write("owned", "second")).meta.origin, "user", "a rewrite does not re-attribute the note");
+	assert.equal((await notes.write("owned", "third", { origin: "external" })).meta.origin, "external", "an explicit origin still wins");
+	assert.equal((await notes.write("fresh", "new")).meta.origin, "self", "a new note still defaults to self");
 });

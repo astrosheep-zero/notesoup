@@ -9,7 +9,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { historyFromSession } from "../src/pi/history.js";
 import { BOOT_TYPE, GUIDANCE_TYPE, RESET_MARKER_TYPE } from "../src/pi/entries.js";
 import { CONTEXT_WINDOW_OPEN_TAG, CONTEXT_WINDOW_PROTOCOL_OPEN_TAG } from "../src/boot/text.js";
-import { CONTINUATION } from "../src/pi/reset/text.js";
+import { CONTINUATION } from "../src/budget/text.js";
 import { listNotes, physicalPath } from "./helpers/notes.js";
 import { CONTINUATION_TYPE, MANUAL_WIPE_TYPE } from "../src/pi/entries.js";
 import {

@@ -239,14 +239,16 @@ export function visibleItem(event: HistoryEvent, maxChars: number, matchOffset?:
 	const document = eventDocument(event);
 	const chars = Array.from(document);
 	const start = matchOffset ?? 0;
-	const truncated = start > 0 || start + maxChars < chars.length;
+	// A negative budget would cut the tail and still call the result a prefix.
+	const limit = Math.max(0, maxChars);
+	const truncated = start > 0 || start + limit < chars.length;
 	return {
 		seq: event.seq,
 		window_id: event.windowId,
 		role: event.role,
 		created_at: event.createdAt ?? null,
 		...toolSummary(event),
-		content: truncated ? chars.slice(start, start + maxChars).join("") : document,
+		content: truncated ? chars.slice(start, start + limit).join("") : document,
 		truncated,
 		...(matchOffset === undefined ? {} : { offset_chars: matchOffset }),
 	};

@@ -24,8 +24,6 @@ function assertDirectoryComponent(field: string, value: string): void {
 /** Validate and snapshot caller identity; no global or environment defaults are consulted. */
 export function snapshotNotesIdentity(value: NotesIdentity): NotesIdentity {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new TypeError("notes context must be a plain object");
-	const prototype = Object.getPrototypeOf(value);
-	if (prototype !== Object.prototype && prototype !== null) throw new TypeError("notes context must be a plain object");
 	const homeValue = requireString("home", value.home);
 	const sessionId = requireString("sessionId", value.sessionId);
 	const projectKey = requireString("projectKey", value.projectKey);

@@ -1,12 +1,8 @@
 import { DEFAULT_REMINDER_MARGIN_TOKENS, WARNING_RUNWAY_TOKENS } from "./constants.js";
+import { positiveInteger } from "./parse.js";
 import { NOTESOUP_SETTINGS_KEY, type NotesoupSettings } from "../settings.js";
 
 export type ResolvedThresholds = { reminder: number; reserve: number; warning: number };
-/** A margin is usable only as a positive integer; anything else is ignored. */
-function validMargin(raw: unknown): number | undefined {
-	if (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw <= 0) return undefined;
-	return raw;
-}
 
 /**
  * Pure derivation of the thresholds from Pi's reserve: the reminder fires at reserve
@@ -21,7 +17,7 @@ export function deriveThresholds(reserveTokens: number, margins: NotesoupSetting
 	let reminderMargin: number;
 	if (margins.reminderMarginTokens === undefined) reminderMargin = DEFAULT_REMINDER_MARGIN_TOKENS;
 	else {
-		const parsed = validMargin(margins.reminderMarginTokens);
+		const parsed = positiveInteger(margins.reminderMarginTokens);
 		if (parsed === undefined) {
 			warnings.push(`🥣 ${reminderKey} must be a positive integer · using the default`);
 			reminderMargin = DEFAULT_REMINDER_MARGIN_TOKENS;

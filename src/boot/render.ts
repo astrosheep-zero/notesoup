@@ -1,17 +1,6 @@
 import type { NotesHome, NotesSnapshot } from "./snapshot.js";
 import { CONTEXT_WINDOW_OPEN_TAG, CONTEXT_WINDOW_CLOSE_TAG, MAP_BOOT_MAX_CHARS, SHELF_FRESH_LIMIT, renderProtocolBlock, type BootToolNames } from "./text.js";
 
-/** Codex-style <context_window> identity block: the resolved agent and model names plus first/current/previous window ids. */
-function identityBlock(agentName: string, modelName: string, firstWindowId: string, currentWindowId: string, previousWindowId?: string): string {
-	const lines = [
-		`Agent name: ${agentName} (brain: ${modelName})`,
-		`First context window id: ${firstWindowId}`,
-		`Current context window id: ${currentWindowId}`,
-	];
-	if (previousWindowId) lines.push(`Previous context window id: ${previousWindowId}`);
-	return `${CONTEXT_WINDOW_OPEN_TAG}\n${lines.join("\n")}\n${CONTEXT_WINDOW_CLOSE_TAG}`;
-}
-
 function relativeTime(timestamp: number, now: number): string {
 	const seconds = Math.trunc((timestamp - now) / 1000);
 	if (seconds === 0) return "just now";
@@ -19,10 +8,6 @@ function relativeTime(timestamp: number, now: number): string {
 		.find(([unit, size]) => Math.abs(seconds) >= size || unit === "s")!;
 	const amount = `${Math.abs(Math.trunc(seconds / size))}${unit}`;
 	return seconds > 0 ? `in ${amount}` : `${amount} ago`;
-}
-
-function rowsFor(snapshot: NotesSnapshot, scope: NotesHome["scope"]) {
-	return snapshot.homes.get(scope) ?? [];
 }
 
 /** A feed entry is announced in the note's own words: its first heading, else its first line, cut short. */
@@ -63,7 +48,7 @@ function notesIndex(snapshot: NotesSnapshot, tools: BootToolNames): string {
 			shelves.push(section(home.label, indent(`This drawer wouldn't open. Try \`${tools.notesList}\` again.`)));
 			continue;
 		}
-		const rows = rowsFor(snapshot, home.scope).filter((row) => row.meta.crumpledAt === undefined);
+		const rows = (snapshot.homes.get(home.scope) ?? []).filter((row) => row.meta.crumpledAt === undefined);
 		const map = rows.find((row) => row.path === "MAP.md");
 		const fresh = rows
 			.filter((row) => row.path !== "MAP.md")
@@ -107,9 +92,14 @@ export type BootRenderData = {
 };
 
 export function renderBootBlock(data: BootRenderData): string {
-	const parts: string[] = [];
-	parts.push(identityBlock(data.agentName, data.modelName, data.firstWindowId, data.currentWindowId, data.previousWindowId));
-	parts.push(renderProtocolBlock(data.tools));
-	parts.push(notesIndex(data.notes, data.tools));
-	return parts.join("\n\n");
+	// Codex-style <context_window> identity block: the resolved agent and model names plus
+	// first/current/previous window ids.
+	const lines = [
+		`Agent name: ${data.agentName} (brain: ${data.modelName})`,
+		`First context window id: ${data.firstWindowId}`,
+		`Current context window id: ${data.currentWindowId}`,
+		...(data.previousWindowId ? [`Previous context window id: ${data.previousWindowId}`] : []),
+	];
+	const identity = `${CONTEXT_WINDOW_OPEN_TAG}\n${lines.join("\n")}\n${CONTEXT_WINDOW_CLOSE_TAG}`;
+	return [identity, renderProtocolBlock(data.tools), notesIndex(data.notes, data.tools)].join("\n\n");
 }

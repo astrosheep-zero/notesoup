@@ -139,3 +139,19 @@ test("CLI commits partial writes when report writing fails", async () => {
 	assert.match(execFileSync("git", ["log", "--format=%s"], { cwd: home, encoding: "utf8" }).trim(), /\(failed\)/);
 	assert.equal(execFileSync("git", ["show", "HEAD:global/partial.md"], { cwd: home, encoding: "utf8" }), "half");
 });
+
+test("CLI refuses a malformed flag value before creating anything", async () => {
+	const numberHome = join(fixture(), "notes");
+	const badNumber = await captureErrors(() => main(["--notes-home", numberHome, "--min-hours", "abc"], { dreamerSettings: () => ({ warnings: [] }) }));
+	assert.equal(badNumber.code, 1);
+	assert.ok(badNumber.errors.some((line) => /--min-hours needs a positive whole number/.test(line)), badNumber.errors.join("\n"));
+	assert.equal(existsSync(numberHome), false, "a bad number is refused before the home is created");
+
+	for (const value of ["", "--force"]) {
+		const home = join(fixture(), "notes");
+		const badHome = await captureErrors(() => main(["--notes-home", value], { dreamerSettings: () => ({ warnings: [] }) }));
+		assert.equal(badHome.code, 1, `--notes-home ${JSON.stringify(value)} is refused`);
+		assert.ok(badHome.errors.some((line) => /--notes-home needs a directory path/.test(line)), badHome.errors.join("\n"));
+		assert.equal(existsSync(home), false, "a flag-looking path never becomes the home");
+	}
+});

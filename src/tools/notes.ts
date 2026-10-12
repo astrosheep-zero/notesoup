@@ -2,7 +2,7 @@ import type { NotesIdentity } from "../notes/identity.js";
 import { Type, type Static } from "typebox";
 import { localIso } from "../notes/frontmatter.js";
 import { isFilesystemError } from "../notes/fs-error.js";
-import { createNotesStore, NoteError, noteIdentity, type NoteChange, type NoteMeta, type NoteQueryStatus, type NoteRow, type Scope } from "../notes/index.js";
+import { createNotesStore, NoteError, noteIdentity, type NoteChange, type NoteMeta, type NoteQueryStatus, type NoteRow } from "../notes/index.js";
 import { prefixFit, TOOL_OUTPUT_LIMIT } from "./output.js";
 import { failure, fitsResult, resultSchema, readTextWindow, renderOutcome, renderTextWindow, structuredBytes, success, TextWindowRequestSchema, TextWindowSchema, type Outcome } from "./result.js";
 import { nullableString, InvalidQueryError, searchQueries, searchQuery } from "./schema.js";
@@ -17,11 +17,6 @@ const FILE_LIMIT_PARAMETER = Type.Optional(Type.Integer({ minimum: 1, descriptio
 const GLOB_PARAMETER = nullableString("(optional) Glob over full addresses.");
 const ADDRESS_DESCRIPTION = "Addresses: a bare path is this session's note; `@project/`, `@human/`, `@self/`, `@model/` are durable homes. Not file paths: never pass them to file tools.";
 
-/** The one receipt field a caller cannot derive from the address itself. */
-function projectKeyField(scope: Scope, projectKey: string): { project_key?: string } {
-	return scope === "project" ? { project_key: projectKey } : {};
-}
-
 /**
  * Typed refusal. Every fact a caller needs is already in the message; there is no separate context.
  * Convert expected refusals; unexpected errors propagate unchanged.
@@ -34,22 +29,13 @@ function failureOf(error: unknown): Outcome<never> {
 	throw error;
 }
 
-function byRecent<T extends { address: string; meta: { updatedAt: number } }>(a: T, b: T): number {
-	return b.meta.updatedAt - a.meta.updatedAt || a.address.localeCompare(b.address);
-}
-
 /** Metadata keys this layer normalizes; everything else is exposed verbatim under `extra`. */
 const NORMALIZED_META_KEYS = new Set(["scope", "origin", "createdAt", "updatedAt", "lastAccessed", "accessCount", "crumpledAt", "project"]);
 /** One unrecognized entry, and the verbatim extras together, are bounded so `extra` cannot outgrow the read. */
-export const MAX_METADATA_ENTRY_BYTES = 1024;
+const MAX_METADATA_ENTRY_BYTES = 1024;
 const MAX_METADATA_VERBATIM_BYTES = 2048;
 /** An extra value that cannot be carried is named in place, never silently dropped. */
-export const TOO_LARGE_EXTRA_VALUE = "[omitted: too large]";
-
-/** Include the key: hand-written frontmatter can have arbitrarily long keys. */
-function extraEntryBytes(key: string, value: unknown): number {
-	return structuredBytes(key) + 1 + structuredBytes(value);
-}
+const TOO_LARGE_EXTRA_VALUE = "[omitted: too large]";
 
 export const NoteMetadataSchema = Type.Object({
 	origin: Type.Union([...ORIGIN_VALUES]),
@@ -73,7 +59,8 @@ function noteMetadata(meta: NoteMeta): NoteMetadata {
 		if (NORMALIZED_META_KEYS.has(key) || value === undefined) continue;
 		// A key too large to carry cannot be named at all; an oversized value is named in place.
 		if (structuredBytes(key) > MAX_METADATA_ENTRY_BYTES) continue;
-		const entryBytes = extraEntryBytes(key, value);
+		// The key counts too: hand-written frontmatter can have arbitrarily long keys.
+		const entryBytes = structuredBytes(key) + 1 + structuredBytes(value);
 		if (entryBytes > MAX_METADATA_ENTRY_BYTES || verbatimBytes + entryBytes > MAX_METADATA_VERBATIM_BYTES) {
 			put(key, TOO_LARGE_EXTRA_VALUE);
 			continue;
@@ -199,7 +186,7 @@ function snapshot<T extends { address: string }>(
 }
 
 function listedFile(row: Pick<NoteRow, "address" | "scope" | "meta">, identity: NotesIdentity): NotesListData["files"][number] {
-	return { address: row.address, ...projectKeyField(row.scope, identity.projectKey), updated_at: localIso(row.meta.updatedAt), ...(row.meta.crumpledAt === undefined ? {} : { crumpled_at: row.meta.crumpledAt }) };
+	return { address: row.address, ...(row.scope === "project" ? { project_key: identity.projectKey } : {}), updated_at: localIso(row.meta.updatedAt), ...(row.meta.crumpledAt === undefined ? {} : { crumpled_at: row.meta.crumpledAt }) };
 }
 
 export const notesWriteParameters = Type.Object({ address: Type.String(), content: Type.String(), origin: ORIGIN }, { additionalProperties: false });
@@ -372,7 +359,7 @@ export const notesSearch = {
 	async execute(params: Static<typeof notesSearchParameters>, identity: NotesIdentity): Promise<Outcome<NotesSearchData>> {
 		try {
 			const { rows, status } = await createNotesStore(identity).searchWithStatus(searchQueries(params.query), { glob: params.glob ?? undefined, crumpled: params.crumpled });
-			const files: NotesSearchData["files"] = rows.sort(byRecent).map(row => ({
+			const files: NotesSearchData["files"] = rows.sort((a, b) => b.meta.updatedAt - a.meta.updatedAt || a.address.localeCompare(b.address)).map(row => ({
 				...listedFile(row, identity),
 				matches: row.matches.slice(0, params.max_matches_per_file).map(match => ({ line: match.line, text: match.text, offset_chars: match.offsetChars })),
 			}));

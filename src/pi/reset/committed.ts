@@ -1,5 +1,5 @@
 import type { SessionReader } from "../session-reader.js";
-import { isCheckpointBackedReset, isWindowBootEntry, isWindowMarker } from "../window.js";
+import { isCheckpointBackedReset, isForeignResetTailEntry, isWindowBootEntry, isWindowMarker } from "../window.js";
 import { isWindowContinuationEntry } from "./artifacts.js";
 
 /**
@@ -20,7 +20,7 @@ export function resetBoundaryCommitted(ctx: SessionReader, markerId: string, win
 			continue;
 		}
 		if (isWindowContinuationEntry(entry)) return boot && entry.type === "custom_message" && entry.display === false;
-		if (isWindowMarker(entry) || entry.type === "message" || entry.type === "custom_message" || entry.type === "compaction" || entry.type === "branch_summary") return false;
+		if (isForeignResetTailEntry(entry)) return false;
 	}
 	return false;
 }

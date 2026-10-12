@@ -3,7 +3,7 @@ import { remainingBudget, type ResolvedThresholds } from "../budget/policy.js";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI, type ExtensionContext, type SessionBoundaryDraft, type SettingsManager } from "@earendil-works/pi-coding-agent";
 import { GUIDANCE_TYPE, WARNING_TYPE } from "./entries.js";
-import { WARNING_CONTENT } from "./reset/text.js";
+import { WARNING_CONTENT } from "../budget/text.js";
 import { readThresholdSettings, type ThresholdSettingsResolution } from "./thresholds.js";
 import { currentWindowId, hasWindowMessage, isWindowMarker, rootWindowId, windowUsage } from "./window.js";
 import { tokenBudgetGuidance } from "../budget/text.js";
@@ -11,7 +11,7 @@ import { arrangeAnchoredReminders, type AnchorDetails } from "./anchored.js";
 import { output } from "../tools/output.js";
 
 /** Remaining tokens in the provider's active window, or null without a usable estimate. */
-export function remainingTokens(ctx: Pick<ExtensionContext, "sessionManager" | "getContextUsage" | "model">): number | null {
+function remainingTokens(ctx: Pick<ExtensionContext, "sessionManager" | "getContextUsage" | "model">): number | null {
 	const usage = windowUsage(ctx);
 	return !usage || usage.tokens === null ? null : Math.max(0, usage.contextWindow - usage.tokens);
 }
@@ -20,10 +20,12 @@ export function registerBudget(
 	pi: ExtensionAPI,
 	isEnabled: () => boolean,
 	settingsManager?: SettingsManager,
-	onCloseOut: (windowId: string) => void = () => {},
 ) {
 	let cachedPolicy: { thresholds: ResolvedThresholds; automatic: boolean } | undefined;
 	const notifiedWarnings = new Set<string>();
+	// The reset owner is wired after both sides exist, so no handler can observe a
+	// half-constructed pair (a close-out request cannot arrive before registration ends).
+	let onCloseOut: (windowId: string) => void = () => {};
 	const resolvePolicy = (ctx: ExtensionContext): ThresholdSettingsResolution => {
 		if (!settingsManager && cachedPolicy) return { ...cachedPolicy, warnings: [] };
 		const resolution = readThresholdSettings(ctx, settingsManager);
@@ -35,18 +37,13 @@ export function registerBudget(
 		if (!settingsManager) cachedPolicy = { thresholds: resolution.thresholds, automatic: resolution.automatic };
 		return resolution;
 	};
-	const thresholdsFor = (ctx: ExtensionContext): ResolvedThresholds => {
-		return resolvePolicy(ctx).thresholds;
-	};
-	const automaticResetEnabled = (ctx: ExtensionContext): boolean => {
-		return resolvePolicy(ctx).automatic;
-	};
+	const thresholdsFor = (ctx: ExtensionContext): ResolvedThresholds => resolvePolicy(ctx).thresholds;
+	const automaticResetEnabled = (ctx: ExtensionContext): boolean => resolvePolicy(ctx).automatic;
 	const hardReserveDue = (ctx: ExtensionContext): boolean => {
 		if (!automaticResetEnabled(ctx)) return false;
 		const usage = windowUsage(ctx);
 		return usage !== undefined && usage.tokens !== null && usage.contextWindow - usage.tokens <= thresholdsFor(ctx).reserve;
 	};
-	const invalidateThresholds = () => { cachedPolicy = undefined; };
 	let pendingGuidance: { windowId: string; content: string } | undefined;
 	let pendingWarning: { windowId: string; content: string } | undefined;
 	let pendingNotices = new Map<string, { sessionId: string; windowId: string }>();
@@ -82,7 +79,7 @@ export function registerBudget(
 	const resetForTransition = () => {
 		clearStaged();
 		pendingNotices.clear();
-		invalidateThresholds();
+		cachedPolicy = undefined;
 		notifiedWarnings.clear();
 	};
 
@@ -172,6 +169,8 @@ export function registerBudget(
 		automaticResetEnabled,
 		hardReserveDue,
 		consumeTurnEnd,
+		/** The reset owner wires its close-out here once the lifecycle reducer exists. */
+		setCloseOut: (handler: (windowId: string) => void) => { onCloseOut = handler; },
 		/** The same close-out countdown the model sees, for user-facing status; null when usage is unknown. */
 		statusFor: (ctx: ExtensionContext): { remaining: number | null } => ({ remaining: remainingBudget(remainingTokens(ctx), thresholdsFor(ctx).warning) }),
 		clear: () => { clearStaged(); pendingNotices.clear(); },

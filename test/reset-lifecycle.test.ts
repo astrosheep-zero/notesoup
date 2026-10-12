@@ -18,7 +18,7 @@ import notesoup from "../src/pi/extension.js";
 import { BOOT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, RESET_MARKER_TYPE } from "../src/pi/entries.js";
 import { MANUAL_WIPE_TYPE } from "../src/pi/entries.js";
 import { toolContext } from "./helpers/extension.js";
-import { WARNING_CONTENT } from "../src/pi/reset/text.js";
+import { WARNING_CONTENT } from "../src/budget/text.js";
 import {
 	initialResetControl,
 	reduceResetControl,

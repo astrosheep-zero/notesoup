@@ -2,17 +2,13 @@ import type { EngineInterface, On, ProcessRunResult, ToolCallResult, ToolSpec } 
 
 const PREFIX = "mcp__notesoup__"
 const TOOL_NAMES = ["notes_write", "notes_update", "notes_read", "notes_list", "notes_search"] as const
-// @ts-expect-error Claude's hook sandbox supplies import.meta.dir; Node's typings do not.
 const HELPER = `${import.meta.dir}/../dist/claude/helper.js`
 const TIMEOUT_MS = 10_000
 const OUTPUT_LIMIT = 1024 * 1024
 
 type Identity = { home: string; sessionId: string; cwd: string; agent: string; model: string }
 type SchemaRow = { name: string; description: string; inputSchema: Record<string, unknown> }
-type Engine = Pick<EngineInterface, "process" | "session" | "ui" | "clock" | "prompt" | "env">
-type UsageSample = { context?: unknown }
-/** `usage({breakdown:true})` is wired in the engine but absent from the public typings. */
-type UsageReader = (options?: { breakdown?: boolean }) => Promise<UsageSample | undefined>
+type Engine = Pick<EngineInterface, "process" | "session" | "ui" | "clock" | "prompt" | "env" | "settings">
 /** The measured context, as much of it as the engine reported. */
 type ContextUsage = { tokens?: number; window?: number; percent?: number }
 /** Shared reset prose, fetched once per session so Pi and Claude cannot drift apart. */
@@ -22,14 +18,17 @@ type ClaudeLimits = {
   native: number; reset: number; warn: number; resetMargin: number; warningRunway: number
 }
 type ResetState = {
-  identity?: Identity; window: number; turnRunning: boolean; resetting: boolean
+  identity?: Identity; generation: number; window: number; turnRunning: boolean; resetting: boolean
   manualPending: boolean; headless: boolean; usageFailureLogged: boolean; preparedBoot?: string; retainedBoot?: string
-  compactDisabled: boolean; limitsFailureLogged: boolean; limitsAttempted: boolean; limitsWindow: number
-  limits?: ClaudeLimits; warnedWindow?: number; texts?: SharedTexts
+  compactDisabled: boolean; limitsFailureLogged: boolean; limitsAttempts: number; limitsWindow: number
+  limits?: ClaudeLimits; warnedWindow?: number; texts?: SharedTexts; settingsFailureLogged: boolean
 }
 const HEADLESS = "Clear-memory is off in headless (-p / SDK) sessions"
 const COMPACT_DISABLED = "Clear-memory can't run: compaction is off in this session (DISABLE_COMPACT)"
 const THRESHOLDS_UNAVAILABLE = "Context thresholds unavailable · automatic clear-memory skipped"
+const SETTINGS_UNAVAILABLE = "Notesoup settings unreadable · using the default clear-memory margins"
+/** Bounded retries: a transient helper failure must not disable thresholds for a whole window. */
+const MAX_LIMITS_ATTEMPTS = 3
 const RESET_INSTRUCTIONS = "notesoup: reset to a fresh notes-only context window."
 const BOOT_TOOLS = {
   notes: `${PREFIX}notes_*`, notesList: `${PREFIX}notes_list`,
@@ -64,26 +63,39 @@ function limitsShape(value: unknown): ClaudeLimits | undefined {
   if (unit === undefined || native === undefined || reset === undefined || warn === undefined || resetMargin === undefined || warningRunway === undefined) return undefined
   return { source: typeof row.source === "string" ? row.source : "unknown", autoCompact: row.autoCompact !== false, unit, native, reset, warn, resetMargin, warningRunway }
 }
-async function envValue($: Engine, name: string): Promise<string | undefined> {
-  try { const value = await $.env.get(name); return typeof value === "string" ? value : undefined } catch { return undefined }
+/** Each environment read names its capability literally for Claude's loader scanner. */
+async function envPctOverride($: Engine) {
+  try { return await $.env.get("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE") } catch { return undefined }
+}
+async function envAutoCompactWindow($: Engine) {
+  try { return await $.env.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW") } catch { return undefined }
+}
+async function envDisableAutoCompact($: Engine) {
+  try { return await $.env.get("DISABLE_AUTO_COMPACT") } catch { return undefined }
 }
 /** Presence-style environment flags: any value but an explicit no counts as on. */
-async function envFlag($: Engine, name: string): Promise<boolean> {
-  const value = await envValue($, name)
+async function compactDisabled($: Engine): Promise<boolean> {
+  let value: string | undefined
+  try { value = await $.env.get("DISABLE_COMPACT") } catch { return false }
   if (value === undefined) return false
   const text = value.trim().toLowerCase()
-  return text !== "" && text !== "0" && text !== "false"
+  // The same presence convention as the helper's flag parsing: "off"/"no" mean not disabled.
+  return text !== "" && text !== "0" && text !== "false" && text !== "no" && text !== "off"
 }
-async function readSettings($: Engine): Promise<unknown> {
-  const settings = ($ as { settings?: { read?: (options?: unknown) => Promise<unknown> } }).settings
-  if (typeof settings?.read !== "function") return undefined
-  try { return await settings.read() } catch { return undefined }
+async function readSettings($: Engine, state: ResetState): Promise<unknown> {
+  try { return await $.settings.read() } catch {
+    // A silent fallback would hide a broken settings read behind default margins.
+    if (!state.settingsFailureLogged) {
+      state.settingsFailureLogged = true
+      log($, SETTINGS_UNAVAILABLE)
+    }
+    return undefined
+  }
 }
 /** The measured context, or undefined when the engine cannot report it. The failure logs once. */
 async function contextUsage($: Engine, state: ResetState): Promise<ContextUsage | undefined> {
   try {
-    const read = $.session.usage as unknown as UsageReader
-    const context = (await read())?.context
+    const context = (await $.session.usage()).context
     if (typeof context !== "object" || context === null) return {}
     const row = context as Record<string, unknown>
     return { tokens: numberOf(row.tokens), window: numberOf(row.window), percent: numberOf(row.percent) }
@@ -97,42 +109,52 @@ async function contextUsage($: Engine, state: ResetState): Promise<ContextUsage 
 }
 async function breakdownContext($: Engine): Promise<Record<string, unknown> | undefined> {
   try {
-    const read = $.session.usage as unknown as UsageReader
-    const context = (await read({ breakdown: true }))?.context
+    const context = (await $.session.usage({ breakdown: "summary" })).context
     return typeof context === "object" && context !== null ? context as Record<string, unknown> : undefined
   } catch { return undefined }
 }
 /** Everything the resolver may read: measured usage plus the raw settings and environment. */
-async function limitFacts($: Engine, usage: ContextUsage): Promise<Record<string, unknown>> {
+async function limitFacts($: Engine, state: ResetState, usage: ContextUsage): Promise<Record<string, unknown>> {
   return {
     usage,
     breakdown: await breakdownContext($),
-    settings: await readSettings($),
+    settings: await readSettings($, state),
     env: {
-      pctOverride: await envValue($, "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"),
-      autoCompactWindow: await envValue($, "CLAUDE_CODE_AUTO_COMPACT_WINDOW"),
-      disableAutoCompact: await envValue($, "DISABLE_AUTO_COMPACT"),
+      pctOverride: await envPctOverride($),
+      autoCompactWindow: await envAutoCompactWindow($),
+      disableAutoCompact: await envDisableAutoCompact($),
     },
   }
 }
 /**
  * The points the current window is measured against, resolved by the helper's shared
- * derivation. One attempt per reported window value: an unknown window resolves the percent
- * fallback, and a later real window re-resolves against it.
+ * derivation. One resolved result per reported window value: an unknown window resolves the
+ * percent fallback, and a later real window re-resolves against it. A failed round trip is
+ * retried a bounded number of times instead of disabling thresholds for the whole window.
  */
 async function limitsOf($: Engine, state: ResetState, usage: ContextUsage): Promise<ClaudeLimits | undefined> {
   const window = usage.window !== undefined && usage.window > 0 ? usage.window : 0
-  if (state.limitsAttempted && state.limitsWindow === window) return state.limits
-  const response = await run($, { op: "limits", facts: await limitFacts($, usage) }, state.identity?.cwd ?? ".")
+  const sameWindow = state.limitsWindow === window
+  if (sameWindow && state.limits !== undefined) return state.limits
+  if (sameWindow && state.limitsAttempts >= MAX_LIMITS_ATTEMPTS) return undefined
+  const generation = state.generation
+  const facts = await limitFacts($, state, usage)
+  if (generation !== state.generation) return undefined
+  const response = await run($, { op: "limits", facts }, state.identity?.cwd ?? ".")
+  if (generation !== state.generation) return undefined
   const limits = response.ok ? limitsShape(response.result) : undefined
-  state.limitsAttempted = true
   state.limitsWindow = window
-  if (limits) state.limits = limits
-  else if (!state.limitsFailureLogged) {
+  if (limits) {
+    state.limits = limits
+    state.limitsAttempts = 0
+    return limits
+  }
+  state.limitsAttempts = sameWindow ? state.limitsAttempts + 1 : 1
+  if (!state.limitsFailureLogged) {
     state.limitsFailureLogged = true
     log($, THRESHOLDS_UNAVAILABLE)
   }
-  return limits ?? state.limits
+  return undefined
 }
 /** The measured value the points are expressed in; tokens win, percent × window stands in. */
 function measuredValue(limits: ClaudeLimits, usage: ContextUsage): number | undefined {
@@ -144,7 +166,9 @@ function measuredValue(limits: ClaudeLimits, usage: ContextUsage): number | unde
 async function loadTexts($: Engine, state: ResetState): Promise<SharedTexts | undefined> {
   if (state.texts) return state.texts
   if (!state.identity) return undefined
+  const generation = state.generation
   const response = await run($, { op: "texts" }, state.identity.cwd)
+  if (generation !== state.generation) return undefined
   const texts = response.ok ? sharedTextsOf(response.result) : undefined
   if (texts) state.texts = texts
   return texts
@@ -176,34 +200,61 @@ async function run($: { process: { run: (argv: readonly string[], init?: { cwd?:
   try { return decode(await $.process.run(["node", HELPER], { cwd, stdin: `${JSON.stringify(request)}\n`, timeoutMs: TIMEOUT_MS })) }
   catch { return { ok: false as const, error: "helper execution failed" } }
 }
-function identityOf(e: { cwd: string }, sessionId: string, home: string, model: string): Identity {
-  return { home, sessionId, cwd: e.cwd, agent: "claude", model: model.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "claude" }
+/** Session start does not fire on /clear, /resume or /branch. Forget the old window on end. */
+function forgetSession(state: ResetState) {
+  state.generation++
+  state.identity = undefined
+  state.window = 0
+  state.turnRunning = state.resetting = state.manualPending = state.usageFailureLogged = false
+  state.preparedBoot = state.retainedBoot = undefined
+  state.texts = state.limits = undefined
+  state.limitsAttempts = state.limitsWindow = 0
+  state.settingsFailureLogged = state.limitsFailureLogged = false
+  state.warnedWindow = undefined
+}
+async function modelOf($: Engine): Promise<string> {
+  // session.model() is the documented main-loop model API. Match the notes library's slug.
+  try {
+    const model = await $.session.model()
+    return model.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "claude"
+  } catch { return "claude" }
+}
+/** Re-key lazily even if a host switches sessions without another session.start. */
+async function refreshIdentity($: Engine, state: ResetState): Promise<Identity | undefined> {
+  const generation = state.generation
+  const sessionId = await $.session.id()
+  const cwd = await $.session.cwd()
+  const model = await modelOf($)
+  if (generation !== state.generation) return undefined
+  if (state.identity?.sessionId === sessionId) {
+    state.identity = { ...state.identity, cwd, model }
+    return state.identity
+  }
+  const home = await $.env.get("PI_NOTES_HOME") ?? `${await $.env.get("HOME") ?? await $.env.get("USERPROFILE") ?? ""}/.agents/notes`
+  if (generation !== state.generation) return undefined
+  forgetSession(state)
+  state.identity = { home, sessionId, cwd, agent: "claude", model }
+  const freshGeneration = state.generation
+  // History is not inference context; recover a retained boot only for this session id.
+  try {
+    const messages = await $.session.messages()
+    if (freshGeneration === state.generation) restoreWindow(state, messages)
+  } catch { /* A fresh session starts at zero. */ }
+  return freshGeneration === state.generation ? state.identity : undefined
 }
 
 export function register(on: On) {
-  let identity: Identity | undefined
   const manualSignal: { wake?: () => void } = {}
-  const state: ResetState = { window: 0, turnRunning: false, resetting: false, manualPending: false, headless: false, usageFailureLogged: false, compactDisabled: false, limitsFailureLogged: false, limitsAttempted: false, limitsWindow: 0 }
+  const state: ResetState = { generation: 0, window: 0, turnRunning: false, resetting: false, manualPending: false, headless: false, usageFailureLogged: false, compactDisabled: false, limitsFailureLogged: false, limitsAttempts: 0, limitsWindow: 0, settingsFailureLogged: false }
   const registered = new Set<string>()
   on("session.start", async ($, e, next) => {
-    const home = await $.env.get("PI_NOTES_HOME") ?? `${await $.env.get("HOME") ?? await $.env.get("USERPROFILE") ?? ""}/.agents/notes`
-    identity = identityOf(e, await $.session.id(), home, "claude")
-    state.identity = identity
-    state.window = 0
-    state.turnRunning = state.resetting = state.manualPending = state.usageFailureLogged = false
+    forgetSession(state)
+    await refreshIdentity($, state)
     state.headless = !e.isInteractive
     if (state.headless) log($, HEADLESS)
-    state.preparedBoot = state.retainedBoot = undefined
-    state.texts = state.limits = undefined
-    state.limitsAttempted = false
-    state.limitsWindow = 0
-    state.warnedWindow = undefined
     // Compaction is the capability the reset is built on; without it, automatic resets stop here.
-    state.compactDisabled = await envFlag($, "DISABLE_COMPACT")
+    state.compactDisabled = await compactDisabled($)
     if (state.compactDisabled) log($, COMPACT_DISABLED)
-    // The engine's history view includes retained boots on resume/reload.
-    // Recover their ordinal without treating that view as inference context.
-    try { restoreWindow(state, await $.session.messages()) } catch { /* A fresh session starts at zero. */ }
     registered.clear()
     await loadTexts($, state)
     armManual($, state, manualSignal)
@@ -217,8 +268,14 @@ export function register(on: On) {
     }
     return next(e)
   })
+  on("session.end", async ($, e, next) => {
+    forgetSession(state)
+    return next(e)
+  })
   on("tool.call", async ($, e, next) => {
-    if (!registered.has(e.tool) || e.agentId !== undefined || !identity) return next(e)
+    if (!registered.has(e.tool)) return next(e)
+    const identity = await refreshIdentity($, state)
+    if (!identity) return errorResult("session changed during identity lookup")
     const { tool, tool_use_id: _toolUseId, agentId: _agentId, ...params } = e
     const result = await run($, { op: "tool", tool: tool.slice(PREFIX.length), params, identity }, identity.cwd)
     if (!result.ok) return errorResult(result.error)
@@ -228,23 +285,29 @@ export function register(on: On) {
     return outcome.ok ? { result: outcome.text } : { result: outcome.text, isError: true }
   })
   on("turn.start", async ($, e, next) => {
+    // The documented turn.start is main-loop only. Guard tagged host events too:
+    // only a main-agent turn.complete clears this latch.
+    if ("agentId" in e && e.agentId !== undefined) return next(e)
+    if (!await refreshIdentity($, state)) return next(e)
     state.turnRunning = true
     return next(e)
   })
   on("turn.complete", async ($, e, next) => {
     const result = await next(e)
     if (e.agentId !== undefined) return result
+    if (!await refreshIdentity($, state)) return result
     state.turnRunning = false
     await maybeReset($, state, true)
     return result
   })
   on("session.measure", async ($, e, next) => {
     const result = await next(e)
-    await maybeReset($, state, false)
+    if (await refreshIdentity($, state)) await maybeReset($, state, false)
     return result
   })
   on("command.run", async ($, e, next) => {
     if (e.command !== "clear-memory") return next(e)
+    if (!await refreshIdentity($, state)) return { text: "🥣 Session changed · try clear-memory again" }
     if (state.headless) return { text: `🥣 ${HEADLESS}` }
     if (state.compactDisabled) return { text: `🥣 ${COMPACT_DISABLED}` }
     if (state.resetting || state.manualPending) return { text: "🥣 Clear-memory already queued" }
@@ -259,11 +322,24 @@ export function register(on: On) {
     return { text: "🥣 Clearing memory · notes first, then it stops" }
   })
   on("session.compact", async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
+    const identity = await refreshIdentity($, state)
     // Do not take over native /compact or another plugin's compaction.
-    if (!state.resetting || e.trigger !== "plugin" || e.agentId !== undefined || !identity) return next(e)
+    if (!state.resetting || e.trigger !== "plugin" || !identity) {
+      const generation = state.generation
+      const result = await next(e)
+      // Precompute installs nothing; a veto or subagent compact cannot remove our boot.
+      if (generation === state.generation && e.trigger !== "precompute" && result.skip === undefined) {
+        state.retainedBoot = result.messages.some((message) => message.text === state.retainedBoot) ? state.retainedBoot : undefined
+        state.preparedBoot = undefined
+      }
+      return result
+    }
+    const generation = state.generation
     const texts = await loadTexts($, state)
     if (texts?.continuation === undefined) return { skip: "reset text didn't load" }
     const boot = await buildBoot($, identity, state.window + 1, texts)
+    if (generation !== state.generation) return { skip: "session changed while building the notes boot" }
     if (!boot.ok) return { skip: `notes didn't load: ${boot.error}` }
     state.preparedBoot = String(boot.result)
     // The same closed reset shape as Pi: notes boot first, then the one reset message.
@@ -274,6 +350,8 @@ export function register(on: On) {
   })
   on("prompt.context", async ($, e, next) => {
     const result = await next(e)
+    const identity = await refreshIdentity($, state)
+    const generation = state.generation
     // The reset already retained its boot as the sole conversation message.
     // Prompt context still recomputes, but must not inject a duplicate snapshot.
     const retained = state.retainedBoot !== undefined
@@ -281,9 +359,10 @@ export function register(on: On) {
     if (!retained && !blocks.some((block) => block.name === "notesoup:boot") && identity) {
       const texts = await loadTexts($, state)
       const boot = await buildBoot($, identity, state.window, texts)
+      if (generation !== state.generation) return result
       if (!boot.ok) {
         try {
-          await $.ui.notify("🥣 Notes didn't load")
+          await $.ui.toast("🥣 Notes didn't load")
         } catch { /* Notification failure must not suppress the fallback block. */ }
       }
       blocks = [...blocks, { name: "notesoup:boot", text: boot.ok ? String(boot.result) : `# notesoup\nYour notes didn't load this time (${boot.error}). Try \`${PREFIX}notes_list\`; if it fails too, tell the human.` }]
@@ -300,14 +379,15 @@ export function register(on: On) {
  */
 async function warningBlock($: Engine, state: ResetState): Promise<{ name: string; text: string } | undefined> {
   if (state.headless || state.compactDisabled || !state.identity || state.warnedWindow === state.window) return undefined
+  const generation = state.generation
   const usage = await contextUsage($, state)
-  if (usage === undefined) return undefined
+  if (generation !== state.generation || usage === undefined) return undefined
   const limits = await limitsOf($, state, usage)
   if (limits === undefined) return undefined
   const measured = measuredValue(limits, usage)
   if (measured === undefined || measured < limits.warn) return undefined
   const texts = await loadTexts($, state)
-  if (texts?.warning === undefined) return undefined
+  if (generation !== state.generation || texts?.warning === undefined) return undefined
   state.warnedWindow = state.window
   return { name: "notesoup:warning", text: texts.warning }
 }
@@ -316,7 +396,7 @@ function restoreWindow(state: ResetState, messages: readonly { role: string; tex
   if (!state.identity) return
   const prefix = `Current context window id: claude:${state.identity.sessionId}:`
   for (const message of messages) {
-    if (message.role !== "user" || !message.text.startsWith("<context_window>\nAgent name: claude ")) continue
+    if (message.role !== "user" || !message.text.includes("<context_window>\nAgent name: claude ")) continue
     const line = message.text.split("\n").find((value) => value.startsWith(prefix))
     if (!line) continue
     const suffix = line.slice(prefix.length)
@@ -334,13 +414,16 @@ function armManual($: Engine, state: ResetState, signal: { wake?: () => void }) 
   const requested = new Promise<void>((resolve) => { signal.wake = resolve })
   void requested.then(() => {
     signal.wake = undefined
-    $.clock.after(0, () => finishManual($, state, signal))
+    const generation = state.generation
+    $.clock.after(0, () => finishManual($, state, signal, generation))
   })
 }
-async function finishManual($: Engine, state: ResetState, signal: { wake?: () => void }) {
+async function finishManual($: Engine, state: ResetState, signal: { wake?: () => void }, generation: number) {
   try {
+    if (generation !== state.generation) return
     if (state.manualPending && !state.turnRunning) {
       const texts = await loadTexts($, state)
+      if (generation !== state.generation) return
       if (texts?.warning === undefined) {
         state.manualPending = false
         log($, "Couldn't clear memory: the close-out prompt didn't load")
@@ -349,16 +432,19 @@ async function finishManual($: Engine, state: ResetState, signal: { wake?: () =>
       await $.prompt.submit({ text: texts.warning })
     }
   } catch {
-    state.manualPending = false
-    log($, "Couldn't clear memory: the close-out turn didn't start")
+    if (generation === state.generation) {
+      state.manualPending = false
+      log($, "Couldn't clear memory: the close-out turn didn't start")
+    }
   } finally { armManual($, state, signal) }
 }
 
 // The sandbox permits $ forwarding only to file-top-level helpers.
 async function maybeReset($: Engine, state: ResetState, complete: boolean) {
   if (!state.identity || state.resetting || state.headless || state.compactDisabled) return
+  const generation = state.generation
   const usage = await contextUsage($, state)
-  if (state.turnRunning) return
+  if (generation !== state.generation || state.turnRunning) return
   let due = complete && state.manualPending
   if (!due && usage !== undefined) {
     const limits = await limitsOf($, state, usage)
@@ -366,17 +452,19 @@ async function maybeReset($: Engine, state: ResetState, complete: boolean) {
     // Missing measurements do not trigger a reset.
     if (limits !== undefined && measured !== undefined && measured >= limits.reset) due = true
   }
-  if (due) {
+  if (due && generation === state.generation) {
     state.manualPending = false
     await reset($, state)
   }
 }
 async function reset($: Engine, state: ResetState): Promise<void> {
   if (!state.identity || state.headless || state.resetting) return
+  const generation = state.generation
   state.resetting = true
   state.preparedBoot = undefined
   try {
     const result = await $.session.compact({ instructions: RESET_INSTRUCTIONS })
+    if (generation !== state.generation) return
     if (result.skip !== undefined || state.preparedBoot === undefined) {
       log($, `Memory not cleared · ${result.skip ?? "notes boot was not retained"}`)
       return
@@ -385,6 +473,7 @@ async function reset($: Engine, state: ResetState): Promise<void> {
     state.window++
     log($, "Memory cleared")
   } catch (error) {
+    if (generation !== state.generation) return
     const text = String(error)
     if (text.includes("headless (-p / SDK)")) {
       state.headless = true
@@ -395,7 +484,9 @@ async function reset($: Engine, state: ResetState): Promise<void> {
       log($, `Couldn't clear memory: ${text.replace(/[\r\n].*$/s, "")}`)
     }
   } finally {
-    state.preparedBoot = undefined
-    state.resetting = false
+    if (generation === state.generation) {
+      state.preparedBoot = undefined
+      state.resetting = false
+    }
   }
 }

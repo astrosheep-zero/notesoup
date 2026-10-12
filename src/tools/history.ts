@@ -1,6 +1,6 @@
 /** Host-neutral history operations: one bounded payload for text and structured results. */
 import { Type, type Static } from "typebox";
-import { HISTORY_PREVIEW_CHARS, TOOL_OUTPUT_LIMIT } from "./output.js";
+import { HISTORY_PREVIEW_CHARS, MAX_READ_WINDOW_CHARS, TOOL_OUTPUT_LIMIT } from "./output.js";
 import { failure, fitsResult, resultSchema, readTextWindow, renderOutcome, renderTextWindow, success, TextWindowRequestSchema, TextWindowSchema, type Operation, type Outcome } from "./result.js";
 import { historyRoles, searchQuery } from "./schema.js";
 import { HistoryPageSchema, selectPage, type HistoryPage } from "../history/query.js";
@@ -54,10 +54,6 @@ function renderPageItem(item: HistoryPageItem): string {
 	return lines.join("\n");
 }
 
-function isFoldedRow(item: HistoryPageItem | HistoryFoldedRow): item is HistoryFoldedRow {
-	return "folded" in item;
-}
-
 function renderFoldedRow(row: HistoryFoldedRow): string {
 	const tools = Object.entries(row.tools).map(([name, count]) => `${name} ${count}`).join(", ");
 	const expand = `\n\t→ expand: {"after_seq":${row.first_seq - 1},"before_seq":${row.last_seq + 1},"from":"oldest","roles":["tool","context"]}`;
@@ -67,7 +63,7 @@ function renderFoldedRow(row: HistoryFoldedRow): string {
 function renderPage(page: HistoryPage): string {
 	// An empty selection has no anchors either, so it would otherwise render as nothing at all.
 	if (page.items.length === 0) return "No events match these filters.";
-	const body = page.items.map((item) => (isFoldedRow(item) ? renderFoldedRow(item) : renderPageItem(item))).join("\n\n");
+	const body = page.items.map((item) => ("folded" in item ? renderFoldedRow(item) : renderPageItem(item))).join("\n\n");
 	const cursors = [
 		page.page_older === null ? "" : `→ older: ${JSON.stringify(page.page_older)}`,
 		page.page_newer === null ? "" : `→ newer: ${JSON.stringify(page.page_newer)}`,
@@ -161,8 +157,8 @@ export const historyListParameters = Type.Object({
 	until: Type.Optional(Type.String({ minLength: 1, description: "(optional) ISO 8601 time; only events before it. UTC if no offset." })),
 	from: Type.Optional(Type.Union([Type.Literal("newest"), Type.Literal("oldest")], { description: "(optional, default newest) Which end `limit` counts from: newest or oldest. Results stay oldest first." })),
 	window_id: Type.Optional(Type.String({ minLength: 1, description: `(optional) Only this context window. From \`history_windows\` or any event; \`${PREVIOUS_WINDOW}\` is the one before this.` })),
-	limit: Type.Optional(Type.Integer({ description: "(optional, default 20) Max events per page; folded rows don't count." })),
-	max_chars_per_item: Type.Optional(Type.Integer({ description: `(optional, default ${HISTORY_PREVIEW_CHARS}) Max preview chars per event.` })),
+	limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500, description: "(optional, default 20) Max events per page; folded rows don't count." })),
+	max_chars_per_item: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_READ_WINDOW_CHARS, description: `(optional, default ${HISTORY_PREVIEW_CHARS}) Max preview chars per event.` })),
 }, { additionalProperties: false });
 
 export const historyList: Operation<typeof historyListParameters, HistoryPage, [HistoryProjection]> = {

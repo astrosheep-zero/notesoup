@@ -1,6 +1,6 @@
 /** Internal outcomes, compact wire results, and bounded read windows. */
 import { Type, type Static, type TSchema } from "typebox";
-import { DEFAULT_READ_WINDOW_CHARS, MAX_READ_WINDOW_CHARS, TOOL_OUTPUT_LIMIT, TOOL_OUTPUT_MAX_BYTES, withinTextBudget } from "./output.js";
+import { DEFAULT_READ_WINDOW_CHARS, MAX_READ_WINDOW_CHARS, prefixFit, TOOL_OUTPUT_LIMIT, TOOL_OUTPUT_MAX_BYTES } from "./output.js";
 
 /** The one refusal shape: `code` is a stable internal identifier, `message` the bounded reading. */
 export const OperationErrorSchema = Type.Object({
@@ -19,13 +19,11 @@ export function success<T>(data: T): Outcome<T> {
 /** A code is an internal stable identifier and is never clipped; the dynamic message is the bounded surface. */
 export const ERROR_MESSAGE_MAX_CHARS = 2000;
 
-function boundedMessage(message: string): string {
-	const chars = Array.from(message);
-	return chars.length <= ERROR_MESSAGE_MAX_CHARS ? message : `${chars.slice(0, ERROR_MESSAGE_MAX_CHARS).join("")}…[truncated ${chars.length - ERROR_MESSAGE_MAX_CHARS} chars]`;
-}
-
+/** Bounded refusal: a runaway message is clipped with a marker instead of filling the wire. */
 export function failure(code: string, message: string): Outcome<never> {
-	return { ok: false, error: { code, message: boundedMessage(message) } };
+	const chars = Array.from(message);
+	const bounded = chars.length <= ERROR_MESSAGE_MAX_CHARS ? message : `${chars.slice(0, ERROR_MESSAGE_MAX_CHARS).join("")}…[truncated ${chars.length - ERROR_MESSAGE_MAX_CHARS} chars]`;
+	return { ok: false, error: { code, message: bounded } };
 }
 
 /** Public results have no success envelope. `error` is reserved for a refusal message. */
@@ -58,7 +56,7 @@ export function structuredBytes(value: unknown): number {
  * measure covers everything the renderer puts around the payload, headers and footers included.
  */
 export function fitsResult<T>(result: Outcome<T>, render: (result: Outcome<T>) => string): boolean {
-	return withinTextBudget(render(result)) && structuredBytes(wireResult(result)) <= TOOL_OUTPUT_MAX_BYTES;
+	return Buffer.byteLength(render(result), "utf8") <= TOOL_OUTPUT_MAX_BYTES && structuredBytes(wireResult(result)) <= TOOL_OUTPUT_MAX_BYTES;
 }
 
 /** `text` is verbatim, with no marker inserted, so windows concatenate back into the source. */
@@ -97,7 +95,8 @@ export function readTextWindow<T>(
 	const requested = offset ?? 0;
 	const start = requested < 0 ? Math.max(0, chars.length + requested) : requested;
 	const requestedChars = limit ?? DEFAULT_READ_WINDOW_CHARS;
-	const range = Math.min(requestedChars, chars.length - start);
+	// A start past the end (a caller that skipped its own offset check) has nothing to deliver.
+	const range = Math.max(0, Math.min(requestedChars, chars.length - start));
 	const window = (delivered: number): TextWindow => {
 		const end = start + delivered;
 		return {
@@ -107,17 +106,13 @@ export function readTextWindow<T>(
 		};
 	};
 	const fits = (delivered: number): boolean => fitsResult(success(makeData(window(delivered))), render);
-	// Test the full range first: its footer can disappear at the end of the document.
+	// Test the full range first: its footer can disappear at the end of the document, and an
+	// empty source is a complete window rather than a refusal.
 	if (fits(range)) return success(makeData(window(range)));
-	let low = 0;
-	let high = range;
-	while (low < high) {
-		const mid = Math.ceil((low + high) / 2);
-		if (fits(mid)) low = mid;
-		else high = mid - 1;
-	}
-	if (low === 0) return failure("output_too_large", `Its header alone fills the ${TOOL_OUTPUT_LIMIT} a call can carry; no room left for the text.`);
-	return success(makeData(window(low)));
+	// The kept count is monotone in the serialized size, so the shared prefix search owns the shrink.
+	const delivered = Array.from(prefixFit(window(range).text, (candidate) => fits(Array.from(candidate).length))).length;
+	if (delivered === 0) return failure("output_too_large", `Its header alone fills the ${TOOL_OUTPUT_LIMIT} a call can carry; no room left for the text.`);
+	return success(makeData(window(delivered)));
 }
 
 /** The continuation line never becomes part of `window.text`, and a complete window has none. */

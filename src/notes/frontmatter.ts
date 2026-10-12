@@ -132,13 +132,23 @@ export function parseNote(raw: string, now = Date.now()): { meta: NoteMeta; body
 	return { meta: meta as NoteMeta, body };
 }
 
-/** Emit a YAML scalar: bare for safe strings and JSON literals, JSON-quoted otherwise. */
+/**
+ * Emit a YAML scalar: bare for safe strings and JSON literals, JSON-quoted otherwise.
+ * A quoted string must not come back as another type: a value that `JSON.parse` reads as a
+ * non-string (`"1"`, `"1e5"`) is always emitted quoted, so an unknown key survives a rewrite
+ * with its type intact.
+ */
 function yamlScalar(value: unknown): string {
 	if (typeof value === "string") {
 		const reserved = new Set(["true", "false", "null", "yes", "no", "on", "off", "~"]);
-		if (/^[A-Za-z0-9_.+\-:/]+$/.test(value) && !reserved.has(value.toLowerCase())) return value;
+		if (/^[A-Za-z0-9_.+\-:/]+$/.test(value) && !reserved.has(value.toLowerCase()) && !parsesAsNonString(value)) return value;
 	}
 	return JSON.stringify(value);
+}
+
+/** True when a bare scalar would be read back as a number, boolean or null instead of text. */
+function parsesAsNonString(text: string): boolean {
+	try { return typeof JSON.parse(text) !== "string"; } catch { return false; }
 }
 
 /** Serialize frontmatter + blank line + body. Known keys emit in Design order, extras after. */

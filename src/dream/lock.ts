@@ -25,14 +25,6 @@ function readText(path: string): string | undefined {
 	try { return readFileSync(path, "utf8"); } catch { return undefined; }
 }
 
-function stampMtime(stampPath: string): number | undefined {
-	try { return statSync(stampPath).mtimeMs; } catch { return undefined; }
-}
-
-/**
- * Cleanup ownership: only the exact marker this run wrote may be removed. The token is
- * diagnostic and guards cleanup; it never grants permission to take an existing lock.
- */
 function ownsLock(lock: LockState): boolean {
 	if (!lock.held || !lock.token) return false;
 	return readText(lock.path)?.trim() === `${process.pid} ${lock.token}`;
@@ -46,7 +38,9 @@ function ownsLock(lock: LockState): boolean {
  */
 export function acquireLock(path: string): LockState {
 	const now = Date.now();
-	const priorStampMtime = stampMtime(lastRunPath(path));
+	// The sidecar's mtime is the scheduler's timestamp; a missing one means no prior dream.
+	let priorStampMtime: number | undefined;
+	try { priorStampMtime = statSync(lastRunPath(path)).mtimeMs; } catch { /* no sidecar yet */ }
 	const token = randomUUID();
 	try {
 		writeFileSync(path, `${process.pid} ${token}`, { flag: "wx" });

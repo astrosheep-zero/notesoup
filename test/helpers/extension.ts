@@ -189,7 +189,7 @@ export function makeExtension(sessionManager: SessionManager, settingsManager?: 
 export async function explicitBoot(ctx: ExtensionContext, currentWindowId: string, previousWindowId: string | undefined): Promise<string> {
 	return renderBootBlock({
 		tools: PI_TOOL_NAMES,
-		agentName: agentSlug(ctx),
+		agentName: agentSlug(),
 		modelName: modelSlug(ctx),
 		firstWindowId: rootWindowId(ctx.sessionManager.getSessionId()),
 		currentWindowId,

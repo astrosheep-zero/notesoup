@@ -1,6 +1,6 @@
 import { deriveThresholds, type ResolvedThresholds } from "../budget/policy.js";
 import { SettingsManager, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { DEFAULT_RESERVE_TOKENS, DEFAULT_REMINDER_MARGIN_TOKENS, WARNING_RUNWAY_TOKENS } from "../budget/constants.js";
+import { DEFAULT_RESERVE_TOKENS } from "../budget/constants.js";
 import { mergeNotesoupSettings } from "../settings.js";
 import { errorMessage } from "../error-message.js";
 
@@ -32,18 +32,12 @@ function readThresholdSettingsFromManager(ctx: ExtensionContext, settingsManager
  */
 export function readThresholdSettings(ctx: ExtensionContext, settingsManager?: SettingsManager): ThresholdSettingsResolution {
 	try {
-		if (settingsManager) return readThresholdSettingsFromManager(ctx, settingsManager);
-		return readThresholdSettingsFromManager(
-			ctx,
-			SettingsManager.create(ctx.cwd, undefined, { projectTrusted: ctx.isProjectTrusted() }),
-		);
+		const manager = settingsManager ?? SettingsManager.create(ctx.cwd, undefined, { projectTrusted: ctx.isProjectTrusted() });
+		return readThresholdSettingsFromManager(ctx, manager);
 	} catch (error) {
 		return {
-			thresholds: {
-				reminder: DEFAULT_RESERVE_TOKENS + DEFAULT_REMINDER_MARGIN_TOKENS,
-				reserve: DEFAULT_RESERVE_TOKENS,
-				warning: DEFAULT_RESERVE_TOKENS + WARNING_RUNWAY_TOKENS,
-			},
+			// The same derivation over Pi's default reserve, so the fallback cannot drift from it.
+			thresholds: deriveThresholds(DEFAULT_RESERVE_TOKENS, {}).thresholds,
 			automatic: true,
 			warnings: [`🥣 Couldn't read settings · using defaults (${errorMessage(error)})`],
 		};

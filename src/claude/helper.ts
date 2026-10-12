@@ -30,6 +30,7 @@ function identity(input: ClaudeIdentityInput): NotesIdentity {
 	if (!input || typeof input !== "object" || typeof input.cwd !== "string") throw new Error("invalid identity");
 	return snapshotNotesIdentity({ home: input.home, sessionId: input.sessionId, projectKey: projectKey(input.cwd), agent: input.agent, model: input.model });
 }
+
 /** The first schema violation, named by parameter so the model can fix that one field. */
 function paramProblem(schema: TSchema, params: unknown): string {
 	// A false subschema reports "schema is false"; its parent's additionalProperties error names the field instead.
@@ -39,7 +40,6 @@ function paramProblem(schema: TSchema, params: unknown): string {
 	const field = first.instancePath.replace(/^\//, "").replaceAll("/", ".");
 	return `${field ? `${field} ` : ""}${first.message}${extra}`;
 }
-function jsonValue(value: unknown): unknown { return JSON.parse(JSON.stringify(value)); }
 
 /** Bind one shared operation to the identity Claude supplies. Validate untyped Claude parameters against the shared operation schema before execution. */
 function boundOperation<TParams extends TSchema, TData, TRest extends readonly unknown[]>(
@@ -75,7 +75,7 @@ const OPERATIONS: Record<ClaudeToolName, BoundOperation> = {
 export async function dispatch(request: unknown): Promise<unknown> {
 	if (!request || typeof request !== "object" || Array.isArray(request)) throw new Error("malformed request");
 	const value = request as Record<string, unknown>;
-	if (value.op === "schemas") return TOOL_NAMES.map((name) => ({ name, description: OPERATIONS[name].description, inputSchema: jsonValue(OPERATIONS[name].parameters) }));
+	if (value.op === "schemas") return TOOL_NAMES.map((name) => ({ name, description: OPERATIONS[name].description, inputSchema: JSON.parse(JSON.stringify(OPERATIONS[name].parameters)) }));
 	// The shared reset prose lives here, not in the sandboxed hooks module, so Pi and Claude
 	// cannot drift apart. The hooks module caches one copy per session.
 	if (value.op === "texts") return { warning: CLAUDE_WARNING_PROMPT, continuation: CONTINUATION, wipeSentence: CLAUDE_WIPE_SENTENCE };

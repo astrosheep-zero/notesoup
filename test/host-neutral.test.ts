@@ -326,3 +326,19 @@ test("one role schema declares the four public roles for the page item, the read
 	assert.equal(Check(HistoryRoleSchema, "developer"), false, "a role outside the four is refused");
 	assert.equal(Check(historyRead.outputSchema, read("developer")), false, "history_read refuses a role outside the four");
 });
+
+test("history paging bounds are the schema's, and a zero limit still pages one event", async () => {
+	const items = Array.from({ length: 3 }, (_, index) => ({ seq: index + 1, windowId: "root", role: "user" as const, text: `message-${index}` }));
+	const projection = projectHistory([{ windowId: "root", items }], 3, new Set([1, 2, 3]));
+	assert.equal(Check(historyList.parameters, { limit: 0 }), false, "the schema refuses a zero limit");
+	assert.equal(Check(historyList.parameters, { limit: 501 }), false, "the schema refuses a limit past its maximum");
+	assert.equal(Check(historyList.parameters, { max_chars_per_item: 0 }), false, "the schema refuses a zero preview budget");
+
+	const zero = data(await historyList.execute({ limit: 0, from: "oldest", roles: ["user"] }, projection));
+	assert.equal(zero.items.length, 1, "an unvalidated zero limit still returns one row instead of none");
+	const negative = data(await historyList.execute({ max_chars_per_item: -5, roles: ["user"] }, projection));
+	const row = negative.items[0]!;
+	if ("folded" in row) assert.fail("a role filter returns event rows only");
+	assert.equal(row.content, "", "a negative budget delivers nothing instead of cutting the tail");
+	assert.equal(row.truncated, true, "the empty preview says it was truncated");
+});

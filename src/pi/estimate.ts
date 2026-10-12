@@ -21,7 +21,7 @@ export interface ContextUsageEstimate {
 	lastUsageIndex: number | null;
 }
 
-export function calculateContextTokens(usage: Usage): number {
+function calculateContextTokens(usage: Usage): number {
 	return usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
 }
 
@@ -40,15 +40,15 @@ function estimateTextAndImageContentChars(content: string | Array<TextContent | 
 	return chars;
 }
 
-export function estimateTextTokens(text: string): number {
+function estimateTextTokens(text: string): number {
 	return Math.ceil(text.length / CHARS_PER_TOKEN);
 }
 
-export function estimateTextAndImageContentTokens(content: string | Array<TextContent | ImageContent>): number {
+function estimateTextAndImageContentTokens(content: string | Array<TextContent | ImageContent>): number {
 	return Math.ceil(estimateTextAndImageContentChars(content) / CHARS_PER_TOKEN);
 }
 
-export function estimateMessageTokens(message: Message): number {
+function estimateMessageTokens(message: Message): number {
 	let chars = 0;
 	if (message.role === "system") {
 		return (

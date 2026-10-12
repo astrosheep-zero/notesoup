@@ -1,24 +1,10 @@
-import { NoteError } from "./errors.js";
+import { NoteError, shown } from "./errors.js";
 import type { NotesIdentity } from "./identity.js";
-import { SLUG_PATTERN, type Scope } from "./paths.js";
+import { assertVirtualPath, SLUG_PATTERN, type Scope } from "./paths.js";
 
 export type NoteAddress = { scope: Scope; path: string; who?: string };
 
 export const ADDRESS_FORMS = "Use <path> for this session, or @project/, @human/, @self/, or @model/ followed by a path.";
-
-/** A refusal names the offending input; JSON quoting keeps control chars visible, and stringify misses get String(). */
-function shown(value: unknown): string {
-	const json = JSON.stringify(value);
-	return json === undefined ? String(value) : json;
-}
-
-export function assertVirtualPath(value: unknown): string {
-	if (typeof value !== "string" || value.length === 0) throw new NoteError("invalid_address", "The address is empty; give the note a path.");
-	if (value.includes("\0") || value.includes("\\") || value.startsWith("/")) throw new NoteError("invalid_address", `${shown(value)}: a note path can't start with "/" or contain "\\" or NUL.`);
-	const parts = value.split("/");
-	if (parts.some((part) => part.length === 0 || part === "." || part === "..")) throw new NoteError("invalid_address", `${shown(value)}: a note path can't have empty, ".", or ".." folder names.`);
-	return value;
-}
 
 /**
  * Minimal glob over virtual note paths: `*` matches any run within a segment (never
@@ -39,6 +25,8 @@ export function globToRegExp(pattern: string): RegExp {
 			} else {
 				source += "[^/]*";
 			}
+		} else if (char === "?") {
+			source += "[^/]";
 		} else {
 			source += char.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
 		}

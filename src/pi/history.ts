@@ -27,14 +27,10 @@ function isToolCall(part: unknown): part is ToolCall {
 	return typeof part === "object" && part !== null && (part as { type?: unknown }).type === "toolCall";
 }
 
-function mappedMessage(message: AgentMessage): boolean {
-	return mapRole(message.role) !== undefined;
-}
-
 /** Seq allocation depends on entry kind and role, never on visible content. */
 function sequenceCount(entry: SessionEntry): number {
 	if (entry.type === "compaction" || entry.type === "branch_summary" || entry.type === "custom_message") return 1;
-	if (entry.type !== "message" || !mappedMessage(entry.message)) return 0;
+	if (entry.type !== "message" || mapRole(entry.message.role) === undefined) return 0;
 	if (entry.message.role !== "assistant" || !Array.isArray(entry.message.content)) return 1;
 	return 1 + entry.message.content.filter(isToolCall).length;
 }

@@ -1,5 +1,6 @@
 import { WARNING_RUNWAY_TOKENS } from "../budget/constants.js";
-import { mergeNotesoupSettings } from "../settings.js";
+import { percent, positiveInteger, positiveNumber, presenceFlag } from "../budget/parse.js";
+import { isPlainObject, mergeNotesoupSettings } from "../settings.js";
 
 /**
  * Claude's auto-compact point, derived the way Claude derives it — never a hardcoded percent.
@@ -16,6 +17,14 @@ export const CLAUDE_AUTOCOMPACT_BUFFER_TOKENS = 13_000;
 export const CLAUDE_OUTPUT_RESERVE_TOKENS = 20_000;
 /** Default slack between Claude's auto-compact point and notesoup's notes-only reset. */
 export const DEFAULT_CLAUDE_RESET_MARGIN_TOKENS = 8_192;
+/**
+ * A point is never expressed as zero: the mod reads `measured >= reset` as due, so a zero point
+ * would clear memory on every turn, including a fresh window. A window smaller than Claude's own
+ * reserves therefore resets at the smallest expressible point instead.
+ */
+const MIN_POINT_TOKENS = 1;
+/** The same floor in percent units, for the no-window fallback. */
+const MIN_POINT_PERCENT = 0.1;
 /**
  * The percent fallback assumes the classic 200K model window: it is reached only when
  * `usage()` reports no window and no breakdown, and it reproduces the token maths below
@@ -41,42 +50,12 @@ export type ClaudeLimits = {
 	readonly warningRunway: number;
 };
 
-function isObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-/** Numbers may arrive typed or as environment strings; anything else is unknown. */
-function numberOf(value: unknown): number | undefined {
-	if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
-	if (typeof value === "string" && value.trim() !== "") {
-		const parsed = Number(value);
-		return Number.isFinite(parsed) ? parsed : undefined;
-	}
-	return undefined;
-}
-function positiveNumberOf(value: unknown): number | undefined {
-	const parsed = numberOf(value);
-	return parsed !== undefined && parsed > 0 ? parsed : undefined;
-}
-/** A margin is usable only as a positive integer, matching Pi's budget policy. */
-function positiveIntegerOf(value: unknown): number | undefined {
-	const parsed = numberOf(value);
-	return parsed !== undefined && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
-}
-/** Claude accepts a percent override only in (0, 100]. */
-function percentOf(value: unknown): number | undefined {
-	const parsed = numberOf(value);
-	return parsed !== undefined && parsed > 0 && parsed <= 100 ? parsed : undefined;
-}
-/** Presence-style flags (DISABLE_AUTO_COMPACT): any value but an explicit no counts as on. */
-function flagOn(value: unknown): boolean {
-	if (typeof value !== "string") return false;
-	const text = value.trim().toLowerCase();
-	return text !== "" && text !== "0" && text !== "false" && text !== "no" && text !== "off";
-}
-function settingFlag(settings: unknown, key: string): boolean | undefined {
-	if (!isObject(settings)) return undefined;
-	const value = settings[key];
-	return typeof value === "boolean" ? value : undefined;
+/**
+ * The active auto-compact flag: absent means Claude's default (on), and only an explicit
+ * boolean counts. Settings are read from one host-supplied scope, so the flag is top-level.
+ */
+function settingFlag(settings: unknown): boolean | undefined {
+	return isPlainObject(settings) && typeof settings.autoCompactEnabled === "boolean" ? settings.autoCompactEnabled : undefined;
 }
 
 /**
@@ -86,18 +65,18 @@ function settingFlag(settings: unknown, key: string): boolean | undefined {
  */
 function configuredWindow(settings: unknown, env: Record<string, unknown>, model: unknown): number | undefined {
 	const windows: number[] = [];
-	const fromEnv = positiveNumberOf(env.autoCompactWindow);
+	const fromEnv = positiveNumber(env.autoCompactWindow);
 	if (fromEnv !== undefined) windows.push(fromEnv);
-	if (typeof model === "string" && model.length > 0 && isObject(settings)) {
-		const modelSettings = isObject(settings.modelSettings) ? settings.modelSettings : {};
+	if (typeof model === "string" && model.length > 0 && isPlainObject(settings)) {
+		const modelSettings = isPlainObject(settings.modelSettings) ? settings.modelSettings : {};
 		const perModel = modelSettings[model];
-		if (isObject(perModel)) {
-			const value = positiveNumberOf(perModel.autoCompactWindow);
+		if (isPlainObject(perModel)) {
+			const value = positiveNumber(perModel.autoCompactWindow);
 			if (value !== undefined) windows.push(value);
 		}
 	}
-	if (isObject(settings)) {
-		const value = positiveNumberOf(settings.autoCompactWindow);
+	if (isPlainObject(settings)) {
+		const value = positiveNumber(settings.autoCompactWindow);
 		if (value !== undefined) windows.push(value);
 	}
 	return windows.length === 0 ? undefined : Math.min(...windows);
@@ -105,10 +84,10 @@ function configuredWindow(settings: unknown, env: Record<string, unknown>, model
 
 function tokenLimits(source: ClaudeLimitSource, autoCompact: boolean, native: number, resetMargin: number, warningRunway: number): ClaudeLimits {
 	const tokens = Math.max(0, Math.floor(native));
-	const reset = Math.max(0, tokens - resetMargin);
+	const reset = Math.max(MIN_POINT_TOKENS, tokens - resetMargin);
 	return {
 		source, autoCompact, unit: "tokens",
-		native: tokens, reset, warn: Math.max(0, reset - warningRunway), resetMargin, warningRunway,
+		native: tokens, reset, warn: Math.max(MIN_POINT_TOKENS, reset - warningRunway), resetMargin, warningRunway,
 	};
 }
 
@@ -116,10 +95,10 @@ function tokenLimits(source: ClaudeLimitSource, autoCompact: boolean, native: nu
 function percentLimits(autoCompact: boolean, pct: number | undefined, resetMargin: number, warningRunway: number): ClaudeLimits {
 	const base = 100 * (1 - (CLAUDE_OUTPUT_RESERVE_TOKENS + CLAUDE_AUTOCOMPACT_BUFFER_TOKENS) / ASSUMED_WINDOW_TOKENS);
 	const native = pct === undefined ? base : Math.min(pct, base);
-	const reset = Math.max(0, native - (resetMargin / ASSUMED_WINDOW_TOKENS) * 100);
+	const reset = Math.max(MIN_POINT_PERCENT, native - (resetMargin / ASSUMED_WINDOW_TOKENS) * 100);
 	return {
 		source: "percent", autoCompact, unit: "percent",
-		native, reset, warn: Math.max(0, reset - (warningRunway / ASSUMED_WINDOW_TOKENS) * 100), resetMargin, warningRunway,
+		native, reset, warn: Math.max(MIN_POINT_PERCENT, reset - (warningRunway / ASSUMED_WINDOW_TOKENS) * 100), resetMargin, warningRunway,
 	};
 }
 
@@ -130,39 +109,43 @@ function percentLimits(autoCompact: boolean, pct: number | undefined, resetMargi
  * helper boundary, where nothing is typed.
  */
 export function resolveClaudeLimits(facts: unknown): ClaudeLimits {
-	const root = isObject(facts) ? facts : {};
-	const usage = isObject(root.usage) ? root.usage : {};
-	const breakdown = isObject(root.breakdown) ? root.breakdown : {};
-	const env = isObject(root.env) ? root.env : {};
+	const root = isPlainObject(facts) ? facts : {};
+	const usage = isPlainObject(root.usage) ? root.usage : {};
+	const breakdown = isPlainObject(root.breakdown) ? root.breakdown : {};
+	const env = isPlainObject(root.env) ? root.env : {};
 	const settings = root.settings;
 
+	// The host hands over its merged settings, so there is no separate project scope to name.
 	const margins = mergeNotesoupSettings(settings, undefined);
-	const resetMargin = positiveIntegerOf(margins.resetMarginTokens) ?? DEFAULT_CLAUDE_RESET_MARGIN_TOKENS;
-	const warningRunway = positiveIntegerOf(margins.warningRunwayTokens) ?? WARNING_RUNWAY_TOKENS;
+	const resetMargin = positiveInteger(margins.resetMarginTokens) ?? DEFAULT_CLAUDE_RESET_MARGIN_TOKENS;
+	const warningRunway = positiveInteger(margins.warningRunwayTokens) ?? WARNING_RUNWAY_TOKENS;
 
-	const autoCompact = settingFlag(settings, "autoCompactEnabled") !== false
-		&& !flagOn(env.disableAutoCompact)
+	const autoCompact = settingFlag(settings) !== false
+		&& !presenceFlag(env.disableAutoCompact)
 		&& breakdown.isAutoCompactEnabled !== false;
-	const pct = percentOf(env.pctOverride);
+	const pct = percent(env.pctOverride);
 
 	// (a) Claude's own point. It already includes the window, model settings and CLI flag; only
 	// the percent override is applied separately, on the window-after-output-reserve it is
-	// minted from (threshold + summary buffer).
-	const threshold = positiveNumberOf(breakdown.autoCompactThreshold);
+	// minted from (threshold + summary buffer). A malformed override that floors the point to
+	// zero is not a point at all, so it degrades to the next source instead of resetting always.
+	const threshold = positiveNumber(breakdown.autoCompactThreshold);
 	if (autoCompact && threshold !== undefined) {
 		const native = pct === undefined ? threshold : Math.min(Math.floor((threshold + CLAUDE_AUTOCOMPACT_BUFFER_TOKENS) * (pct / 100)), threshold);
 		if (native > 0) return tokenLimits("auto-compact", true, native, resetMargin, warningRunway);
 	}
 
-	// (b) The same point computed from the reported window plus settings and environment.
-	const window = positiveNumberOf(usage.window);
+	// (b) The same point computed from the reported window plus settings and environment. A real
+	// window always answers here: falling through to the percent fallback would express the
+	// points on an assumed 200K window, which is later than the window notesoup can see.
+	const window = positiveNumber(usage.window);
 	if (window !== undefined) {
 		const configured = configuredWindow(settings, env, breakdown.model);
 		const effective = Math.min(configured ?? window, window);
 		const native = autoCompact
 			? effective - CLAUDE_OUTPUT_RESERVE_TOKENS - CLAUDE_AUTOCOMPACT_BUFFER_TOKENS
 			: effective - CLAUDE_OUTPUT_RESERVE_TOKENS;
-		if (native > 0) return tokenLimits("window", autoCompact, native, resetMargin, warningRunway);
+		return tokenLimits("window", autoCompact, native, resetMargin, warningRunway);
 	}
 
 	// (c) Nothing usable but percentages.
