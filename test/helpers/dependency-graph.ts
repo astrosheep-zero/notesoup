@@ -4,10 +4,21 @@ import { relative, resolve, sep } from "node:path";
 import ts from "typescript";
 
 const builtins = new Set(builtinModules.map((name) => name.replace(/^node:/, "")));
-const hostPackage = /^(?:(?:@earendil-works|@mariozechner)\/pi-(?:ai|agent-core|coding-agent)|@deepseek-ai\/(?:dsh(?:-[^/]+)?|cordis(?:-[^/]+)?))(?:\/|$)/;
+type Adapter = "pi" | "claude" | "dsh";
+function packageAdapter(specifier: string): Adapter | undefined {
+	if (/^@(?:earendil-works|mariozechner)\//.test(specifier)) return "pi";
+	if (/^@deepseek-ai\//.test(specifier)) return "dsh";
+	if (/^(?:claude-code|@anthropic-ai\/[^/]+)(?:\/|$)/.test(specifier)) return "claude";
+	return undefined;
+}
 
-/** AST edges include erased types and re-exports, not merely emitted runtime imports. */
-export function moduleReferences(source: ts.SourceFile): string[] {
+/** All AST edges enforce boundaries; emitted edges alone determine runtime cycles. */
+export function moduleReferences(source: ts.SourceFile, runtimeOnly = false): string[] {
+	if (runtimeOnly) {
+		if (source.isDeclarationFile) return [];
+		const emitted = ts.transpileModule(source.text, { fileName: source.fileName, compilerOptions: { module: ts.ModuleKind.Preserve, target: ts.ScriptTarget.ES2022 } }).outputText;
+		source = ts.createSourceFile(source.fileName + ".js", emitted, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+	}
 	const references = new Set<string>();
 	const add = (node: ts.Node | undefined) => {
 		if (node && ts.isStringLiteralLike(node)) references.add(node.text);
@@ -27,34 +38,62 @@ function packageName(specifier: string): string {
 	return specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0]!;
 }
 
-/** Resolve every reachable edge with TypeScript, including local aliases and external declarations. */
+/** Resolve reachable edges, preserving each importing module's core/adapter ownership. */
 export function dependencyViolations(root: string, entries: string[], options: ts.CompilerOptions, runtimeDependencies: Set<string>): string[] {
 	root = realpathSync(root);
 	const violations: string[] = [];
 	const visited = new Set<string>();
+	const runtime = new Map<string, string[]>();
 	const cache = ts.createModuleResolutionCache(root, (path) => path, options);
 	const sourceRoot = resolve(root, "src");
+	const rootEntry = resolve(sourceRoot, "index.ts");
+	const notesEntry = resolve(sourceRoot, "notes/index.ts");
 	const display = (path: string) => relative(root, path).split(sep).join("/");
-	const native = (path: string) => path === resolve(sourceRoot, "index.ts") || ["pi", "claude", "dsh"].some((adapter) => path.startsWith(resolve(sourceRoot, adapter) + sep)) || /node_modules\/(?:(?:@earendil-works|@mariozechner)\/pi-(?:ai|agent-core|coding-agent)|@deepseek-ai\/(?:dsh(?:-[^/]+)?|cordis(?:-[^/]+)?))(?:\/|$)/.test(path.split(sep).join("/"));
+	const local = (file: string) => file.startsWith(sourceRoot + sep) || file.startsWith(resolve(root, "mods/notesoup") + sep);
+	const adapter = (file: string): Adapter | undefined => {
+		const path = display(file);
+		return file === rootEntry ? "pi" : /^src\/(pi|claude|dsh)\//.exec(path)?.[1] as Adapter | undefined
+			?? (path.startsWith("mods/notesoup/") ? "claude" : packageAdapter(file.split(sep).join("/").split("/node_modules/").at(-1)!));
+	};
 	const walk = (file: string, chain: string[]): void => {
 		file = realpathSync(file);
-		if (native(file)) { violations.push([...chain, display(file)].join(" -> ")); return; }
 		if (visited.has(file)) return;
 		visited.add(file);
 		const here = [...chain, display(file)];
+		const owner = adapter(file);
 		const source = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
+		const emitted = new Set(local(file) ? moduleReferences(source, true) : []);
+		if (local(file)) runtime.set(file, []);
 		for (const specifier of moduleReferences(source)) {
 			if (specifier.startsWith("node:") || builtins.has(specifier)) continue;
-			if (hostPackage.test(specifier)) { violations.push([...here, specifier].join(" -> ")); continue; }
+			const sdk = packageAdapter(specifier);
+			if (sdk) { if (owner !== sdk) violations.push([...here, specifier].join(" -> ")); continue; }
 			const resolution = ts.resolveModuleName(specifier, file, options, ts.sys, cache).resolvedModule;
 			if (!resolution) { violations.push([...here, `unresolved ${specifier}`].join(" -> ")); continue; }
-			// A shared dependency must be intentional, not accidentally supplied by a Pi peer/dev dependency.
-			if (file.startsWith(sourceRoot + sep) && resolution.isExternalLibraryImport && !runtimeDependencies.has(packageName(specifier))) {
+			const target = realpathSync(resolution.resolvedFileName);
+			const targetOwner = adapter(target);
+			if (target === rootEntry || (targetOwner && targetOwner !== owner) ||
+				(owner && target.startsWith(resolve(sourceRoot, "notes") + sep) && target !== notesEntry) ||
+				(owner === "dsh" && target.startsWith(resolve(sourceRoot, "dream") + sep))) {
+				violations.push([...here, display(target)].join(" -> ")); continue;
+			}
+			// Core dependencies must be intentional, not accidentally supplied by a host.
+			if (!owner && file.startsWith(sourceRoot + sep) && resolution.isExternalLibraryImport && !runtimeDependencies.has(packageName(specifier))) {
 				violations.push([...here, `undeclared runtime dependency ${specifier}`].join(" -> "));
 			}
-			walk(resolution.resolvedFileName, here);
+			if (emitted.has(specifier) && local(target)) runtime.get(file)!.push(target);
+			if (!targetOwner || local(target)) walk(target, here);
 		}
 	};
 	for (const entry of entries) walk(resolve(root, entry), []);
+	const checked = new Set<string>();
+	const cycles = (file: string, path: string[]): void => {
+		const start = path.indexOf(file);
+		if (start >= 0) { violations.push(`runtime cycle: ${[...path.slice(start), file].map(display).join(" -> ")}`); return; }
+		if (checked.has(file)) return;
+		checked.add(file);
+		for (const target of runtime.get(file) ?? []) cycles(target, [...path, file]);
+	};
+	for (const file of runtime.keys()) cycles(file, []);
 	return violations;
 }

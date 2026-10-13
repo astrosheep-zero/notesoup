@@ -39,21 +39,13 @@ test("all shared domains resolve without any direct or transitive SDK, Pi adapte
 	}
 });
 
-test("dsh resolves into shared domains without Pi, Claude, dream or the root entry", () => {
+test("each adapter resolves only its own host, shared domains and the public notes entry", () => {
 	const root = repository();
-	const seen = new Set<string>();
-	const inspect = (file: string) => {
-		if (seen.has(file)) return;
-		seen.add(file);
-		assert.ok(!["pi", "claude", "dream"].some((adapter) => file.startsWith(join(root, "src", adapter) + "/")) && file !== join(root, "src/index.ts"), file);
-		const source = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
-		for (const reference of moduleReferences(source)) {
-			assert.ok(!/^@(?:earendil-works|mariozechner)\/pi-/.test(reference), reference);
-			const resolved = ts.resolveModuleName(reference, file, options, ts.sys).resolvedModule;
-			if (resolved && resolved.resolvedFileName.startsWith(join(root, "src") + "/")) inspect(resolved.resolvedFileName);
-		}
-	};
-	for (const file of sources(join(root, "src/dsh"))) inspect(file);
+	for (const adapter of ["pi", "claude", "dsh"]) {
+		const entries = sources(join(root, "src", adapter));
+		if (adapter === "claude") entries.push(...sources(join(root, "mods/notesoup/hooks")));
+		assert.deepEqual(dependencyViolations(root, entries, options, new Set(["typebox"])), [], adapter);
+	}
 });
 
 test("dependency guard follows indirect types, re-exports, dynamic imports and import-type edges through resolved aliases", (t) => {
@@ -87,6 +79,53 @@ test("dependency guard follows indirect types, re-exports, dynamic imports and i
 	put("src/notes/bridge.ts", 'export type { Value as Native } from "./safe.js";');
 	put("src/notes/safe.ts", "export type Value = string;");
 	assert.deepEqual(dependencyViolations(root, ["src/notes/identity.ts"], fixtureOptions, new Set()), [], "a host-neutral type/re-export chain is allowed");
+});
+
+test("adapter policies reject foreign hosts and notes internals, including reachable Claude hooks", (t) => {
+	const root = mkdtempSync(join(tmpdir(), "context-adapters-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const put = (path: string, text: string) => { mkdirSync(dirname(join(root, path)), { recursive: true }); writeFileSync(join(root, path), text); };
+	put("package.json", '{"type":"module"}');
+	put("src/notes/index.ts", 'export type { Note } from "./store.js";');
+	put("src/notes/store.ts", "export type Note = string;");
+	const hosts = ["pi", "claude", "dsh"];
+	const sdks = ["@earendil-works/pi-coding-agent", "claude-code", "@deepseek-ai/cordis"];
+	for (const host of hosts) put(`src/${host}/native.ts`, "export const value = 1;");
+	for (const [index, host] of hosts.entries()) {
+		const entry = `src/${host}/entry.ts`;
+		const check = () => dependencyViolations(root, [entry], options, new Set());
+		put(entry, `export type { Note } from "../notes/index.js"; import type { Native } from "${sdks[index]}";`);
+		assert.deepEqual(check(), [], `${host} may use its SDK and the notes entry`);
+		put(entry, 'export type { Note } from "../notes/store.js";');
+		assert.deepEqual(check(), [`${entry} -> src/notes/store.ts`]);
+		const other = (index + 1) % hosts.length;
+		put(entry, `export { value } from "../${hosts[other]}/native.js";`);
+		assert.deepEqual(check(), [`${entry} -> src/${hosts[other]}/native.ts`]);
+		put(entry, `export type { Native } from "${sdks[other]}";`);
+		assert.deepEqual(check(), [`${entry} -> ${sdks[other]}`]);
+	}
+	put("src/claude/entry.ts", 'export { value } from "../../mods/notesoup/hooks/register.js";');
+	put("mods/notesoup/hooks/register.ts", 'export { value } from "../../../src/pi/native.js";');
+	assert.deepEqual(dependencyViolations(root, ["src/claude/entry.ts"], options, new Set()), ["src/claude/entry.ts -> mods/notesoup/hooks/register.ts -> src/pi/native.ts"]);
+	put("mods/notesoup/hooks/register.ts", 'export type { Note } from "../../../src/notes/index.js";');
+	assert.deepEqual(dependencyViolations(root, ["src/claude/entry.ts"], options, new Set()), []);
+	put("src/pi/entry.ts", 'export type { Note } from "@notes-internal";');
+	assert.deepEqual(dependencyViolations(root, ["src/pi/entry.ts"], { ...options, baseUrl: root, paths: { "@notes-internal": ["src/notes/store.ts"] } }, new Set()), ["src/pi/entry.ts -> src/notes/store.ts"]);
+});
+
+test("runtime cycles are rejected but explicit and implicitly erased type edges are allowed", (t) => {
+	const root = mkdtempSync(join(tmpdir(), "context-cycles-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	mkdirSync(join(root, "src/boot"), { recursive: true });
+	writeFileSync(join(root, "package.json"), '{"type":"module"}');
+	writeFileSync(join(root, "src/boot/a.ts"), 'import { b } from "./b.js"; export const a = () => b; export type A = string;');
+	const check = () => dependencyViolations(root, ["src/boot/a.ts"], options, new Set());
+	writeFileSync(join(root, "src/boot/b.ts"), 'export { a as b } from "./a.js";');
+	assert.deepEqual(check(), ["runtime cycle: src/boot/a.ts -> src/boot/b.ts -> src/boot/a.ts"]);
+	writeFileSync(join(root, "src/boot/b.ts"), 'export type B = import("./a.js").A; export const b = 1;');
+	assert.deepEqual(check(), []);
+	writeFileSync(join(root, "src/boot/b.ts"), 'import { A } from "./a.js"; export type B = A; export const b = 1;');
+	assert.deepEqual(check(), []);
 });
 
 test("AST guard sees every literal module edge, not import-like prose or comments", () => {

@@ -14,7 +14,7 @@ import test from "node:test";
 import type { TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { parseNote } from "../src/notes/frontmatter.js";
-import { projectKey } from "../src/notes/paths.js";
+import { projectKey } from "../src/notes/index.js";
 import { globToRegExp } from "../src/notes/address.js";
 import type { Scope } from "../src/notes/index.js";
 import { listNotes, physicalPath, scopeDir } from "./helpers/notes.js";

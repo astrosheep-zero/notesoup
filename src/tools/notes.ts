@@ -258,7 +258,7 @@ export const notesUpdate = {
 	name: "notes_update", label: "Notes update",
 	description: `Edit a note, change its origin or crumpled state, or move it. Each \`oldText\` must match exactly once unless \`replace_all\` is true. ${ADDRESS_DESCRIPTION}`,
 	parameters: notesUpdateParameters, outputSchema: resultSchema(NotesUpdateDataSchema), executionMode: "sequential",
-	async execute(params: Static<typeof notesUpdateParameters>, identity: NotesIdentity, renderDiff: (change: NoteChange) => string): Promise<Outcome<NotesUpdateData>> {
+	async execute(params: Static<typeof notesUpdateParameters>, identity: NotesIdentity, renderDiff: (change: NoteChange) => string = (change) => change.kind === "none" ? "" : `note ${change.kind}`): Promise<Outcome<NotesUpdateData>> {
 		try {
 			const store = createNotesStore(identity);
 			// Empty filler is not a request: models that pass every parameter get the edit path.

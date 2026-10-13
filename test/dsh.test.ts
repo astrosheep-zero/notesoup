@@ -16,7 +16,7 @@ import { dshFixture } from "./helpers/dsh.js";
 import { decodeHistory } from "../src/dsh/history.js";
 import { checkpointSnapshot, notesIdentity, recoverSnapshot, WINDOW_RECORD } from "../src/dsh/window.js";
 import { measureBudget } from "../src/dsh/budget.js";
-import { preflight } from "../src/dsh/preflight.js";
+import { preflight } from "../src/dsh/engine.js";
 import type { Agent } from "@deepseek-ai/dsh-agent";
 import { BasicCompactionEngine } from "@deepseek-ai/dsh-compaction-basic";
 

@@ -1,5 +1,5 @@
 import { notesIdentityFromPi } from "../src/pi/notes/adapter.js";
-import { PI_TOOL_NAMES } from "../src/pi/tool-names.js";
+import { DEFAULT_BOOT_TOOL_NAMES } from "../src/boot/text.js";
 import assert from "node:assert/strict";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -222,7 +222,7 @@ test("boot note acquisition is one closed snapshot and isolates one or all faile
 	});
 	assert.deepEqual([...calls.entries()], [["session", 1], ["project", 1], ["human", 1], ["agent", 1], ["model", 1]], "each selected home is loaded exactly once");
 	const renderData = {
-		tools: PI_TOOL_NAMES,
+		tools: DEFAULT_BOOT_TOOL_NAMES,
 		agentName: "root",
 		modelName: "default",
 		firstWindowId: "pcw:test:root",
@@ -281,7 +281,7 @@ test("boot note acquisition is one closed snapshot and isolates one or all faile
 	});
 	assert.deepEqual(oneFailed.unavailable.map((home) => home.label), ["@human"]);
 	const oneFailedText = renderBootBlock({
-		tools: PI_TOOL_NAMES,
+		tools: DEFAULT_BOOT_TOOL_NAMES,
 		agentName: "root",
 		modelName: "default",
 		firstWindowId: "pcw:test:root",
@@ -297,7 +297,7 @@ test("boot note acquisition is one closed snapshot and isolates one or all faile
 	});
 	assert.equal(allFailed.unavailable.length, 5);
 	const allFailedText = renderBootBlock({
-		tools: PI_TOOL_NAMES,
+		tools: DEFAULT_BOOT_TOOL_NAMES,
 		agentName: "root",
 		modelName: "default",
 		firstWindowId: "pcw:test:root",

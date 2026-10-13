@@ -235,6 +235,11 @@ test("shared note operations return canonical outcomes with a body-only read win
 	}));
 	assert.equal(updated.change_kind, "body");
 	assert.equal(updated.diff, "caller-rendered-diff");
+	const defaultReceipt = data(await notesUpdate.execute({ address: "@project/test.md", edits: [{ oldText: "gamma", newText: "delta" }] }, notesIdentity));
+	assert.equal(defaultReceipt.diff, "note body");
+	const unchanged = data(await notesUpdate.execute({ address: "@project/test.md", edits: [{ oldText: "delta", newText: "delta" }] }, notesIdentity));
+	assert.equal(unchanged.change_kind, "none");
+	assert.equal(unchanged.diff, "");
 
 	// Frontmatter is metadata, not body: the window addresses the body and counts only the body.
 	const stored = await createNotesStore(notesIdentity).read("@project/test.md");

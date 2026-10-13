@@ -1,5 +1,5 @@
 import { notesIdentityFromPi } from "../../src/pi/notes/adapter.js";
-import { PI_TOOL_NAMES } from "../../src/pi/tool-names.js";
+import { DEFAULT_BOOT_TOOL_NAMES } from "../../src/boot/text.js";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -188,7 +188,7 @@ export function makeExtension(sessionManager: SessionManager, settingsManager?: 
 
 export async function explicitBoot(ctx: ExtensionContext, currentWindowId: string, previousWindowId: string | undefined): Promise<string> {
 	return renderBootBlock({
-		tools: PI_TOOL_NAMES,
+		tools: DEFAULT_BOOT_TOOL_NAMES,
 		agentName: agentSlug(),
 		modelName: modelSlug(ctx),
 		firstWindowId: rootWindowId(ctx.sessionManager.getSessionId()),

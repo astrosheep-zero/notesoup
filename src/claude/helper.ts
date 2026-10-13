@@ -8,9 +8,7 @@ import { renderBootBlock } from "../boot/render.js";
 import { CLAUDE_WIPE_SENTENCE, type BootToolNames } from "../boot/text.js";
 import { CLAUDE_WARNING_PROMPT, CONTINUATION } from "../budget/text.js";
 import { resolveClaudeLimits } from "./thresholds.js";
-import { resolveProjectHome } from "../notes/project-home.js";
-import { snapshotNotesIdentity, type NotesIdentity } from "../notes/identity.js";
-import type { NoteChange } from "../notes/store.js";
+import { projectKey, snapshotNotesIdentity, type NotesIdentity } from "../notes/index.js";
 import type { Operation, Outcome } from "../tools/result.js";
 
 const MAX_REQUEST_BYTES = 512 * 1024;
@@ -28,7 +26,7 @@ type BoundOperation = {
 
 function identity(input: ClaudeIdentityInput): NotesIdentity {
 	if (!input || typeof input !== "object" || typeof input.cwd !== "string") throw new Error("invalid identity");
-	return snapshotNotesIdentity({ home: input.home, sessionId: input.sessionId, projectKey: resolveProjectHome(input.cwd, input.home).name, agent: input.agent, model: input.model });
+	return snapshotNotesIdentity({ home: input.home, sessionId: input.sessionId, projectKey: projectKey(input.cwd, input.home), agent: input.agent, model: input.model });
 }
 
 /** The first schema violation, named by parameter so the model can fix that one field. */
@@ -59,14 +57,9 @@ function boundOperation<TParams extends TSchema, TData, TRest extends readonly u
 	};
 }
 
-/** Claude has no diff renderer, so an update receipt names the change kind instead of a diff. */
-function claudeDiff(change: NoteChange): string {
-	return change.kind === "none" ? "" : `note ${change.kind}`;
-}
-
 const OPERATIONS: Record<ClaudeToolName, BoundOperation> = {
 	notes_write: boundOperation(notesWrite),
-	notes_update: boundOperation(notesUpdate, claudeDiff),
+	notes_update: boundOperation(notesUpdate),
 	notes_read: boundOperation(notesRead),
 	notes_list: boundOperation(notesList),
 	notes_search: boundOperation(notesSearch),

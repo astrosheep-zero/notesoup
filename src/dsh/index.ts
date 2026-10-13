@@ -4,7 +4,7 @@ import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { CONTINUATION, WARNING_PROMPT, tokenBudgetGuidance } from "../budget/text.js";
 import { measureBudget } from "./budget.js";
 import { BOOT_SECTION, restoreWarnings } from "./window.js";
-import { preflight } from "./preflight.js";
+import { preflight } from "./engine.js";
 import { registerTools } from "./tools.js";
 
 export const name = "notesoup-dsh";

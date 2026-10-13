@@ -10,8 +10,7 @@ import { success, type Operation } from "../tools/result.js";
 import { historyProjection } from "./history.js";
 import { notesIdentity } from "./window.js";
 import { measureBudget } from "./budget.js";
-import { preflight } from "./preflight.js";
-import type { NotesoupCompactionEngine } from "./engine.js";
+import { preflight, type NotesoupCompactionEngine } from "./engine.js";
 
 /** dsh enforces a small schema subset; TypeBox remains the full validator at execution. */
 function hostSchema(schema: TSchema): JsonSchemaNode {
@@ -73,7 +72,7 @@ export function registerTools(ctx: Context, engine: NotesoupCompactionEngine): v
 	});
 	const identity = (agent: Agent) => notesIdentity(agent, engine.config);
 	register(ctx, notesWrite, (agent) => [identity(agent)] as const);
-	register(ctx, notesUpdate, (agent) => [identity(agent), (change) => change.kind === "none" ? "" : `note ${change.kind}`] as const);
+	register(ctx, notesUpdate, (agent) => [identity(agent)] as const);
 	register(ctx, notesRead, (agent) => [identity(agent)] as const);
 	register(ctx, notesList, (agent) => [identity(agent)] as const);
 	register(ctx, notesSearch, (agent) => [identity(agent)] as const);

@@ -1,12 +1,11 @@
-import { PI_TOOL_NAMES } from "./tool-names.js";
+import { DEFAULT_BOOT_TOOL_NAMES } from "../boot/text.js";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { agentSlug, modelSlug, notesIdentityFromPi } from "./notes/adapter.js";
 import { loadNotesSnapshot, unavailableNotesSnapshot, type NotesSnapshot } from "../boot/snapshot.js";
-import { isFilesystemError } from "../notes/fs-error.js";
+import { isFilesystemError } from "../notes/index.js";
 import { BOOT_TYPE } from "./entries.js";
 import { renderBootBlock } from "../boot/render.js";
-import { currentReset, currentWindowId, isWindowBoot, rootWindowId } from "./window.js";
-import { repairResetTail } from "./reset/artifacts.js";
+import { rootWindowId } from "./window.js";
 
 export type IncompleteNotesNotifier = (ctx: ExtensionContext, windowId: string, snapshot: NotesSnapshot) => void;
 
@@ -43,7 +42,7 @@ export async function buildBootMessage(
 	if (isCurrent()) notifyIncompleteNotes?.(ctx, windowId, notes);
 	return {
 		customType: BOOT_TYPE,
-		content: renderBootBlock({ agentName, modelName, firstWindowId: rootWindowId(sessionId), currentWindowId: windowId, previousWindowId: previousId, notes, tools: PI_TOOL_NAMES }),
+		content: renderBootBlock({ agentName, modelName, firstWindowId: rootWindowId(sessionId), currentWindowId: windowId, previousWindowId: previousId, notes, tools: DEFAULT_BOOT_TOOL_NAMES }),
 		display: false,
 		details: { windowId },
 	};
@@ -55,32 +54,4 @@ export function sendBoot(pi: ExtensionAPI, boot: BootMessage): void {
 		{ customType: boot.customType, content: boot.content, display: boot.display, details: boot.details },
 		{ triggerTurn: false },
 	);
-}
-
-/**
- * Boot entry point for `session_start` / `session_tree`. Ordinary startup ensures one root
- * boot; a reset marker instead asks reset-artifact repair to complete its persisted tail.
- */
-export async function ensureBoot(
-	pi: ExtensionAPI,
-	ctx: ExtensionContext,
-	notifyIncompleteNotes?: IncompleteNotesNotifier,
-	isCurrent: () => boolean = () => true,
-): Promise<void> {
-	const sessionId = ctx.sessionManager.getSessionId();
-	const reset = currentReset(ctx);
-	const windowId = reset?.data.windowId ?? rootWindowId(sessionId);
-	const stillCurrent = () => isCurrent() &&
-		ctx.signal?.aborted !== true &&
-		ctx.sessionManager.getSessionId() === sessionId &&
-		currentWindowId(ctx) === windowId;
-	if (reset) {
-		await repairResetTail(pi, ctx, reset, notifyIncompleteNotes, stillCurrent);
-		return;
-	}
-	if (ctx.sessionManager.buildSessionProjection().messages.some((message) => isWindowBoot(message, windowId))) return;
-	const boot = await buildBootMessage(ctx, windowId, undefined, notifyIncompleteNotes, stillCurrent);
-	if (!stillCurrent()) return;
-	if (ctx.sessionManager.buildSessionProjection().messages.some((message) => isWindowBoot(message, windowId))) return;
-	sendBoot(pi, boot);
 }

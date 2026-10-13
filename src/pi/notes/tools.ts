@@ -2,7 +2,7 @@ import { generateDiffString, type ExtensionAPI } from "@earendil-works/pi-coding
 import { notesWrite, notesUpdate, notesRead, notesList, notesSearch } from "../../tools/notes.js";
 import { notesIdentityFromPi } from "./adapter.js";
 import { NOTES_NAMESPACE, registerOperation } from "../tool-result.js";
-import type { NoteChange } from "../../notes/store.js";
+import type { NoteChange } from "../../notes/index.js";
 
 function renderDiff(change: NoteChange): string {
 	return change.kind === "none" ? "" : generateDiffString(change.before, change.after).diff;

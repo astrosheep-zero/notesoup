@@ -69,6 +69,14 @@ export type BootToolNames = Readonly<{
 	wipeSentence?: string;
 }>;
 
+export const DEFAULT_BOOT_TOOL_NAMES = {
+	notes: "notes_*",
+	notesList: "notes_list",
+	history: "history_*",
+	remaining: "get_context_remaining",
+	wipe: "clear_memory",
+} as const satisfies BootToolNames;
+
 export function renderProtocolBlock(tools: BootToolNames): string {
 	const names: Record<string, string> = {
 		"notes_*": tools.notes,

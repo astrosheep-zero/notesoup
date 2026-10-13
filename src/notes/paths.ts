@@ -1,6 +1,5 @@
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-export { projectKey } from "./project-home.js";
 import { NoteError, shown } from "./errors.js";
 import type { NotesIdentity } from "./identity.js";
 

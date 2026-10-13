@@ -1,4 +1,4 @@
-import { PI_TOOL_NAMES } from "./tool-names.js";
+import { DEFAULT_BOOT_TOOL_NAMES } from "../boot/text.js";
 import { remainingBudget, type ResolvedThresholds } from "../budget/policy.js";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI, type ExtensionContext, type SessionBoundaryDraft, type SettingsManager } from "@earendil-works/pi-coding-agent";
@@ -8,7 +8,7 @@ import { readThresholdSettings, type ThresholdSettingsResolution } from "./thres
 import { currentWindowId, hasWindowMessage, isWindowMarker, rootWindowId, windowUsage } from "./window.js";
 import { tokenBudgetGuidance } from "../budget/text.js";
 import { arrangeAnchoredReminders, type AnchorDetails } from "./anchored.js";
-import { output } from "../tools/output.js";
+import { output } from "./tool-result.js";
 
 /** Remaining tokens in the provider's active window, or null without a usable estimate. */
 function remainingTokens(ctx: Pick<ExtensionContext, "sessionManager" | "getContextUsage" | "model">): number | null {
@@ -147,7 +147,7 @@ export function registerBudget(
 		if (hasWindowMessage(ctx, GUIDANCE_TYPE)) return result();
 		if (pendingGuidance?.windowId !== windowId) {
 			if (remaining > reminder) return result();
-			pendingGuidance = { windowId, content: tokenBudgetGuidance(remainingBudget(remaining, warning) ?? 0, PI_TOOL_NAMES.wipe) };
+			pendingGuidance = { windowId, content: tokenBudgetGuidance(remainingBudget(remaining, warning) ?? 0, DEFAULT_BOOT_TOOL_NAMES.wipe) };
 		}
 		return result({ customType: GUIDANCE_TYPE, content: pendingGuidance.content });
 	});

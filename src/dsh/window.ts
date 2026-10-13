@@ -6,18 +6,16 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { loadNotesSnapshot } from "../boot/snapshot.js";
 import { renderBootBlock } from "../boot/render.js";
+import { DEFAULT_BOOT_TOOL_NAMES } from "../boot/text.js";
 import { CONTINUATION } from "../budget/text.js";
 import { contentText } from "../history/history.js";
-import { slugify } from "../notes/paths.js";
-import { resolveProjectHome } from "../notes/project-home.js";
-import { snapshotNotesIdentity, type NotesIdentity } from "../notes/identity.js";
+import { projectKey, slugify, snapshotNotesIdentity, type NotesIdentity } from "../notes/index.js";
 
 export const WINDOW_RECORD = "plugin:notesoup/window";
 export const BOOT_SECTION = "notesoup:boot";
 const BOOT_OPEN = "<notesoup-boot>\n";
 const BOOT_CLOSE = "\n</notesoup-boot>";
 const CHECKPOINT_END = "\n\n<notesoup-continuation>\n";
-const TOOLS = { notes: "notes_*", notesList: "notes_list", history: "history_*", remaining: "get_context_remaining", wipe: "clear_memory" };
 export type WindowSnapshot = Readonly<{ version: 1; window: number; windowId: string; openedAt: number; boot: string; notesDigest: string }>;
 export type WindowState = { snapshot: WindowSnapshot; pendingReset: boolean; warned: boolean; reminded: boolean };
 export type NotesConfig = { notesHome?: string; agentName?: string };
@@ -88,7 +86,7 @@ export function notesIdentity(agent: Pick<Agent, "session" | "options">, config:
 	return snapshotNotesIdentity({
 		home,
 		sessionId: agent.session.id,
-		projectKey: resolveProjectHome(agent.session.header.cwd ?? process.cwd(), home).name,
+		projectKey: projectKey(agent.session.header.cwd ?? process.cwd(), home),
 		agent: slugify(config.agentName ?? "dsh"),
 		model: slugify(agent.session.requestHeader()?.config.model ?? agent.options.model ?? "unknown"),
 	});
@@ -120,7 +118,7 @@ export class Windows {
 		const notes = await loadNotesSnapshot(identity, openedAt);
 		const previous = this.states.get(agent.session)?.snapshot;
 		const firstWindowId = previous?.boot.match(/^First context window id: (.+)$/m)?.[1] ?? windowId(agent.session.id, 0);
-		const boot = BOOT_OPEN + renderBootBlock({ agentName: identity.agent, modelName: identity.model, firstWindowId, currentWindowId: windowId(agent.session.id, window), ...(window ? { previousWindowId: previous?.windowId ?? windowId(agent.session.id, window - 1) } : {}), notes, tools: TOOLS }) + BOOT_CLOSE;
+		const boot = BOOT_OPEN + renderBootBlock({ agentName: identity.agent, modelName: identity.model, firstWindowId, currentWindowId: windowId(agent.session.id, window), ...(window ? { previousWindowId: previous?.windowId ?? windowId(agent.session.id, window - 1) } : {}), notes, tools: DEFAULT_BOOT_TOOL_NAMES }) + BOOT_CLOSE;
 		return Object.freeze({ version: 1, window, windowId: windowId(agent.session.id, window), openedAt, boot, notesDigest: digest(boot) });
 	}
 }

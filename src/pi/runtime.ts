@@ -3,13 +3,13 @@ import { resetBoundaryCommitted } from "./reset/committed.js";
 import { getCurrentSystemMessage, Type } from "@earendil-works/pi-ai";
 import { VERSION, defineTool, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, type SettingsManager } from "@earendil-works/pi-coding-agent";
 import { registerBudget } from "./budget.js";
-import { output } from "../tools/output.js";
+import { output } from "./tool-result.js";
 import { currentReset, currentWindowId, isCheckpointBackedReset, isWindowBoot, isWindowMarker, projectRootWindow, projectWindow, rootWindowId, type WindowMarker } from "./window.js";
 import { registerResetLifecycle } from "./reset/lifecycle.js";
-import { buildResetDrafts } from "./reset/artifacts.js";
+import { buildResetDrafts, repairResetTail } from "./reset/artifacts.js";
 import { BOOT_TYPE, MANUAL_WIPE_TYPE } from "./entries.js";
 import { WARNING_CONTENT } from "../budget/text.js";
-import { ensureBoot, type IncompleteNotesNotifier } from "./boot.js";
+import { buildBootMessage, sendBoot, type IncompleteNotesNotifier } from "./boot.js";
 import { errorMessage } from "../error-message.js";
 
 function readPackageVersion(): string {
@@ -24,6 +24,34 @@ const buildLabel = `v${readPackageVersion()}`;
 
 function branchHasWindowMarker(ctx: ExtensionContext, fromId?: string): boolean {
 	return ctx.sessionManager.getBranch(fromId).some((entry) => isWindowMarker(entry));
+}
+
+/**
+ * Boot entry point for `session_start` / `session_tree`. Ordinary startup ensures one root
+ * boot; a reset marker instead asks reset-artifact repair to complete its persisted tail.
+ */
+async function ensureBoot(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	notifyIncompleteNotes?: IncompleteNotesNotifier,
+	isCurrent: () => boolean = () => true,
+): Promise<void> {
+	const sessionId = ctx.sessionManager.getSessionId();
+	const reset = currentReset(ctx);
+	const windowId = reset?.data.windowId ?? rootWindowId(sessionId);
+	const stillCurrent = () => isCurrent() &&
+		ctx.signal?.aborted !== true &&
+		ctx.sessionManager.getSessionId() === sessionId &&
+		currentWindowId(ctx) === windowId;
+	if (reset) {
+		await repairResetTail(pi, ctx, reset, notifyIncompleteNotes, stillCurrent);
+		return;
+	}
+	if (ctx.sessionManager.buildSessionProjection().messages.some((message) => isWindowBoot(message, windowId))) return;
+	const boot = await buildBootMessage(ctx, windowId, undefined, notifyIncompleteNotes, stillCurrent);
+	if (!stillCurrent()) return;
+	if (ctx.sessionManager.buildSessionProjection().messages.some((message) => isWindowBoot(message, windowId))) return;
+	sendBoot(pi, boot);
 }
 
 /** Register the context-window runtime and its context-owned commands/tools. */

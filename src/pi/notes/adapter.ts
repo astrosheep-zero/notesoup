@@ -1,8 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import type { NotesIdentity } from "../../notes/identity.js";
-import { projectKey, slugify } from "../../notes/paths.js";
+import { projectKey, slugify, type NotesIdentity } from "../../notes/index.js";
 
 /** Pi's default notes root; environment access stays on the host side of the library boundary. */
 export function notesRoot(): string {
