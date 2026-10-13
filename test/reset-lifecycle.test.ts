@@ -15,10 +15,10 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { SessionManager as Manager } from "@earendil-works/pi-coding-agent";
 import notesoup from "../src/pi/extension.js";
-import { BOOT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, RESET_LAST_WORD_TYPE, RESET_MARKER_TYPE } from "../src/pi/entries.js";
+import { BOOT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, RESET_LAST_WORD_TYPE, RESET_MARKER_TYPE, RESET_PROMPT_TYPE } from "../src/pi/entries.js";
 import { MANUAL_WIPE_TYPE } from "../src/pi/entries.js";
 import { toolContext } from "./helpers/extension.js";
-import { WARNING_CONTENT } from "../src/budget/text.js";
+import { WARNING_CALL_PROMPTED, warningContent } from "../src/budget/text.js";
 import { LAST_WORD_PREFIX, MAX_LAST_WORD_CHARS, sanitizeLastWord } from "../src/pi/reset/artifacts.js";
 import {
 	initialResetControl,
@@ -244,9 +244,25 @@ test("off stops future automatic/manual reset requests while an existing marker 
 	assert.equal(h.sent[0]?.customType, MANUAL_WIPE_TYPE);
 	const warning = h.sessionManager.getBranch().find((entry) => entry.type === "custom_message" && entry.customType === MANUAL_WIPE_TYPE);
 	assert.ok(warning && warning.type === "custom_message");
-	assert.equal(warning.content, WARNING_CONTENT);
+	assert.equal(warning.content, warningContent());
 	const markers = h.sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE);
 	assert.equal(markers.length, 1, "manual command waits for an agent boundary; it does not persist an immediate reset");
+});
+
+test("manual /empty-brain with a prompt shows the human's command line in the close-out", async () => {
+	const h = harness();
+	// Assert on values, not on the warning's wording: the command line must survive verbatim
+	// and must precede the closing instruction, so the prompt cannot read as this window's task.
+	await h.runCommand("empty-brain", "Continue reviewing the implementation");
+	const warning = h.sessionManager.getBranch().find((entry) => entry.type === "custom_message" && entry.customType === MANUAL_WIPE_TYPE);
+	assert.ok(warning?.type === "custom_message", "the close-out warning is persisted");
+	const content = String(warning.content);
+	const promptLine = "/empty-brain Continue reviewing the implementation";
+	const promptIndex = content.indexOf(promptLine);
+	assert.ok(promptIndex >= 0, "the human's raw command line reaches the closing model");
+	const closingIndex = content.indexOf(WARNING_CALL_PROMPTED);
+	assert.ok(closingIndex > promptIndex, "the closing instruction follows the prompt, so the order stays prompt then act");
+	assert.equal(h.sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === RESET_PROMPT_TYPE).length, 0, "the prompt itself still waits for the new window");
 });
 
 test("reset construction failure preserves incoming and budget drafts without continuation", async () => {

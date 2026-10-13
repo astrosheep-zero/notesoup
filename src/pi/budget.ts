@@ -3,7 +3,7 @@ import { remainingBudget, type ResolvedThresholds } from "../budget/policy.js";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI, type ExtensionContext, type SessionBoundaryDraft, type SettingsManager } from "@earendil-works/pi-coding-agent";
 import { GUIDANCE_TYPE, WARNING_TYPE } from "./entries.js";
-import { WARNING_CONTENT } from "../budget/text.js";
+import { warningContent } from "../budget/text.js";
 import { readThresholdSettings, type ThresholdSettingsResolution } from "./thresholds.js";
 import { currentWindowId, hasWindowMessage, isWindowMarker, rootWindowId, windowUsage } from "./window.js";
 import { tokenBudgetGuidance } from "../budget/text.js";
@@ -140,7 +140,7 @@ export function registerBudget(
 			// The critical close-out starts at reserve + runway, not at the hard reserve.
 			// Another request in the same turn re-sends the staged text instead of re-measuring.
 			pendingGuidance = undefined;
-			if (pendingWarning?.windowId !== windowId) pendingWarning = { windowId, content: WARNING_CONTENT };
+			if (pendingWarning?.windowId !== windowId) pendingWarning = { windowId, content: warningContent() };
 			return result({ customType: WARNING_TYPE, content: pendingWarning.content });
 		}
 		if (hasWindowMessage(ctx, WARNING_TYPE) || pendingWarning?.windowId === windowId) return result();

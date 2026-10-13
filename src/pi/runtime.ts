@@ -8,7 +8,7 @@ import { currentReset, currentWindowId, isCheckpointBackedReset, isWindowBoot, i
 import { registerResetLifecycle } from "./reset/lifecycle.js";
 import { buildResetDrafts, LAST_WORD_PREFIX, MAX_LAST_WORD_CHARS, repairResetTail, sanitizeLastWord } from "./reset/artifacts.js";
 import { BOOT_TYPE, MANUAL_WIPE_TYPE, RESET_LAST_WORD_TYPE } from "./entries.js";
-import { WARNING_CONTENT } from "../budget/text.js";
+import { warningContent } from "../budget/text.js";
 import { buildBootMessage, sendBoot, type IncompleteNotesNotifier } from "./boot.js";
 import { errorMessage } from "../error-message.js";
 
@@ -189,7 +189,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 			}
 			cmdCtx.ui.notify("🥣 Brain being emptied", "info");
 			try {
-				pi.sendMessage({ customType: MANUAL_WIPE_TYPE, content: WARNING_CONTENT, display: false }, { triggerTurn: true, deliverAs: "steer" });
+				pi.sendMessage({ customType: MANUAL_WIPE_TYPE, content: warningContent(prompt ? `/empty-brain ${prompt}` : undefined), display: false }, { triggerTurn: true, deliverAs: "steer" });
 			} catch (error) {
 				resets.clear();
 				cmdCtx.ui.notify(`🥣 Brain refused to empty: ${errorMessage(error)}`, "error");

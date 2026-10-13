@@ -17,9 +17,9 @@ import {
 	type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import notesoup, { createNotesoup } from "../src/pi/extension.js";
-import { BOOT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, MANUAL_WIPE_TYPE, RESET_MARKER_TYPE, WARNING_TYPE } from "../src/pi/entries.js";
+import { BOOT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, MANUAL_WIPE_TYPE, RESET_MARKER_TYPE, RESET_PROMPT_TYPE, WARNING_TYPE } from "../src/pi/entries.js";
 import { CONTEXT_WINDOW_OPEN_TAG } from "../src/boot/text.js";
-import { CONTINUATION, GUIDANCE_OPEN_TAG, WARNING_CONTENT, WARNING_PROMPT } from "../src/budget/text.js";
+import { CONTINUATION, GUIDANCE_OPEN_TAG, warningContent, warningPrompt } from "../src/budget/text.js";
 
 type StreamScript = (request: number, context: AgentContext) => AssistantMessage | Promise<AssistantMessage>;
 type Hook = (pi: ExtensionAPI, getSession: () => AgentSession, requests: AgentContext[]) => void;
@@ -244,7 +244,7 @@ function text(message: AgentContext | undefined): string {
 
 /** `text()` serializes to JSON, so match the reset prose in its escaped form. */
 const CONTINUATION_JSON = JSON.stringify(CONTINUATION).slice(1, -1);
-const WARNING_JSON = JSON.stringify(WARNING_PROMPT).slice(1, -1);
+const WARNING_JSON = JSON.stringify(warningPrompt()).slice(1, -1);
 
 function resetMarkers(fixture: Fixture) {
 	return fixture.sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE);
@@ -520,7 +520,7 @@ test("real AgentSession: manual command spans its tool batch and stops at settle
 		assert.ok(warningIndex >= 0 && warningIndex < checkpointIndex, "the idle warning is durable before the checkpoint");
 		const warning = branch[warningIndex];
 		assert.ok(warning?.type === "custom_message");
-		assert.equal(warning.content, WARNING_CONTENT);
+		assert.equal(warning.content, warningContent());
 		assert.equal(branch[markerIndex - 1]?.id, branch[checkpointIndex]?.id);
 		assert.ok(branch.slice(0, checkpointIndex).some((entry) => entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "notes_write"), "note write finishes before the checkpoint");
 		const marker = resetMarkers(fixture)[0]!;
@@ -606,9 +606,15 @@ test("real AgentSession: streaming clear prompt keeps the first request", { time
 		compactionEnabled: false,
 		script: async (request, context) => {
 			if (request === 1) { started(); await gate; }
-			if (request <= 2) assert.equal(text(context).includes("FIRST_RESET_PROMPT"), false);
+			if (request === 1) assert.equal(text(context).includes("FIRST_RESET_PROMPT"), false, "the prompt belongs to the close-out, not the turn already running");
+			// The close-out embeds the human's command line verbatim, so the closing turn sees
+			// what the next window was asked to do. Only the accepted command appears.
+			if (request === 2) {
+				assert.ok(text(context).includes("FIRST_RESET_PROMPT"), "the close-out carries the command line");
+				assert.equal(text(context).includes("IGNORED_RESET_PROMPT"), false, "the refused repeat never enters the close-out");
+			}
 			if (request === 3) {
-				assert.ok(text(context).includes("FIRST_RESET_PROMPT"));
+				assert.ok(text(context).includes("FIRST_RESET_PROMPT"), "the fresh window still receives the prompt");
 				assert.equal(text(context).includes("IGNORED_RESET_PROMPT"), false);
 			}
 			assert.ok(request <= 3);
@@ -826,7 +832,13 @@ test("real AgentSession: user abort, synthetic aborted response, and generic err
 			await fixture.session.prompt("AFTER_UNSUCCESSFUL_CLOSEOUT");
 			await fixture.session.waitForIdle();
 			assert.equal(resetMarkers(fixture).length, 0, "no pending close-out leaks into a later prompt");
-			assert.equal(JSON.stringify(fixture.sessionManager.getBranch()).includes("SHOULD_NOT_RUN_AFTER_FAILURE"), false, "cancelled prompt is never appended");
+			// The close-out is armed when the command is typed, so its text is durable before the
+			// outcome is known. A cancelled close-out keeps the command line, but must never
+			// publish it as the next window's prompt.
+			const branch = fixture.sessionManager.getBranch();
+			const wipe = branch.find((entry) => entry.type === "custom_message" && entry.customType === MANUAL_WIPE_TYPE);
+			assert.ok(wipe && JSON.stringify(wipe).includes("SHOULD_NOT_RUN_AFTER_FAILURE"), `${mode} keeps the human's command line in the close-out it armed`);
+			assert.equal(JSON.stringify(branch).includes(RESET_PROMPT_TYPE), false, `${mode} never publishes a prompt for a window that opened`);
 		} finally {
 			fixture.close();
 		}
