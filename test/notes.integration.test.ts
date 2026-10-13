@@ -359,7 +359,7 @@ test("the boot binds its tools and bounds an over-cap MAP with a lookup pointer"
 	await call(captured, "notes_write", { address: "MAP.md", content: "M".repeat(MAP_BOOT_MAX_CHARS + 10) }, ctx);
 	const rendered = await explicitBoot(ctx, "pcw:test:root", undefined);
 
-	for (const tool of ["notes_*", "history_*", "get_context_remaining", "neuralyze"]) {
+	for (const tool of ["notes_*", "history_*", "get_context_remaining", "empty_brain"]) {
 		assert.ok(rendered.includes(`\`${tool}\``), `${tool} is bound in the protocol`);
 	}
 	assert.ok(rendered.includes("M".repeat(MAP_BOOT_MAX_CHARS)), "the existing MAP cap keeps a bounded prefix");

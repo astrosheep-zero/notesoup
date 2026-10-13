@@ -42,7 +42,7 @@ test("custom reset marker removes old provider context while history remains sea
 	const oldUserId = appendText(sessionManager, "user", "OLD-UNIQUE-TRANSCRIPT needle");
 	appendText(sessionManager, "assistant", "I will use a tool");
 	const toolResultId = appendText(sessionManager, "toolResult", "tool result safely recorded");
-	await call(captured, "neuralyze", {}, ctx);
+	await call(captured, "empty_brain", {}, ctx);
 	const boundary = await commitTurnEndBoundary(captured, sessionManager, ctx);
 	assert.equal(boundary.continue, true);
 	const branch = sessionManager.getBranch();
@@ -107,7 +107,7 @@ test("the root boot and reset boot carry durable window identity", async () => {
 	assert.ok(rootText.includes(CONTEXT_WINDOW_PROTOCOL_OPEN_TAG));
 
 	// Reset: the marker and boot are committed together at the turn boundary.
-	await call(captured, "neuralyze", {}, ctx);
+	await call(captured, "empty_brain", {}, ctx);
 	assert.equal(noticesOf(ctx).length, 0, "requesting a reset does not announce success");
 	const boundary = await commitTurnEndBoundary(captured, sessionManager, ctx);
 	assert.equal(boundary.continue, true);
@@ -241,12 +241,12 @@ test("off preserves an existing marker window and still cancels native compactio
 	assert.equal(windows.windows.at(-1)?.window_id, windowId);
 });
 
-test("neuralyze uses one turn boundary and never calls ctx.compact", async () => {
+test("empty_brain uses one turn boundary and never calls ctx.compact", async () => {
 	const sessionManager = manager();
 	const captured = makeExtension(sessionManager);
 	const ctx = context(sessionManager, () => assert.fail("ctx.compact must not be used"));
 	appendText(sessionManager, "user", "enough history for the boundary test");
-	const result = resultJson<{ status?: string }>(await call(captured, "neuralyze", {}, ctx));
+	const result = resultJson<{ status?: string }>(await call(captured, "empty_brain", {}, ctx));
 	assert.ok(result.status);
 	const boundary = await commitTurnEndBoundary(captured, sessionManager, ctx);
 	assert.equal(boundary.continue, true);
@@ -254,10 +254,10 @@ test("neuralyze uses one turn boundary and never calls ctx.compact", async () =>
 	assert.equal(sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === BOOT_TYPE && entry.details && typeof entry.details === "object" && "windowId" in entry.details).length, 1);
 });
 
-test("/neuralyze waits out non-agent busy work before starting its single-turn request", async () => {
+test("/empty-brain waits out non-agent busy work before starting its single-turn request", async () => {
 	const sessionManager = manager();
 	const captured = makeExtension(sessionManager);
-	const cmd = captured.commands.get("neuralyze");
+	const cmd = captured.commands.get("empty-brain");
 	assert.ok(cmd);
 	let waits = 0;
 	const notices: string[] = [];
@@ -273,7 +273,7 @@ test("/neuralyze waits out non-agent busy work before starting its single-turn r
 	assert.equal(notices.filter((message) => message.includes("notes first, then it stops")).length, 1);
 });
 
-test("notesoup command toggles future work, /neuralyze schedules a turn-end reset, and /compact remains disabled", async () => {
+test("notesoup command toggles future work, /empty-brain schedules a turn-end reset, and /compact remains disabled", async () => {
 	const sessionManager = manager();
 	appendText(sessionManager, "user", "hello");
 	const captured = makeExtension(sessionManager);
@@ -290,12 +290,12 @@ test("notesoup command toggles future work, /neuralyze schedules a turn-end rese
 	assert.equal(sentOf(captured, GUIDANCE_TYPE).length, 0, "no guidance persisted while off");
 	await runHandlers(captured, "session_start", { reason: "startup" }, low);
 	assert.equal(captured.sent.length, 1, "no new boot block is persisted while off");
-	const offResult = resultJson<{ error?: string }>(await call(captured, "neuralyze", {}, low));
-	assert.match(offResult.error ?? "", /off/, "neuralyze refuses while off");
+	const offResult = resultJson<{ error?: string }>(await call(captured, "empty_brain", {}, low));
+	assert.match(offResult.error ?? "", /off/, "empty_brain refuses while off");
 
 	notices = await runCommand(captured, "notesoup", "on", low);
 	assert.match(notices[0]?.message ?? "", /on/);
-	notices = await runCommand(captured, "neuralyze", "", low);
+	notices = await runCommand(captured, "empty-brain", "", low);
 	assert.equal(notices.length, 1, "the command acknowledges the reset request");
 	assert.match(notices[0]?.message ?? "", /notes first, then it stops/);
 	assert.equal(captured.sent.length, 2, "the command persists one hidden warning after the startup boot");
@@ -321,7 +321,7 @@ test("committed reset confirmation survives later work while repair refuses that
 	const sessionManager = manager();
 	const captured = makeExtension(sessionManager);
 	const ctx = context(sessionManager);
-	await call(captured, "neuralyze", {}, ctx);
+	await call(captured, "empty_brain", {}, ctx);
 	await commitTurnEndBoundary(captured, sessionManager, ctx);
 	const marker = sessionManager.getBranch().find((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE);
 	assert.ok(marker && marker.type === "custom");

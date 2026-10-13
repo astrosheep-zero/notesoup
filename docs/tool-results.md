@@ -2,7 +2,7 @@
 
 The eight notes/history tools have one business result model. Pi exposes compact results as `structuredContent` to codemode and renders them as `content` for ordinary model calls. Claude uses the same business handlers and text rendering. Neither host re-runs a query, truncates a different page, or parses formatted text to recover data.
 
-This is a breaking tool protocol change: successes no longer have `ok/data` wrappers, errors are flat, and read fields no longer sit under `window`. History execution details live once in the pageable document. Stored notes and raw Pi session entries are not deleted or rewritten by this change. `neuralyze` and `get_context_remaining` are outside this protocol.
+This is a breaking tool protocol change: successes no longer have `ok/data` wrappers, errors are flat, and read fields no longer sit under `window`. History execution details live once in the pageable document. Stored notes and raw Pi session entries are not deleted or rewritten by this change. `empty_brain` and `get_context_remaining` are outside this protocol.
 
 ## Results
 

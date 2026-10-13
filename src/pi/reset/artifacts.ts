@@ -7,7 +7,7 @@ import { buildBootMessage, sendBoot, type IncompleteNotesNotifier } from "../boo
 
 export type ResetTailState = { readonly boot: boolean; readonly continuation: boolean };
 
-/** A sticky note, not a letter: over this, neuralyze refuses instead of truncating. */
+/** A sticky note, not a letter: over this, empty_brain refuses instead of truncating. */
 export const MAX_LAST_WORD_CHARS = 250;
 
 /** How the next window finds the note. */

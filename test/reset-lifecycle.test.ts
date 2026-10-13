@@ -168,8 +168,8 @@ function fakeBoundaryEvent(entries: SessionBoundaryDraft[] = [], message?: Agent
 test("public reset boundary drafts one marker, one boot, and one continuation after a tool batch", async () => {
 	const h = harness();
 	h.sessionManager.appendMessage({ role: "user", content: [{ type: "text", text: "before reset" }], timestamp: Date.now() });
-	const first = await h.callTool("neuralyze");
-	const second = await h.callTool("neuralyze");
+	const first = await h.callTool("empty_brain");
+	const second = await h.callTool("empty_brain");
 	assert.ok(first.content.length > 0 && second.content.length > 0, "both tool calls return normally");
 
 	const toolBatch: SessionBoundaryDraft[] = [{ type: "custom_message", customType: "foreign/tool-batch", content: "tool finished", display: false }];
@@ -195,9 +195,9 @@ test("public reset boundary drafts one marker, one boot, and one continuation af
 	assert.equal(branch.filter((entry) => entry.type === "custom_message" && entry.customType === BOOT_TYPE).length, 1);
 });
 
-test("manual /neuralyze spans tool turns and commits the stop at settlement", async () => {
+test("manual /empty-brain spans tool turns and commits the stop at settlement", async () => {
 	const h = harness();
-	await h.runCommand("neuralyze");
+	await h.runCommand("empty-brain");
 	assert.ok(h.sent.some((message) => message.customType === MANUAL_WIPE_TYPE && message.triggerTurn === true), "the idle close-out warning starts a turn");
 	const toolCallMessage = {
 		role: "assistant",
@@ -221,7 +221,7 @@ test("manual /neuralyze spans tool turns and commits the stop at settlement", as
 
 test("off stops future automatic/manual reset requests while an existing marker remains authoritative", async () => {
 	const h = harness();
-	await h.callTool("neuralyze");
+	await h.callTool("empty_brain");
 	const first = resultEntries(await h.emit("turn_end", fakeBoundaryEvent()));
 	assert.ok(first.entries.some((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE));
 	appendDrafts(h.sessionManager, first.entries);
@@ -238,8 +238,8 @@ test("off stops future automatic/manual reset requests while an existing marker 
 	const afterOff = resultEntries(await h.emit("turn_end", fakeBoundaryEvent()));
 	assert.equal(afterOff.entries.length, 0, "off does not create another reset");
 	await h.runCommand("notesoup", "on");
-	await h.runCommand("neuralyze");
-	assert.equal(h.sent.length, 1, "/neuralyze sends one hidden close-out warning and starts a normal turn");
+	await h.runCommand("empty-brain");
+	assert.equal(h.sent.length, 1, "/empty-brain sends one hidden close-out warning and starts a normal turn");
 	assert.equal(h.sent[0]?.triggerTurn, true);
 	assert.equal(h.sent[0]?.customType, MANUAL_WIPE_TYPE);
 	const warning = h.sessionManager.getBranch().find((entry) => entry.type === "custom_message" && entry.customType === MANUAL_WIPE_TYPE);
@@ -645,10 +645,10 @@ test("a committed reset places incoming and budget drafts before marker -> boot 
 	], "the persisted reset shape remains marker -> boot -> continuation");
 });
 
-test("a neuralyze last word lands as a visible entry after the continuation", async () => {
+test("a empty_brain last word lands as a visible entry after the continuation", async () => {
 	const h = harness();
 	h.sessionManager.appendMessage({ role: "user", content: [{ type: "text", text: "before reset" }], timestamp: Date.now() });
-	await h.callTool("neuralyze", { last_word: "feed the ants" });
+	await h.callTool("empty_brain", { last_word: "feed the ants" });
 	const boundary = resultEntries(await h.emit("turn_end", fakeBoundaryEvent()));
 	const lastWords = boundary.entries.filter((entry) => entry.type === "custom_message" && entry.customType === RESET_LAST_WORD_TYPE);
 	assert.equal(lastWords.length, 1, "the boundary persists exactly one parting line");
@@ -657,19 +657,19 @@ test("a neuralyze last word lands as a visible entry after the continuation", as
 	assert.ok(boundary.entries.indexOf(lastWords[0]!) > continuationIndex, "the parting line follows the continuation");
 });
 
-test("neuralyze trims the last word, refuses an oversized one, and a blank persists no entry", async () => {
+test("empty_brain trims the last word, refuses an oversized one, and a blank persists no entry", async () => {
 	assert.equal(sanitizeLastWord("  hi  "), "hi");
 	assert.equal(sanitizeLastWord("   "), undefined);
 	assert.equal(sanitizeLastWord(undefined), undefined);
 	const over = harness();
 	over.sessionManager.appendMessage({ role: "user", content: [{ type: "text", text: "before reset" }], timestamp: Date.now() });
-	const refused = await over.callTool("neuralyze", { last_word: "x".repeat(MAX_LAST_WORD_CHARS + 1) });
+	const refused = await over.callTool("empty_brain", { last_word: "x".repeat(MAX_LAST_WORD_CHARS + 1) });
 	assert.match(JSON.stringify(refused), /error/, "an oversized note is refused, not truncated");
 	const untouched = resultEntries(await over.emit("turn_end", fakeBoundaryEvent()));
 	assert.equal(untouched.entries.filter((entry) => entry.type === "custom_message" && entry.customType === RESET_LAST_WORD_TYPE).length, 0, "a refused call requests no reset");
 	const h = harness();
 	h.sessionManager.appendMessage({ role: "user", content: [{ type: "text", text: "before reset" }], timestamp: Date.now() });
-	await h.callTool("neuralyze", { last_word: "   " });
+	await h.callTool("empty_brain", { last_word: "   " });
 	const boundary = resultEntries(await h.emit("turn_end", fakeBoundaryEvent()));
 	assert.equal(boundary.entries.filter((entry) => entry.type === "custom_message" && entry.customType === RESET_LAST_WORD_TYPE).length, 0, "a blank last word persists no entry");
 });

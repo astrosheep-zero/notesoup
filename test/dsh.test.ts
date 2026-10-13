@@ -30,7 +30,7 @@ function code(expected: string) { return (error: unknown) => (error as { code?: 
 test("dsh boot freezes across note writes, rotates before the next wire request, and keeps raw history", async (t) => {
 	const { ctx, engine, create, mock } = await dshFixture(t);
 	const agent = await create();
-	mock.script.push({ tool: "notes_write", input: { address: "handoff", content: "recover me {{literal}}" } }, { tool: "neuralyze", input: {} }, { text: "resumed" });
+	mock.script.push({ tool: "notes_write", input: { address: "handoff", content: "recover me {{literal}}" } }, { tool: "empty_brain", input: {} }, { text: "resumed" });
 	await run(agent, "old secret conversation");
 	assert.equal(mock.requests.length, 3);
 	assert.equal(system(mock.requests[0]!), system(mock.requests[1]!));
@@ -63,7 +63,7 @@ test("dsh boot freezes across note writes, rotates before the next wire request,
 test("dsh reload adopts persisted bytes before first assembly; missing records reconstruct from checkpoints and root system", async (t) => {
 	const { engine, create, mock } = await dshFixture(t);
 	const agent = await create();
-	mock.script.push({ tool: "neuralyze", input: {} }, { text: "after" });
+	mock.script.push({ tool: "empty_brain", input: {} }, { text: "after" });
 	await run(agent, "before");
 	const snapshot = engine.windows.get(agent.session).snapshot;
 	await createNotesStore(notesIdentity(agent, engine.config)).write("@self/later", "not in the frozen boot");
@@ -199,7 +199,7 @@ test("dsh budget follows configured host reserve, close-out tool runs across ste
 	assert.equal(budget?.warning, 76384);
 	assert.equal(budget?.reminder, 84576);
 	assert.equal(budget?.countdown, Math.max(0, 123616 - budget!.used));
-	mock.script.push({ tool: "notes_write", input: { address: "handoff", content: "checkpoint", }, inputTokens: 125000 }, { tool: "neuralyze", input: {} }, { text: "fresh" });
+	mock.script.push({ tool: "notes_write", input: { address: "handoff", content: "checkpoint", }, inputTokens: 125000 }, { tool: "empty_brain", input: {} }, { text: "fresh" });
 	await run(agent, "continue");
 	assert.equal(engine.windows.get(agent.session).snapshot.window, 1);
 	assert.equal(agent.session.snapshotEvents().filter((event) => event.type === "user/message" && event.data.source.kind === "notesoup-budget" && event.data.source.phase === "warning").length, 1);
@@ -212,7 +212,7 @@ test("dsh budget follows configured host reserve, close-out tool runs across ste
 test("dsh explicit resets survive auto:false; shared tool reads and expected errors keep their codes", async (t) => {
 	const { ctx, engine, create, mock } = await dshFixture(t, { auto: false });
 	const agent = await create();
-	mock.script.push({ tool: "neuralyze", input: {} }, { text: "fresh" });
+	mock.script.push({ tool: "empty_brain", input: {} }, { text: "fresh" });
 	await run(agent, "keep raw history");
 	assert.equal(engine.windows.get(agent.session).snapshot.window, 1);
 	assert.equal(engine.automaticListenerPresent, true);
@@ -263,11 +263,11 @@ test("dsh explicit resets survive auto:false; shared tool reads and expected err
 	assert.equal(refused.isError, true);
 	if (refused.isError) assert.equal(refused.error.info?.code, "invalid_scope");
 	const snapshot = engine.windows.get(agent.session).snapshot;
-	const sharedBoot = renderBootBlock({ agentName: identity.agent, modelName: identity.model, firstWindowId: `dsh:${agent.session.id}:0`, currentWindowId: snapshot.windowId, previousWindowId: `dsh:${agent.session.id}:0`, notes: await loadNotesSnapshot(identity, snapshot.openedAt), tools: { notes: "notes_*", notesList: "notes_list", history: "history_*", remaining: "get_context_remaining", wipe: "neuralyze" } });
+	const sharedBoot = renderBootBlock({ agentName: identity.agent, modelName: identity.model, firstWindowId: `dsh:${agent.session.id}:0`, currentWindowId: snapshot.windowId, previousWindowId: `dsh:${agent.session.id}:0`, notes: await loadNotesSnapshot(identity, snapshot.openedAt), tools: { notes: "notes_*", notesList: "notes_list", history: "history_*", remaining: "get_context_remaining", wipe: "empty_brain" } });
 	// The shared protocol, including the MAP cheatsheet, is used verbatim inside host framing.
 	assert.ok(snapshot.boot.includes(sharedBoot.split("YOUR NOTES")[0]!));
-	const blocked = ctx.on("tools/post-execute", async (exec, _result, next) => exec.name === "neuralyze" ? { kind: "block", feedback: [{ type: "text", text: "blocked" }] } : next());
-	mock.script.push({ tool: "neuralyze", input: {} }, { text: "request refused" });
+	const blocked = ctx.on("tools/post-execute", async (exec, _result, next) => exec.name === "empty_brain" ? { kind: "block", feedback: [{ type: "text", text: "blocked" }] } : next());
+	mock.script.push({ tool: "empty_brain", input: {} }, { text: "request refused" });
 	await run(agent, "refused clear");
 	assert.equal(engine.windows.get(agent.session).snapshot.window, 1);
 	blocked();

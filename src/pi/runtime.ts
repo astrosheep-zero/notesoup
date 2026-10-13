@@ -163,7 +163,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 		},
 	});
 
-	const neuralyzeCommand = {
+	const emptyBrainCommand = {
 		description: "Flush memory to notes and continue in a fresh window; optional prompt runs there",
 		handler: async (args: string, cmdCtx: ExtensionCommandContext) => {
 			if (!enabled) {
@@ -181,7 +181,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 			const prompt = args.trim() || undefined;
 			const armed = resets.closeOut(requestedWindowId, "manual", prompt);
 			if (armed === "already-pending") {
-				cmdCtx.ui.notify("🥣 Neuralyze already queued · the first prompt is kept", "info");
+				cmdCtx.ui.notify("🥣 Empty brain already queued · the first prompt is kept", "info");
 				return;
 			}
 			cmdCtx.ui.notify(prompt
@@ -195,12 +195,12 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 			}
 		},
 	};
-	pi.registerCommand("neuralyze", neuralyzeCommand);
-	pi.registerCommand("fresh-window", neuralyzeCommand);
+	pi.registerCommand("empty-brain", emptyBrainCommand);
+	pi.registerCommand("fresh-window", emptyBrainCommand);
 
 	pi.registerTool(defineTool({
-		name: "neuralyze",
-		label: "Neuralyze",
+		name: "empty_brain",
+		label: "Empty Brain",
 		description: "Clear your in-context memory and start a fresh context window. Your session, notes, and history survive. Pass `last_word` to stick a tiny note on your forehead for after the wipe.",
 		parameters: Type.Object({ last_word: Type.Optional(Type.String({ maxLength: MAX_LAST_WORD_CHARS, description: `A tiny sticky note, at most ${MAX_LAST_WORD_CHARS} characters. After the wipe it is slapped on your forehead; longer notes are refused.` })) }, { additionalProperties: false }),
 		async execute(_id, params, _signal, _update, ctx) {

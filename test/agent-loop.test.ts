@@ -140,7 +140,7 @@ async function openFixture(options: {
 		settingsManager,
 		sessionManager,
 		resourceLoader: loader,
-		tools: options.tools ?? ["neuralyze", "notes_write", "get_context_remaining"],
+		tools: options.tools ?? ["empty_brain", "notes_write", "get_context_remaining"],
 	});
 	session = created.session;
 	session.subscribe((event) => events.push(event as unknown as { type: string; [key: string]: unknown }));
@@ -430,7 +430,7 @@ test("real AgentSession: final warning survives its reset boundary and notifies 
 			if (request === 2) return assistant(fixture, [{ type: "toolCall", id: "final-budget-probe-2", name: "get_context_remaining", arguments: {} }], "toolUse", { usage: usage(60_000) });
 			if (request === 3) {
 				assert.ok(text(context).includes(WARNING_JSON), "the final warning reaches the model");
-				return assistant(fixture, [{ type: "toolCall", id: "final-budget-wipe", name: "neuralyze", arguments: {} }], "toolUse", { usage: usage(60_000) });
+				return assistant(fixture, [{ type: "toolCall", id: "final-budget-wipe", name: "empty_brain", arguments: {} }], "toolUse", { usage: usage(60_000) });
 			}
 			return assistant(fixture, [{ type: "text", text: "fresh window ready" }]);
 		},
@@ -461,7 +461,7 @@ test("real AgentSession: explicit tiny-session wipe ignores keepRecentTokens and
 		compactionEnabled: false,
 		keepRecentTokens: 1_000_000,
 		script: (request, context) => request === 1
-			? assistant(fixture, [{ type: "toolCall", id: "wipe-1", name: "neuralyze", arguments: {} }], "toolUse")
+			? assistant(fixture, [{ type: "toolCall", id: "wipe-1", name: "empty_brain", arguments: {} }], "toolUse")
 			: assistant(fixture, [{ type: "text", text: "resumed in a new window" }]),
 	});
 	try {
@@ -498,7 +498,7 @@ test("real AgentSession: manual command spans its tool batch and stops at settle
 		script: (request, context) => {
 			if (request === 1) return assistant(fixture, [{ type: "text", text: "before manual reset" }]);
 			if (request === 2) {
-				assert.ok(text(context).includes(WARNING_JSON), "idle /neuralyze sends the shared checkpoint prompt");
+				assert.ok(text(context).includes(WARNING_JSON), "idle /empty-brain sends the shared checkpoint prompt");
 				return assistant(fixture, [{ type: "toolCall", id: "manual-note", name: "notes_write", arguments: { address: "manual-a.md", content: "MANUAL_NOTE_ALPHA" } }], "toolUse");
 			}
 			assert.equal(request, 3, "the close-out turn finishes in the old window");
@@ -509,7 +509,7 @@ test("real AgentSession: manual command spans its tool batch and stops at settle
 	try {
 		await fixture.session.prompt("MANUAL_CLOSEOUT_OLD_SENTINEL");
 		await fixture.session.waitForIdle();
-		await fixture.session.prompt("/neuralyze");
+		await fixture.session.prompt("/empty-brain");
 		await fixture.session.waitForIdle();
 		assert.equal(fixture.requests.length, 3, "the run stops at settlement instead of continuing in the fresh window");
 		assert.equal(resetMarkers(fixture).length, 1);
@@ -538,7 +538,7 @@ test("real AgentSession: manual command spans its tool batch and stops at settle
 });
 
 test("real AgentSession: clear commands append a prompt after continuation and resume once", { timeout: 25000 }, async () => {
-	for (const mode of ["neuralyze", "fresh-window", "hard-reserve", "overflow"] as const) {
+	for (const mode of ["empty-brain", "fresh-window", "hard-reserve", "overflow"] as const) {
 		let fixture!: Fixture;
 		const prompt = 'AFTER_CLEAR_PROMPT /cm "literal text"';
 		fixture = await openFixture({
@@ -561,7 +561,7 @@ test("real AgentSession: clear commands append a prompt after continuation and r
 		});
 		try {
 			await fixture.session.prompt("PROMPT_RESET_OLD_SENTINEL");
-			await fixture.session.prompt(`/${mode === "neuralyze" ? "neuralyze" : "fresh-window"}   ${prompt}  `);
+			await fixture.session.prompt(`/${mode === "empty-brain" ? "empty-brain" : "fresh-window"}   ${prompt}  `);
 			await fixture.session.waitForIdle();
 			assert.equal(fixture.requests.length, 3);
 			assert.equal(resetMarkers(fixture).length, 1);
@@ -619,7 +619,7 @@ test("real AgentSession: streaming clear prompt keeps the first request", { time
 		const running = fixture.session.prompt("streaming old work");
 		await ready;
 		await fixture.session.prompt("/fresh-window FIRST_RESET_PROMPT", { streamingBehavior: "steer" });
-		await fixture.session.prompt("/neuralyze IGNORED_RESET_PROMPT", { streamingBehavior: "steer" });
+		await fixture.session.prompt("/empty-brain IGNORED_RESET_PROMPT", { streamingBehavior: "steer" });
 		release();
 		await running;
 		await fixture.session.waitForIdle();
@@ -640,13 +640,13 @@ test("real AgentSession: manual hard-reserve reset stops clean and mixed-tool tu
 				assert.equal(request, 2, "no provider work follows the manual safety reset");
 				return assistant(fixture, mixed ? [
 					{ type: "toolCall", id: "pressure-note", name: "notes_write", arguments: { address: "pressure.md", content: "PRESERVED_PRESSURE_NOTE" } },
-					{ type: "toolCall", id: "pressure-wipe", name: "neuralyze", arguments: {} },
+					{ type: "toolCall", id: "pressure-wipe", name: "empty_brain", arguments: {} },
 				] : [{ type: "text", text: "close-out complete" }], mixed ? "toolUse" : "stop", { usage: usage(80_000) });
 			},
 		});
 		try {
 			await fixture.session.prompt("HARD_RESERVE_OLD_SENTINEL");
-			await fixture.session.prompt("/neuralyze");
+			await fixture.session.prompt("/empty-brain");
 			await fixture.session.waitForIdle();
 			assert.equal(fixture.requests.length, 2);
 			assert.equal(resetMarkers(fixture).length, 1, "the safety wipe is not repeated at settlement");
@@ -691,7 +691,7 @@ test("real AgentSession: manual safety reset answers queued user input once befo
 	});
 	try {
 		await fixture.session.prompt("QUEUED_SAFETY_OLD_SENTINEL");
-		await fixture.session.prompt("/neuralyze");
+		await fixture.session.prompt("/empty-brain");
 		await fixture.session.waitForIdle();
 		assert.equal(fixture.requests.length, 4, "queued input is answered once after Pi's tool follow-up, then the stop lands");
 		assert.equal(resetMarkers(fixture).length, 1);
@@ -713,7 +713,7 @@ test("real AgentSession: manual overflow wipes and stops even with automatic res
 	});
 	try {
 		await fixture.session.prompt("MANUAL_OVERFLOW_OLD_SENTINEL");
-		await fixture.session.prompt("/neuralyze");
+		await fixture.session.prompt("/empty-brain");
 		await fixture.session.waitForIdle();
 		assert.equal(fixture.requests.length, 2);
 		assert.equal(resetMarkers(fixture).length, 1);
@@ -724,7 +724,7 @@ test("real AgentSession: manual overflow wipes and stops even with automatic res
 	}
 });
 
-test("real AgentSession: streaming /neuralyze steers a close-out and stops at settlement", { timeout: 20000 }, async () => {
+test("real AgentSession: streaming /empty-brain steers a close-out and stops at settlement", { timeout: 20000 }, async () => {
 	let fixture!: Fixture;
 	let announceStarted!: () => void;
 	let releaseResponse!: () => void;
@@ -746,8 +746,8 @@ test("real AgentSession: streaming /neuralyze steers a close-out and stops at se
 	try {
 		const running = fixture.session.prompt("STREAMING_WIPE_OLD_SENTINEL");
 		await started;
-		await fixture.session.prompt("/neuralyze", { streamingBehavior: "steer" });
-		await fixture.session.prompt("/neuralyze", { streamingBehavior: "followUp" });
+		await fixture.session.prompt("/empty-brain", { streamingBehavior: "steer" });
+		await fixture.session.prompt("/empty-brain", { streamingBehavior: "followUp" });
 		assert.equal(fixture.notices.filter((notice) => notice.includes("notes first, then it stops")).length, 1, "the user is notified once while output is ongoing");
 		assert.equal(resetMarkers(fixture).length, 0, "the ongoing turn is not interrupted");
 		releaseResponse();
@@ -781,9 +781,9 @@ test("real AgentSession: repeated manual commands share one pending window", { t
 		},
 	});
 	try {
-		const first = fixture.session.prompt("/neuralyze");
+		const first = fixture.session.prompt("/empty-brain");
 		await started;
-		const second = fixture.session.prompt("/neuralyze");
+		const second = fixture.session.prompt("/empty-brain");
 		releaseResponse();
 		await Promise.all([first, second]);
 		await fixture.session.waitForIdle();
@@ -856,7 +856,7 @@ test("real AgentSession: steering and follow-up queued during a manual reset are
 			},
 		});
 		try {
-			const command = fixture.session.prompt("/neuralyze");
+			const command = fixture.session.prompt("/empty-brain");
 			await started;
 			if (delivery === "steer") fixture.session.steer("QUEUED_DURING_FALLBACK");
 			else fixture.session.followUp("QUEUED_DURING_FALLBACK");
@@ -879,7 +879,7 @@ test("real AgentSession: a reset survives all notes-home read failures with an i
 		compactionEnabled: false,
 		notesRootFile: true,
 		script: (request) => request === 1
-			? assistant(fixture, [{ type: "toolCall", id: "wipe-notes-failure", name: "neuralyze", arguments: {} }], "toolUse")
+			? assistant(fixture, [{ type: "toolCall", id: "wipe-notes-failure", name: "empty_brain", arguments: {} }], "toolUse")
 			: assistant(fixture, [{ type: "text", text: "resumed despite notes failure" }]),
 	});
 	try {
@@ -923,7 +923,7 @@ test("real AgentSession: reset projection drops legacy message shapes but keeps 
 			sessionManager.branchWithSummary(sessionManager.getLeafId(), legacyTexts[3], { legacy: true }, true);
 		},
 		script: (request, context) => {
-			if (request === 1) return assistant(fixture, [{ type: "toolCall", id: "wipe-legacy", name: "neuralyze", arguments: {} }], "toolUse");
+			if (request === 1) return assistant(fixture, [{ type: "toolCall", id: "wipe-legacy", name: "empty_brain", arguments: {} }], "toolUse");
 			if (request === 2) {
 				const body = text(context);
 				for (const legacy of legacyTexts) assert.equal(body.includes(legacy), false, `${legacy} is cut from the reset projection`);
@@ -955,9 +955,9 @@ test("real AgentSession: successive resets and a mixed tool batch cut only after
 		fixture = await openFixture({
 			compactionEnabled: false,
 			script: (request) => {
-				if (scenario === "successive" && request < 3) return assistant(fixture, [{ type: "toolCall", id: `wipe-${request}`, name: "neuralyze", arguments: {} }], "toolUse");
+				if (scenario === "successive" && request < 3) return assistant(fixture, [{ type: "toolCall", id: `wipe-${request}`, name: "empty_brain", arguments: {} }], "toolUse");
 				if (scenario === "mixed" && request === 1) return assistant(fixture, [
-					{ type: "toolCall", id: "wipe-1", name: "neuralyze", arguments: {} },
+					{ type: "toolCall", id: "wipe-1", name: "empty_brain", arguments: {} },
 					{ type: "toolCall", id: "note-1", name: "notes_write", arguments: { address: "batch.md", content: "MIXED_BATCH_NOTE" } },
 				], "toolUse");
 				return assistant(fixture, [{ type: "text", text: "fresh completion" }]);
@@ -992,7 +992,7 @@ test("real AgentSession: two retain-none checkpoints survive session-file reopen
 		compactionEnabled: false,
 		sessionDir,
 		script: (request) => request < 3
-			? assistant(fixture, [{ type: "toolCall", id: `persisted-wipe-${request}`, name: "neuralyze", arguments: {} }], "toolUse")
+			? assistant(fixture, [{ type: "toolCall", id: `persisted-wipe-${request}`, name: "empty_brain", arguments: {} }], "toolUse")
 			: assistant(fixture, [{ type: "text", text: "second reset window complete" }]),
 	});
 	try {
@@ -1027,7 +1027,7 @@ test("real AgentSession: two retain-none checkpoints survive session-file reopen
 		assert.ok(canonical.some((message) => message.role === "compactionSummary"), "the accepted empty-summary wrapper survives reload");
 		const system = getCurrentSystemMessage(canonical);
 		assert.ok(JSON.stringify(system).includes("Use the tools as requested."), "the complete system prompt survives the checkpoint");
-		assert.ok(system?.toolsAdded?.some((tool) => tool.name === "neuralyze"), "the active tool loadout survives reopen");
+		assert.ok(system?.toolsAdded?.some((tool) => tool.name === "empty_brain"), "the active tool loadout survives reopen");
 		const reopenedMarkers = branch.filter((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE);
 		const latestMarker = reopenedMarkers.at(-1);
 		const previousMarker = reopenedMarkers[0];
@@ -1049,13 +1049,13 @@ test("real AgentSession: steering and follow-up are delivered exactly once in th
 			compactionEnabled: false,
 			hook: (pi, getSession) => {
 				pi.on("tool_call", async (event) => {
-					if ((event as { toolName?: string }).toolName !== "neuralyze") return;
+					if ((event as { toolName?: string }).toolName !== "empty_brain") return;
 					if (deliverAs === "steer") await getSession().steer("QUEUED_ONCE");
 					else await getSession().followUp("QUEUED_ONCE");
 				});
 			},
 			script: (request) => request === 1
-				? assistant(fixture, [{ type: "toolCall", id: "wipe-queue", name: "neuralyze", arguments: {} }], "toolUse")
+				? assistant(fixture, [{ type: "toolCall", id: "wipe-queue", name: "empty_brain", arguments: {} }], "toolUse")
 				: assistant(fixture, [{ type: "text", text: "queued message handled" }]),
 		});
 		try {
@@ -1081,7 +1081,7 @@ test("real AgentSession: hidden or missing reset boots refuse to move the bounda
 	try {
 		await fixture.session.prompt("ROOT_BEFORE_HIDDEN_BOOT");
 		await fixture.session.waitForIdle();
-		await fixture.session.prompt("/neuralyze");
+		await fixture.session.prompt("/empty-brain");
 		await fixture.session.waitForIdle();
 		await fixture.session.prompt("VALID_POST_MARKER_WORK");
 		await fixture.session.waitForIdle();
@@ -1137,7 +1137,7 @@ test("real AgentSession: the complete system message and a changed tool loadout 
 	fixture = await openFixture({
 		compactionEnabled: false,
 		systemPrompt: ["SYSTEM_SECTION_ALPHA", "SYSTEM_SECTION_BETA", "SYSTEM_TOOLS_SECTION", "SYSTEM_LOADOUT_SECTION"].join("\n"),
-		tools: ["neuralyze"],
+		tools: ["empty_brain"],
 		script: (request, context) => {
 			const systemText = JSON.stringify(context.messages.filter((message) => message.role === "system"));
 			const currentSystem = getCurrentSystemMessage(context.messages);
@@ -1147,11 +1147,11 @@ test("real AgentSession: the complete system message and a changed tool loadout 
 			assert.ok(systemText.includes("SYSTEM_TOOLS_SECTION"));
 			assert.ok(systemText.includes("SYSTEM_LOADOUT_SECTION"));
 			if (request === 1) {
-				assert.deepEqual(effectiveToolNames, ["neuralyze"]);
-				fixture.session.setActiveToolsByName(["neuralyze", "get_context_remaining"]);
-				return assistant(fixture, [{ type: "toolCall", id: "wipe-system", name: "neuralyze", arguments: {} }], "toolUse");
+				assert.deepEqual(effectiveToolNames, ["empty_brain"]);
+				fixture.session.setActiveToolsByName(["empty_brain", "get_context_remaining"]);
+				return assistant(fixture, [{ type: "toolCall", id: "wipe-system", name: "empty_brain", arguments: {} }], "toolUse");
 			}
-			assert.deepEqual(effectiveToolNames, ["get_context_remaining", "neuralyze"]);
+			assert.deepEqual(effectiveToolNames, ["empty_brain", "get_context_remaining"]);
 			assert.ok(JSON.stringify(context.messages).includes(CONTEXT_WINDOW_OPEN_TAG));
 			return assistant(fixture, [{ type: "text", text: "all system sections survived" }]);
 		},
@@ -1514,7 +1514,7 @@ test("real AgentSession: warning precedes a durable checkpoint, including failed
 					address: scenario === "write-error" ? "../invalid.md" : "checkpoint.md",
 					content: "CHECKPOINT_SENTINEL",
 				} }], "toolUse", { usage: usage(60_000) });
-				if (request === 4 && scenario !== "ignored-warning") return assistant(fixture, [{ type: "toolCall", id: "wipe-after-checkpoint", name: "neuralyze", arguments: {} }], "toolUse", { usage: usage(60_000) });
+				if (request === 4 && scenario !== "ignored-warning") return assistant(fixture, [{ type: "toolCall", id: "wipe-after-checkpoint", name: "empty_brain", arguments: {} }], "toolUse", { usage: usage(60_000) });
 				return assistant(fixture, [{ type: "text", text: scenario === "ignored-warning" ? "warning intentionally ignored" : "checkpoint and wipe complete" }], "stop", { usage: usage(60_000) });
 			},
 		});
