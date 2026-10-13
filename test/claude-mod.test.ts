@@ -250,13 +250,13 @@ test("Claude helper resolves limits across the boundary and never throws on nons
 });
 
 test("Claude's wipe sentence replaces only that sentence in the shared protocol block", () => {
-  const piTools = { notes: "notes_*", notesList: "notes_list", history: "history_*", remaining: "get_context_remaining", wipe: "clear_memory" };
+  const piTools = { notes: "notes_*", notesList: "notes_list", history: "history_*", remaining: "get_context_remaining", wipe: "neuralyze" };
   const pi = renderProtocolBlock(piTools);
   assert.ok(pi.includes(PROTOCOL_WIPE_SENTENCE), "Pi keeps the default sentence, byte for byte");
   const claude = renderProtocolBlock({ ...piTools, wipeSentence: CLAUDE_WIPE_SENTENCE });
   assert.equal(claude, pi.replace(PROTOCOL_WIPE_SENTENCE, CLAUDE_WIPE_SENTENCE), "only that sentence changes");
   assert.equal(claude.includes("erase yourself with dignity"), false);
-  assert.ok(claude.includes("end your turn and ask the human to run `/clear-memory`."));
+  assert.ok(claude.includes("end your turn and ask the human to run `/fresh-window`."));
 });
 
 
@@ -493,7 +493,7 @@ test("Claude Mod headless detection skips compaction and logs once", async (t) =
   await invoke("turn.complete");
   assert.equal(attempts, 0, "headless sessions skip the unsupported capability from startup");
   assert.deepEqual(notifications, ["🥣 Clear-memory is off in headless (-p / SDK) sessions"]);
-  const manual = await invoke("command.run", { command: "clear-memory" }) as { text: string };
+  const manual = await invoke("command.run", { command: "neuralyze" }) as { text: string };
   assert.match(manual.text, /off in headless/);
   assert.equal(notifications.length, 1);
   const boot = await handlers.get("prompt.context")!(host, {}, async () => ({ blocks: [] })) as { blocks: Array<{ text: string }> };
@@ -554,7 +554,7 @@ test("Claude Mod manual reset uses one hidden close-out turn, then recovers its 
   };
   (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
   await invoke("session.start", { cwd: home, isInteractive: true });
-  const command = await invoke("command.run", { command: "clear-memory" }) as { text: string };
+  const command = await invoke("command.run", { command: "neuralyze" }) as { text: string };
   assert.match(command.text, /Clearing memory/);
   await Promise.resolve();
   assert.equal(compactions, 0, "command.run must not call compact under its held turn");
@@ -572,7 +572,7 @@ test("Claude Mod manual reset uses one hidden close-out turn, then recovers its 
   await invoke("session.start", { cwd: home, isInteractive: true });
   assert.deepEqual(await handlers.get("prompt.context")!(host, {}, async () => ({ blocks: [] })), { blocks: [] }, "reload does not duplicate the already-retained boot");
   await invoke("turn.start");
-  await invoke("command.run", { command: "clear-memory" });
+  await invoke("command.run", { command: "neuralyze" });
   await invoke("turn.complete");
   assert.equal(prompts.length, 1, "a busy manual request reuses the current turn instead of submitting another");
   assert.match(kept[0]!.text, /Current context window id: claude:hook-session:2/);
@@ -647,7 +647,7 @@ test("Claude Mod stops the automatic reset and the manual command under DISABLE_
   await invoke("session.start", { cwd: home, isInteractive: true });
   assert.equal(notifications.length, 1, "one startup line");
   assert.match(notifications[0]!, /DISABLE_COMPACT/);
-  const manual = await invoke("command.run", { command: "clear-memory" }) as { text: string };
+  const manual = await invoke("command.run", { command: "neuralyze" }) as { text: string };
   assert.match(manual.text, /DISABLE_COMPACT/);
   assert.equal(timers.length, 0, "no close-out turn is queued");
   await invoke("turn.start");
@@ -769,7 +769,7 @@ async function retainedFixture(t: test.TestContext) {
   const { host } = fakeEngine(home);
   const boot = await dispatch({ op: "boot", identity: { ...identity, home, cwd: home, sessionId: "hook-session" }, window: 2, tools: {
     notes: "mcp__notesoup__notes_*", notesList: "mcp__notesoup__notes_list",
-    history: "unavailable", remaining: "unavailable", wipe: "/clear-memory",
+    history: "unavailable", remaining: "unavailable", wipe: "/fresh-window",
   } }) as string;
   host.session.messages = async () => [{ role: "user", text: `# notesoup:boot\n${boot}` }];
   const handlers = new Map<string, HookHandler>();
@@ -789,7 +789,7 @@ test("Claude session.end gives /clear, /resume and /branch a fresh boot and iden
       host.session.usage = async () => ({ context: { tokens: 142_424, window: 200_000 } });
       assert.equal((await context()).blocks[0]?.name, "notesoup:warning", "the old window has already warned");
       await invoke("turn.start");
-      await invoke("command.run", { command: "clear-memory" });
+      await invoke("command.run", { command: "neuralyze" });
       const ended = { sentinel: action };
       assert.equal(await invoke("session.end", { reason: action === "clear" ? "clear" : "resume", sessionId: "hook-session" }, ended), ended);
       host.session.id = async () => `after-${action}`;

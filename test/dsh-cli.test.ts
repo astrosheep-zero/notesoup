@@ -30,7 +30,7 @@ test("dsh profile loads our rows and a second process restores the on-disk windo
 	await writeFile(join(profile, "cordis.patch.yml"), patch + "\n- id: session-title-llm\n  disabled: true\n");
 	const env = { ...process.env, DSH_HOME: home, DEEPSEEK_API_KEY: "mock-key", DEEPSEEK_BASE_URL: mock.url, DSH_TOOLS_MODE: "native" };
 	const cli = resolve(repository, "node_modules/@deepseek-ai/dsh/lib/bin.js");
-	mock.script.push({ tool: "clear_memory", input: {} }, { text: "after reset" });
+	mock.script.push({ tool: "neuralyze", input: {} }, { text: "after reset" });
 	const first = await exec(process.execPath, [cli, "--profile", "notesoup-test", "old conversation"], { cwd: directory, env, timeout: 20000 });
 	assert.equal(mock.requests.length, 2, first.stderr);
 	assert.equal(mock.requests[1]!.messages.length, 1);

@@ -1,6 +1,6 @@
 # DeepSeek Harness adapter
 
-notesoup for **dsh 0.2.1-alpha.2** gives the agent a fresh notebook when context runs low: frozen boot text, the five notes homes, eight notes/history tools, `get_context_remaining`, and `clear_memory`. A reset makes **zero model calls**. The old conversation leaves the model surface and remains in the session log for history reads. Dream is not registered on dsh.
+notesoup for **dsh 0.2.1-alpha.2** gives the agent a fresh notebook when context runs low: frozen boot text, the five notes homes, eight notes/history tools, `get_context_remaining`, and `neuralyze`. A reset makes **zero model calls**. The old conversation leaves the model surface and remains in the session log for history reads. Dream is not registered on dsh.
 
 Install the package in your chosen dsh profile with `dsh plugin --profile <profile> add notesoup`, then copy the model declaration from [the profile patch example](dsh.profile.patch.yml) into `$DSH_HOME/profiles/<profile>/cordis.patch.yml`. The package bundle patch disables `compaction-basic` and inserts `notesoup-engine` and `notesoup`. Do not duplicate those rows when adding the model declaration. A source checkout needs `npm ci --ignore-scripts` and `npm run build`; use absolute `file:///.../dist/src/dsh/engine.js` and `file:///.../dist/src/dsh/index.js` module names. The example shows all rows for a profile assembled without the package bundle.
 
@@ -38,7 +38,7 @@ The defaults are `auto: true`, `thresholdRatio: 0.8`, `headroomTokens: 65536`, a
 
 The adapter uses `tokenMeter.measure`, model context from `resolveModelInfo`, and the mounted engine's resolved `config`. Alpha.2 keeps an old provider-usage anchor across surface replacement; until the fresh window has a response, notesoup uses the meter's current `surfaceTokens` plus its public tool-schema estimator instead of that stale anchor.
 
-The reminder and close-out warning go through `agent.steer`. Close-out remains an instruction to write notes and call `clear_memory`; a normal stop alone does not consume the warning runway. `clear_memory` arms a reset after the entire tool batch. Independently, reaching the hard reserve resets at assembly or a successful stopping boundary and continues from the notes. Abort and ordinary errors drop the pending tool request. `auto: false` disables reminders and reserve resets while keeping explicit `clear_memory` and the listener installed.
+The reminder and close-out warning go through `agent.steer`. Close-out remains an instruction to write notes and call `neuralyze`; a normal stop alone does not consume the warning runway. `neuralyze` arms a reset after the entire tool batch. Independently, reaching the hard reserve resets at assembly or a successful stopping boundary and continues from the notes. Abort and ordinary errors drop the pending tool request. `auto: false` disables reminders and reserve resets while keeping explicit `neuralyze` and the listener installed.
 
 ## What this does not promise
 
@@ -54,7 +54,7 @@ The reminder and close-out warning go through `agent.steer`. Close-out remains a
 | Storage | Raw log remains available while the host keeps it. Notesoup does not back up session files or guarantee that an unflushed append survives a crash. |
 | Plugin records | Best-effort across dsh migrations. Missing records recover from native checkpoints/root system text; unknown future record or checkpoint formats are not migrated by notesoup. |
 | Tools and errors | Full shared TypeBox validation runs in the adapter because dsh supports a smaller schema subset. Expected operation errors become dsh failures with the shared code; successes use the shared bounded value and renderer. |
-| Notifications and commands | No custom UI notifications, settings card, runtime toggle or `/clear-memory` alias is installed. Configure engine rows in the profile/home patch; call `clear_memory` or the host's `/compact`. |
+| Notifications and commands | No custom UI notifications, settings card, runtime toggle or `/fresh-window`/`/neuralyze` command is installed. Configure engine rows in the profile/home patch; call `neuralyze` or the host's `/compact`. |
 | Untested host features | Real providers, reasoning/image wire behavior, cache metrics, actual context-overflow retry, HMR, migrations, ACP/Web/SDK profiles and large histories are not established by the scripted tests. |
 | Dream | **No dsh dream backend or dream skill registration.** Use the existing supported host workflow. |
 

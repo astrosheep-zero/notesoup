@@ -323,7 +323,7 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 		const markerExists = currentReset(ctx) !== undefined;
 		if (options.isEnabled() || markerExists) {
 			if (event.reason === "manual") {
-				ctx.ui.notify("🥣 /compact is off while notesoup is on · use /clear-memory", "warning");
+				ctx.ui.notify("🥣 /compact is off while notesoup is on · use /fresh-window", "warning");
 			}
 			return { cancel: true };
 		}

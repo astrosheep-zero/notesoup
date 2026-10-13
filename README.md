@@ -1,6 +1,6 @@
 # notesoup
 
-Your agent's memory gets wiped when the context fills. notesoup makes that survivable: the agent writes itself a checkpoint before the wipe, wakes up in a fresh window, and digs up whatever it still needs from the old conversation. For you it's mostly invisible — an occasional notification, `/clear-memory` to force a fresh window, `/notesoup` to toggle.
+Your agent's memory gets wiped when the context fills. notesoup makes that survivable: the agent writes itself a checkpoint before the wipe, wakes up in a fresh window, and digs up whatever it still needs from the old conversation. For you it's mostly invisible — an occasional notification, `/fresh-window` to force a fresh window, `/notesoup` to toggle.
 
 The architecture — durable context windows, model-authored notes, searchable history — is the one OpenAI prototyped in Codex's `context_management` experiment and switched off ten days later, because it was welded to their backend. notesoup is the same architecture running entirely on your machine, built only on [Pi](https://github.com/earendil-works/pi)'s public extension APIs. No backend, no subscription gate, no server that can 404 at the worst possible moment. It can't be switched off from far away, because there is no far away.
 
@@ -28,7 +28,7 @@ pi -e npm:notesoup
 
 ## What you get
 
-- **Durable context windows.** `/clear-memory` (alias `/cm`) clears and stops; `/cm Continue reviewing the implementation` clears and continues. The model can also request a window itself with `clear_memory`, and a budget close-out fires automatically before the window runs out. Abort and ordinary errors never count as completion; the raw conversation stays in the session, just out of the next context.
+- **Durable context windows.** `/fresh-window` (alias `/neuralyze`) clears and stops; `/fresh-window Continue reviewing the implementation` clears and continues. The model can also request a window itself with `neuralyze`, and a budget close-out fires automatically before the window runs out. Abort and ordinary errors never count as completion; the raw conversation stays in the session, just out of the next context.
 - **A boot block at every window head.** Static once-per-window content (cache-stable) with the window identity, the recent-notes index, and a short protocol teaching the model how to recover: notes for its own bookkeeping, history tools for everything before the reset.
 - **`get_context_remaining`** — the live countdown to the close-out line, so the agent can see the cliff before it drives off it.
 - **Eight history/notes tools**, flattened from the original Codex actions:

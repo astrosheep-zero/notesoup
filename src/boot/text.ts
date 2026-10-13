@@ -10,9 +10,9 @@ export const CONTEXT_WINDOW_PROTOCOL_CLOSE_TAG = "</context_window_protocol>";
  * The one sentence that tells the model how to end its window voluntarily. A host with no
  * model-facing reset tool replaces the whole sentence through BootToolNames.wipeSentence.
  */
-export const PROTOCOL_WIPE_SENTENCE = "If this feels like the right moment, call `clear_memory` and erase yourself with dignity.";
+export const PROTOCOL_WIPE_SENTENCE = "If this feels like the right moment, call `neuralyze` and erase yourself with dignity.";
 /** Claude has no model-facing reset tool: the model ends its turn and the human runs the command. */
-export const CLAUDE_WIPE_SENTENCE = "If this feels like the right moment, end your turn and ask the human to run `/clear-memory`.";
+export const CLAUDE_WIPE_SENTENCE = "If this feels like the right moment, end your turn and ask the human to run `/fresh-window`.";
 
 /**
  * Static protocol teaching adapted from Codex's token_budget.guidance_message to
@@ -74,7 +74,7 @@ export const DEFAULT_BOOT_TOOL_NAMES = {
 	notesList: "notes_list",
 	history: "history_*",
 	remaining: "get_context_remaining",
-	wipe: "clear_memory",
+	wipe: "neuralyze",
 } as const satisfies BootToolNames;
 
 export function renderProtocolBlock(tools: BootToolNames): string {
@@ -83,12 +83,12 @@ export function renderProtocolBlock(tools: BootToolNames): string {
 		notes_list: tools.notesList,
 		"history_*": tools.history,
 		get_context_remaining: tools.remaining,
-		clear_memory: tools.wipe,
+		neuralyze: tools.wipe,
 	};
 	// The sentence is replaced before name substitution, so a replacement may speak the host's
 	// own words (a command line, a tool name) instead of any `notes_*`-style token.
 	const block = typeof tools.wipeSentence === "string" && tools.wipeSentence.length > 0
 		? PROTOCOL_BLOCK.replace(PROTOCOL_WIPE_SENTENCE, () => tools.wipeSentence!)
 		: PROTOCOL_BLOCK;
-	return block.replace(/notes_\*|notes_list|history_\*|get_context_remaining|clear_memory/g, (name) => names[name]!);
+	return block.replace(/notes_\*|notes_list|history_\*|get_context_remaining|(?<!\/)neuralyze/g, (name) => names[name]!);
 }

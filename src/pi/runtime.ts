@@ -6,7 +6,7 @@ import { registerBudget } from "./budget.js";
 import { output } from "./tool-result.js";
 import { currentReset, currentWindowId, isCheckpointBackedReset, isWindowBoot, isWindowMarker, projectRootWindow, projectWindow, rootWindowId, type WindowMarker } from "./window.js";
 import { registerResetLifecycle } from "./reset/lifecycle.js";
-import { buildResetDrafts, repairResetTail, sanitizeLastWord } from "./reset/artifacts.js";
+import { buildResetDrafts, MAX_LAST_WORD_CHARS, repairResetTail, sanitizeLastWord } from "./reset/artifacts.js";
 import { BOOT_TYPE, MANUAL_WIPE_TYPE } from "./entries.js";
 import { WARNING_CONTENT } from "../budget/text.js";
 import { buildBootMessage, sendBoot, type IncompleteNotesNotifier } from "./boot.js";
@@ -128,7 +128,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 		} catch (error) {
 			if (missingBootNotice !== windowId) {
 				missingBootNotice = windowId;
-				ctx.ui.notify("🥣 Request cancelled · this memory window is broken, run /clear-memory", "error");
+				ctx.ui.notify("🥣 Request cancelled · this memory window is broken, run /fresh-window", "error");
 			}
 			ctx.abort();
 			const safeHead = getCurrentSystemMessage(event.messages);
@@ -163,8 +163,8 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 		},
 	});
 
-	const clearMemoryCommand = {
-		description: "Close out notes and clear memory; optionally append a prompt to continue in the fresh window",
+	const neuralyzeCommand = {
+		description: "Flush memory to notes and continue in a fresh window; optional prompt runs there",
 		handler: async (args: string, cmdCtx: ExtensionCommandContext) => {
 			if (!enabled) {
 				cmdCtx.ui.notify("🥣 notesoup is off · run /notesoup on first", "error");
@@ -181,7 +181,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 			const prompt = args.trim() || undefined;
 			const armed = resets.closeOut(requestedWindowId, "manual", prompt);
 			if (armed === "already-pending") {
-				cmdCtx.ui.notify("🥣 Clear-memory already queued · the first prompt is kept", "info");
+				cmdCtx.ui.notify("🥣 Neuralyze already queued · the first prompt is kept", "info");
 				return;
 			}
 			cmdCtx.ui.notify(prompt
@@ -191,21 +191,24 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 				pi.sendMessage({ customType: MANUAL_WIPE_TYPE, content: WARNING_CONTENT, display: false }, { triggerTurn: true, deliverAs: "steer" });
 			} catch (error) {
 				resets.clear();
-				cmdCtx.ui.notify(`🥣 Couldn't start clear-memory: ${errorMessage(error)}`, "error");
+				cmdCtx.ui.notify(`🥣 Couldn't start /fresh-window: ${errorMessage(error)}`, "error");
 			}
 		},
 	};
-	pi.registerCommand("clear-memory", clearMemoryCommand);
-	pi.registerCommand("cm", clearMemoryCommand);
+	pi.registerCommand("neuralyze", neuralyzeCommand);
+	pi.registerCommand("fresh-window", neuralyzeCommand);
 
 	pi.registerTool(defineTool({
-		name: "clear_memory",
-		label: "Clear memory",
-		description: "Clear your in-context memory and start a fresh context window. Your session, notes, and history survive. Pass `last_word` to leave one short visible line where this window closes.",
-		parameters: Type.Object({ last_word: Type.Optional(Type.String({ description: "A parting line shown where this window closes; the next window can read it too." })) }, { additionalProperties: false }),
+		name: "neuralyze",
+		label: "Neuralyze",
+		description: "Clear your in-context memory and start a fresh context window. Your session, notes, and history survive. Pass `last_word` to stick a tiny note on your forehead for after the wipe.",
+		parameters: Type.Object({ last_word: Type.Optional(Type.String({ maxLength: MAX_LAST_WORD_CHARS, description: `A tiny sticky note, at most ${MAX_LAST_WORD_CHARS} characters. After the wipe it is slapped on your forehead; longer notes are refused.` })) }, { additionalProperties: false }),
 		async execute(_id, params, _signal, _update, ctx) {
 			if (!enabled) return output({ error: "notesoup is off, so memory can't be cleared; the user can turn it on with `/notesoup on`." });
-			return output({ status: resets.request(currentWindowId(ctx), sanitizeLastWord(params.last_word)) }, undefined, true);
+			const lastWord = sanitizeLastWord(params.last_word);
+			const length = lastWord ? Array.from(lastWord).length : 0;
+			if (length > MAX_LAST_WORD_CHARS) return output({ error: `last_word is ${length} characters; the sticky note holds ${MAX_LAST_WORD_CHARS}. Shorten it and call again.` });
+			return output({ status: resets.request(currentWindowId(ctx), lastWord) }, undefined, true);
 		},
 	}));
 

@@ -25,18 +25,18 @@ type ResetState = {
 }
 const HEADLESS = "Clear-memory is off in headless (-p / SDK) sessions"
 const COMPACT_DISABLED = "Clear-memory can't run: compaction is off in this session (DISABLE_COMPACT)"
-const THRESHOLDS_UNAVAILABLE = "Context thresholds unavailable · automatic clear-memory skipped"
-const SETTINGS_UNAVAILABLE = "Notesoup settings unreadable · using the default clear-memory margins"
+const THRESHOLDS_UNAVAILABLE = "Context thresholds unavailable · automatic flush skipped"
+const SETTINGS_UNAVAILABLE = "Notesoup settings unreadable · using the default flush margins"
 /** Bounded retries: a transient helper failure must not disable thresholds for a whole window. */
 const MAX_LIMITS_ATTEMPTS = 3
 const RESET_INSTRUCTIONS = "notesoup: reset to a fresh notes-only context window."
 const BOOT_TOOLS = {
   notes: `${PREFIX}notes_*`, notesList: `${PREFIX}notes_list`,
   history: "history_* (unavailable in Claude)",
-  remaining: "get_context_remaining (unavailable in Claude)", wipe: "/clear-memory (user command; no model reset tool in Claude)",
+  remaining: "get_context_remaining (unavailable in Claude)", wipe: "/fresh-window (user command; no model reset tool in Claude)",
 }
 
-/** The boot names the host's own wipe path, so the protocol block speaks about `/clear-memory`. */
+/** The boot names the host's own wipe path, so the protocol block speaks about `/fresh-window`. */
 async function buildBoot($: Engine, identity: Identity, window: number, texts?: SharedTexts) {
   const tools = texts?.wipeSentence === undefined ? BOOT_TOOLS : { ...BOOT_TOOLS, wipeSentence: texts.wipeSentence }
   return run($, { op: "boot", identity, window, tools }, identity.cwd)
@@ -102,7 +102,7 @@ async function contextUsage($: Engine, state: ResetState): Promise<ContextUsage 
   } catch {
     if (!state.usageFailureLogged) {
       state.usageFailureLogged = true
-      log($, "Context usage unavailable · automatic clear-memory skipped")
+      log($, "Context usage unavailable · automatic flush skipped")
     }
     return undefined
   }
@@ -258,7 +258,8 @@ export function register(on: On) {
     registered.clear()
     await loadTexts($, state)
     armManual($, state, manualSignal)
-    await $.command.register({ name: "clear-memory", description: "Reset context to a fresh notes-only window", immediate: true })
+    await $.command.register({ name: "neuralyze", description: "Reset context to a fresh notes-only window", immediate: true })
+    await $.command.register({ name: "fresh-window", description: "Reset context to a fresh notes-only window", immediate: true })
     const schemas = await run($, { op: "schemas" }, e.cwd)
     if (!schemas.ok || !Array.isArray(schemas.result)) return next(e)
     for (const row of schemas.result as SchemaRow[]) {
@@ -306,11 +307,11 @@ export function register(on: On) {
     return result
   })
   on("command.run", async ($, e, next) => {
-    if (e.command !== "clear-memory") return next(e)
-    if (!await refreshIdentity($, state)) return { text: "🥣 Session changed · try clear-memory again" }
+    if (e.command !== "neuralyze" && e.command !== "fresh-window") return next(e)
+    if (!await refreshIdentity($, state)) return { text: "🥣 Session changed · try /fresh-window again" }
     if (state.headless) return { text: `🥣 ${HEADLESS}` }
     if (state.compactDisabled) return { text: `🥣 ${COMPACT_DISABLED}` }
-    if (state.resetting || state.manualPending) return { text: "🥣 Clear-memory already queued" }
+    if (state.resetting || state.manualPending) return { text: "🥣 Neuralyze already queued" }
     if (state.turnRunning) {
       state.manualPending = true
       return { text: "🥣 Clear-memory queued · runs after this turn" }

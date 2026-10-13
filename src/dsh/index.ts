@@ -43,7 +43,7 @@ export function apply(ctx: Context): void {
 				const state = engine.windows.get(agent.session);
 				const phase = budget.remaining <= budget.warning ? "warning" : budget.remaining <= budget.reminder ? "reminder" : undefined;
 				if (phase && !(phase === "warning" ? state.warned : state.reminded || state.warned)) {
-					const text = phase === "warning" ? WARNING_PROMPT : tokenBudgetGuidance(budget.countdown, "clear_memory");
+					const text = phase === "warning" ? WARNING_PROMPT : tokenBudgetGuidance(budget.countdown, "neuralyze");
 					agent.steer(createUserMessage({ content: [{ type: "text", text }], source: { kind: "notesoup-budget", windowId: state.snapshot.windowId, phase } }));
 					if (phase === "warning") state.warned = true;
 					else state.reminded = true;

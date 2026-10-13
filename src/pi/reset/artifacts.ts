@@ -7,15 +7,15 @@ import { buildBootMessage, sendBoot, type IncompleteNotesNotifier } from "../boo
 
 export type ResetTailState = { readonly boot: boolean; readonly continuation: boolean };
 
-/** Cap for the parting line: one visible line, not an essay. */
-export const MAX_LAST_WORD_CHARS = 500;
+/** A sticky note, not a letter: over this, neuralyze refuses instead of truncating. */
+export const MAX_LAST_WORD_CHARS = 250;
 
-/** Trim and cap a parting line; blank input leaves no last word. */
+/** How the next window finds the note. */
+export const LAST_WORD_PREFIX = "*You peel a sticky note off your forehead.*\n";
+
+/** Trim a parting line; blank input leaves no last word. Length is checked by the caller. */
 export function sanitizeLastWord(raw: string | undefined): string | undefined {
-	const trimmed = raw?.trim();
-	if (!trimmed) return undefined;
-	const chars = Array.from(trimmed);
-	return chars.length > MAX_LAST_WORD_CHARS ? `${chars.slice(0, MAX_LAST_WORD_CHARS).join("")}…` : trimmed;
+	return raw?.trim() || undefined;
 }
 
 /** Match the hidden continuation entry that carries the one reset message. */
@@ -58,7 +58,7 @@ export async function buildResetDrafts(
 		{ type: "custom", customType: RESET_MARKER_TYPE, data: { windowId } },
 		{ type: "custom_message", customType: BOOT_TYPE, content: boot.content, display: false, details: { windowId } },
 		{ type: "custom_message", customType: CONTINUATION_TYPE, content: CONTINUATION, display: false },
-		...(lastWord ? [{ type: "custom_message" as const, customType: RESET_LAST_WORD_TYPE, content: lastWord, display: true }] : []),
+		...(lastWord ? [{ type: "custom_message" as const, customType: RESET_LAST_WORD_TYPE, content: `${LAST_WORD_PREFIX}${lastWord}`, display: true }] : []),
 		...(prompt ? [{ type: "custom_message" as const, customType: RESET_PROMPT_TYPE, content: prompt, display: true }] : []),
 	];
 }

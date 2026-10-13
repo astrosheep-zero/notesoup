@@ -60,7 +60,7 @@ export function registerTools(ctx: Context, engine: NotesoupCompactionEngine): v
 	ctx.on("tools/result", (exec, result) => {
 		if (!exec.agent) return;
 		const state = engine.windows.get(exec.agent.session);
-		if (exec.name === "clear_memory" && !result.isError && (result.value as { window_id?: string }).window_id === state.snapshot.windowId) {
+		if (exec.name === "neuralyze" && !result.isError && (result.value as { window_id?: string }).window_id === state.snapshot.windowId) {
 			if (!exec.parent) state.pendingReset = true;
 			else {
 				const roots = nestedResets.get(exec.agent) ?? new Set<string>();
@@ -80,7 +80,7 @@ export function registerTools(ctx: Context, engine: NotesoupCompactionEngine): v
 	register(ctx, historyRead, async (agent) => [await historyProjection(ctx, agent.session.id)] as const);
 	register(ctx, historyWindows, async (agent) => [await historyProjection(ctx, agent.session.id), agent.session.id] as const);
 	ctx.tools.register(defineTool({
-		name: "clear_memory",
+		name: "neuralyze",
 		description: "Open a fresh context window after this tool batch. Write recovery notes first; notes and raw history stay on disk.",
 		parameters: {},
 		output: { schema: { type: "object", properties: { window_id: { type: "string", required: true }, reset_requested: { type: "boolean", required: true } }, additionalProperties: false }, render: (_args, value) => [{ type: "text", text: `notesoup: reset requested for ${value.window_id}; finish this tool batch, then recover from your notes.` }] },

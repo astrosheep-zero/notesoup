@@ -53,7 +53,7 @@ Before a long or risky step, or when room runs low, keep session notes named for
 - how the work was being done, and which skills are still needed
 - where to dig: seqs, note addresses, files
 
-`get_context_remaining` reports the room left. `clear_memory` starts a fresh window, so save the note first.
+`get_context_remaining` reports the room left. `neuralyze` starts a fresh window, so save the note first.
 
 ## When a tool is missing or refuses
 
