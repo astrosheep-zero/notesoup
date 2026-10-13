@@ -23,9 +23,9 @@ type ResetState = {
   compactDisabled: boolean; limitsFailureLogged: boolean; limitsAttempts: number; limitsWindow: number
   limits?: ClaudeLimits; warnedWindow?: number; texts?: SharedTexts; settingsFailureLogged: boolean
 }
-const HEADLESS = "Clear-memory is off in headless (-p / SDK) sessions"
-const COMPACT_DISABLED = "Clear-memory can't run: compaction is off in this session (DISABLE_COMPACT)"
-const THRESHOLDS_UNAVAILABLE = "Context thresholds unavailable · automatic flush skipped"
+const HEADLESS = "No brain when headless"
+const COMPACT_DISABLED = "Brain can't be emptied with DISABLE_COMPACT"
+const THRESHOLDS_UNAVAILABLE = "Brain size unknown · no automatic emptying"
 const SETTINGS_UNAVAILABLE = "Notesoup settings unreadable · using the default flush margins"
 /** Bounded retries: a transient helper failure must not disable thresholds for a whole window. */
 const MAX_LIMITS_ATTEMPTS = 3
@@ -102,7 +102,7 @@ async function contextUsage($: Engine, state: ResetState): Promise<ContextUsage 
   } catch {
     if (!state.usageFailureLogged) {
       state.usageFailureLogged = true
-      log($, "Context usage unavailable · automatic flush skipped")
+      log($, "Brain fullness unknown · no automatic emptying")
     }
     return undefined
   }
@@ -308,19 +308,19 @@ export function register(on: On) {
   })
   on("command.run", async ($, e, next) => {
     if (e.command !== "empty-brain" && e.command !== "fresh-window") return next(e)
-    if (!await refreshIdentity($, state)) return { text: "🥣 Session changed · try /fresh-window again" }
+    if (!await refreshIdentity($, state)) return { text: "🥣 Different brain now · try /fresh-window again" }
     if (state.headless) return { text: `🥣 ${HEADLESS}` }
     if (state.compactDisabled) return { text: `🥣 ${COMPACT_DISABLED}` }
-    if (state.resetting || state.manualPending) return { text: "🥣 Empty brain already queued" }
+    if (state.resetting || state.manualPending) return { text: "🥣 Brain already being emptied" }
     if (state.turnRunning) {
       state.manualPending = true
-      return { text: "🥣 Clear-memory queued · runs after this turn" }
+      return { text: "🥣 Brain being emptied" }
     }
     // command.run holds a turn even when idle. Start one hidden close-out
     // turn after it returns; turn.complete is the verified self-hook path.
     state.manualPending = true
     manualSignal.wake?.()
-    return { text: "🥣 Clearing memory · notes first, then it stops" }
+    return { text: "🥣 Brain being emptied" }
   })
   on("session.compact", async ($, e, next) => {
     if (e.agentId !== undefined) return next(e)
@@ -363,7 +363,7 @@ export function register(on: On) {
       if (generation !== state.generation) return result
       if (!boot.ok) {
         try {
-          await $.ui.toast("🥣 Notes didn't load")
+          await $.ui.toast("🥣 Notes went missing")
         } catch { /* Notification failure must not suppress the fallback block. */ }
       }
       blocks = [...blocks, { name: "notesoup:boot", text: boot.ok ? String(boot.result) : `# notesoup\nYour notes didn't load this time (${boot.error}). Try \`${PREFIX}notes_list\`; if it fails too, tell the human.` }]
@@ -427,7 +427,7 @@ async function finishManual($: Engine, state: ResetState, signal: { wake?: () =>
       if (generation !== state.generation) return
       if (texts?.warning === undefined) {
         state.manualPending = false
-        log($, "Couldn't clear memory: the close-out prompt didn't load")
+        log($, "Brain still full: the close-out prompt didn't load")
         return
       }
       await $.prompt.submit({ text: texts.warning })
@@ -435,7 +435,7 @@ async function finishManual($: Engine, state: ResetState, signal: { wake?: () =>
   } catch {
     if (generation === state.generation) {
       state.manualPending = false
-      log($, "Couldn't clear memory: the close-out turn didn't start")
+      log($, "Brain still full: the close-out turn didn't start")
     }
   } finally { armManual($, state, signal) }
 }
@@ -467,12 +467,12 @@ async function reset($: Engine, state: ResetState): Promise<void> {
     const result = await $.session.compact({ instructions: RESET_INSTRUCTIONS })
     if (generation !== state.generation) return
     if (result.skip !== undefined || state.preparedBoot === undefined) {
-      log($, `Memory not cleared · ${result.skip ?? "notes boot was not retained"}`)
+      log($, `Brain not emptied · ${result.skip ?? "notes boot was not retained"}`)
       return
     }
     state.retainedBoot = state.preparedBoot
     state.window++
-    log($, "Memory cleared")
+    log($, "Brain emptied")
   } catch (error) {
     if (generation !== state.generation) return
     const text = String(error)
@@ -482,7 +482,7 @@ async function reset($: Engine, state: ResetState): Promise<void> {
     } else if (/a turn is (running|in flight)/.test(text)) {
       state.manualPending = true
     } else {
-      log($, `Couldn't clear memory: ${text.replace(/[\r\n].*$/s, "")}`)
+      log($, `Brain still full: ${text.replace(/[\r\n].*$/s, "")}`)
     }
   } finally {
     if (generation === state.generation) {

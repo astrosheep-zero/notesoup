@@ -250,7 +250,7 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 		try {
 			resetDrafts = await options.buildReset(ctx, isCurrent, prompt, lastWord);
 		} catch (error) {
-			if (isCurrent()) ctx.ui.notify(`🥣 Couldn't clear memory: ${errorMessage(error)}${prompt ? " · your prompt was not sent" : ""}`, "warning");
+			if (isCurrent()) ctx.ui.notify(`🥣 Brain still full: ${errorMessage(error)}${prompt ? " · prompt not sent" : ""}`, "warning");
 			return entries.length > 0 ? { entries } : undefined;
 		}
 		if (!isCurrent()) return entries.length > 0 ? { entries } : undefined;
@@ -323,7 +323,7 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 		const markerExists = currentReset(ctx) !== undefined;
 		if (options.isEnabled() || markerExists) {
 			if (event.reason === "manual") {
-				ctx.ui.notify("🥣 /compact is off while notesoup is on · use /fresh-window", "warning");
+				ctx.ui.notify("🥣 No compacting brains here · use /fresh-window", "warning");
 			}
 			return { cancel: true };
 		}

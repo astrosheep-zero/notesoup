@@ -64,7 +64,7 @@ export function registerBudget(
 		for (const [key, notice] of pendingNotices) {
 			if (warningCommittedInWindow(ctx, notice)) {
 				pendingNotices.delete(key);
-				ctx.ui.notify("🥣 Context almost full · saving notes before memory clears", "warning");
+				ctx.ui.notify("🥣 Brain almost full · taking notes", "warning");
 			} else if (settled) {
 				// An uncommitted draft must not be matched to a later manual warning.
 				pendingNotices.delete(key);

@@ -176,13 +176,13 @@ async function openFixture(options: {
 	await session.bindExtensions({
 		uiContext: {
 			notify(message: string, type?: "info" | "warning" | "error") {
-				if (message === "🥣 Memory cleared") {
+				if (message === "🥣 Brain emptied") {
 					const marker = sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE).at(-1);
 					const windowId = (marker as { data?: { windowId?: string } } | undefined)?.data?.windowId;
 					assert.ok(sessionManager.getBranch().some((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE && (entry.data as { windowId?: string })?.windowId === windowId), "notification follows the reset marker commit");
 					assert.ok(sessionManager.getBranch().some((entry) => entry.type === "custom_message" && entry.customType === BOOT_TYPE && (entry.details as { windowId?: string })?.windowId === windowId), "notification follows the reset boot commit");
 				}
-				if (type === "warning" && /^🥣 Context almost full/.test(message)) budgetNotices++;
+				if (type === "warning" && /^🥣 Brain almost full/.test(message)) budgetNotices++;
 				notices.push(message);
 			},
 		} as ExtensionUIContext,
@@ -444,12 +444,12 @@ test("real AgentSession: final warning survives its reset boundary and notifies 
 		assert.equal(fixture.sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === WARNING_TYPE).length, 1);
 		assert.equal(resetMarkers(fixture).length, 1, "the reset commits in the same boundary as the final warning");
 		assert.equal(fixture.budgetNotices(), 1, "the old-window committed warning reaches the UI after reset");
-		assert.equal(fixture.notices.filter((notice) => notice === "🥣 Memory cleared").length, 1, "reset notification remains intact");
+		assert.equal(fixture.notices.filter((notice) => notice === "🥣 Brain emptied").length, 1, "reset notification remains intact");
 		assert.equal(fixture.notices.some((notice) => notice.includes("Context running low")), false, "early guidance stays silent");
 		await fixture.session.prompt("Continue after reset.");
 		await fixture.session.waitForIdle();
 		assert.equal(fixture.budgetNotices(), 1, "later turns cannot repeat the consumed final warning");
-		assert.equal(fixture.notices.filter((notice) => notice === "🥣 Memory cleared").length, 1, "the prior reset notification is also deduplicated");
+		assert.equal(fixture.notices.filter((notice) => notice === "🥣 Brain emptied").length, 1, "the prior reset notification is also deduplicated");
 	} finally {
 		fixture.close();
 	}
@@ -461,7 +461,7 @@ test("real AgentSession: explicit tiny-session wipe ignores keepRecentTokens and
 		compactionEnabled: false,
 		keepRecentTokens: 1_000_000,
 		script: (request, context) => request === 1
-			? assistant(fixture, [{ type: "toolCall", id: "wipe-1", name: "empty_brain", arguments: {} }], "toolUse")
+			? assistant(fixture, [{ type: "toolCall", id: "wipe-1", name: "empty_brain", arguments: { last_word: "shoe" } }], "toolUse")
 			: assistant(fixture, [{ type: "text", text: "resumed in a new window" }]),
 	});
 	try {
@@ -469,7 +469,7 @@ test("real AgentSession: explicit tiny-session wipe ignores keepRecentTokens and
 		assert.equal(fixture.notices.length, 0, "startup boot is silent");
 		await fixture.session.prompt("OLD_CONTEXT_SENTINEL: retain this only in durable history.");
 		await fixture.session.waitForIdle();
-		assert.equal(fixture.notices.filter((message) => message.includes("Memory cleared")).length, 1, "the reset notifies once");
+		assert.deepEqual(fixture.notices.filter((message) => message.includes("Brain emptied")), ["🥣 Brain emptied · last word: “shoe”"], "the reset notifies once, carrying the last word");
 		assert.equal(fixture.requests.length, 2, "the tool starts exactly one continuation");
 		assert.ok(text(fixture.requests[0]).includes("OLD_CONTEXT_SENTINEL"));
 		assertFreshRequest(fixture, 1, "OLD_CONTEXT_SENTINEL");
@@ -572,7 +572,7 @@ test("real AgentSession: clear commands append a prompt after continuation and r
 			assert.equal(appended.customType, "notesoup/reset-prompt");
 			assert.equal(appended.content, prompt);
 			assert.equal(appended.display, true);
-			assert.ok(fixture.notices.some((notice) => notice.includes("Memory cleared")));
+			assert.ok(fixture.notices.some((notice) => notice.includes("Brain emptied")));
 		} finally {
 			fixture.close();
 		}
@@ -625,7 +625,7 @@ test("real AgentSession: streaming clear prompt keeps the first request", { time
 		await fixture.session.waitForIdle();
 		assert.equal(fixture.requests.length, 3);
 		assert.equal(resetMarkers(fixture).length, 1);
-		assert.ok(fixture.notices.some((notice) => notice.includes("already queued")));
+		assert.ok(fixture.notices.some((notice) => notice.includes("Brain already being emptied")));
 	} finally { release(); fixture.close(); }
 });
 
@@ -651,7 +651,7 @@ test("real AgentSession: manual hard-reserve reset stops clean and mixed-tool tu
 			assert.equal(fixture.requests.length, 2);
 			assert.equal(resetMarkers(fixture).length, 1, "the safety wipe is not repeated at settlement");
 			assert.equal(JSON.stringify(fixture.sessionManager.buildSessionProjection().messages).includes("HARD_RESERVE_OLD_SENTINEL"), false);
-			assert.ok(fixture.notices.some((notice) => notice.includes("Memory cleared")));
+			assert.ok(fixture.notices.some((notice) => notice.includes("Brain emptied")));
 			if (mixed) {
 				assert.ok(existsSync(join(fixture.notesRoot, "pi", "session", fixture.sessionManager.getSessionId(), "pressure.md")), "the whole tool batch completes before the cut");
 				assert.equal(fixture.streamSignals.at(-1), true, "Pi's unavoidable tool follow-up is cancelled before provider work");
@@ -718,7 +718,7 @@ test("real AgentSession: manual overflow wipes and stops even with automatic res
 		assert.equal(fixture.requests.length, 2);
 		assert.equal(resetMarkers(fixture).length, 1);
 		assert.equal(JSON.stringify(fixture.sessionManager.buildSessionProjection().messages).includes("MANUAL_OVERFLOW_OLD_SENTINEL"), false);
-		assert.ok(fixture.notices.some((notice) => notice.includes("Memory cleared")));
+		assert.ok(fixture.notices.some((notice) => notice.includes("Brain emptied")));
 	} finally {
 		fixture.close();
 	}
@@ -748,7 +748,7 @@ test("real AgentSession: streaming /empty-brain steers a close-out and stops at 
 		await started;
 		await fixture.session.prompt("/empty-brain", { streamingBehavior: "steer" });
 		await fixture.session.prompt("/empty-brain", { streamingBehavior: "followUp" });
-		assert.equal(fixture.notices.filter((notice) => notice.includes("notes first, then it stops")).length, 1, "the user is notified once while output is ongoing");
+		assert.equal(fixture.notices.filter((notice) => notice.includes("Brain being emptied")).length, 1, "the user is notified once while output is ongoing");
 		assert.equal(resetMarkers(fixture).length, 0, "the ongoing turn is not interrupted");
 		releaseResponse();
 		await running;
@@ -757,7 +757,7 @@ test("real AgentSession: streaming /empty-brain steers a close-out and stops at 
 		assert.equal(fixture.requests.length, 2, "the warning closes out and the run stops — no continuation in the fresh window");
 		assert.equal(fixture.sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === MANUAL_WIPE_TYPE).length, 1, "the busy warning is persisted once");
 		assert.equal(JSON.stringify(fixture.sessionManager.buildSessionProjection().messages).includes("STREAMING_WIPE_OLD_SENTINEL"), false);
-		assert.ok(fixture.notices.some((notice) => notice.includes("Memory cleared")), "the committed boundary has a separate success notice");
+		assert.ok(fixture.notices.some((notice) => notice.includes("Brain emptied")), "the committed boundary has a separate success notice");
 	} finally {
 		releaseResponse();
 		fixture.close();
@@ -820,7 +820,7 @@ test("real AgentSession: user abort, synthetic aborted response, and generic err
 			await fixture.session.waitForIdle();
 			assert.equal(resetMarkers(fixture).length, 0, `${mode} does not force a reset`);
 			assert.equal(fixture.sessionManager.getBranch().filter((entry) => entry.type === "compaction").length, 0);
-			assert.equal(fixture.notices.some((notice) => notice.includes("Memory cleared")), false);
+			assert.equal(fixture.notices.some((notice) => notice.includes("Brain emptied")), false);
 			if (mode === "ctx-abort") assert.equal(fixture.streamSignals.at(-1), true, "this case aborts the real Pi operation signal");
 			else assert.equal(fixture.streamSignals.at(-1), false, "synthetic abort/error is not a user abort signal");
 			await fixture.session.prompt("AFTER_UNSUCCESSFUL_CLOSEOUT");

@@ -6,8 +6,8 @@ import { registerBudget } from "./budget.js";
 import { output } from "./tool-result.js";
 import { currentReset, currentWindowId, isCheckpointBackedReset, isWindowBoot, isWindowMarker, projectRootWindow, projectWindow, rootWindowId, type WindowMarker } from "./window.js";
 import { registerResetLifecycle } from "./reset/lifecycle.js";
-import { buildResetDrafts, MAX_LAST_WORD_CHARS, repairResetTail, sanitizeLastWord } from "./reset/artifacts.js";
-import { BOOT_TYPE, MANUAL_WIPE_TYPE } from "./entries.js";
+import { buildResetDrafts, LAST_WORD_PREFIX, MAX_LAST_WORD_CHARS, repairResetTail, sanitizeLastWord } from "./reset/artifacts.js";
+import { BOOT_TYPE, MANUAL_WIPE_TYPE, RESET_LAST_WORD_TYPE } from "./entries.js";
 import { WARNING_CONTENT } from "../budget/text.js";
 import { buildBootMessage, sendBoot, type IncompleteNotesNotifier } from "./boot.js";
 import { errorMessage } from "../error-message.js";
@@ -71,7 +71,10 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 			const marker = branch.find((entry): entry is WindowMarker => isWindowMarker(entry) && entry.data.windowId === windowId);
 			if (!marker || !isCheckpointBackedReset(ctx, marker) || !resetBoundaryCommitted(ctx, marker.id, windowId)) continue;
 			pendingResetNotices.delete(windowId);
-			ctx.ui.notify("🥣 Memory cleared", "info");
+			const tail = branch.slice(branch.indexOf(marker) + 1);
+			const lastWordEntry = tail.find((entry) => (entry as { customType?: string }).customType === RESET_LAST_WORD_TYPE) as { content?: string } | undefined;
+			const lastWord = lastWordEntry?.content?.startsWith(LAST_WORD_PREFIX) ? lastWordEntry.content.slice(LAST_WORD_PREFIX.length) : undefined;
+			ctx.ui.notify(`🥣 Brain emptied${lastWord ? ` · last word: “${lastWord}”` : ""}`, "info");
 		}
 	};
 	pi.on("turn_start", (_event, ctx) => notifyCommittedResets(ctx));
@@ -83,7 +86,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 		if (snapshot.unavailable.length === 0 || incompleteNotesNotified.has(windowId)) return;
 		incompleteNotesNotified.add(windowId);
 		const homes = snapshot.unavailable.map((home) => home.label).join(", ");
-		ctx.ui.notify(`🥣 Some notes didn't load: ${homes}`, "warning");
+		ctx.ui.notify(`🥣 Some notes went missing: ${homes}`, "warning");
 	};
 	const budget = registerBudget(pi, () => enabled, settingsManager);
 
@@ -110,7 +113,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 	pi.on("session_before_tree", (event, ctx) => {
 		if (!event.preparation.userWantsSummary) return undefined;
 		if (!branchHasWindowMarker(ctx) && !branchHasWindowMarker(ctx, event.preparation.targetId)) return undefined;
-		ctx.ui.notify("🥣 Branch summary skipped · it would bring back cleared memory", "info");
+		ctx.ui.notify("🥣 Branch summary skipped · it remembers too much", "info");
 		return { summary: { summary: "" } };
 	});
 
@@ -128,7 +131,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 		} catch (error) {
 			if (missingBootNotice !== windowId) {
 				missingBootNotice = windowId;
-				ctx.ui.notify("🥣 Request cancelled · this memory window is broken, run /fresh-window", "error");
+				ctx.ui.notify("🥣 Request cancelled · brain is broken, run /fresh-window", "error");
 			}
 			ctx.abort();
 			const safeHead = getCurrentSystemMessage(event.messages);
@@ -167,7 +170,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 		description: "Flush memory to notes and continue in a fresh window; optional prompt runs there",
 		handler: async (args: string, cmdCtx: ExtensionCommandContext) => {
 			if (!enabled) {
-				cmdCtx.ui.notify("🥣 notesoup is off · run /notesoup on first", "error");
+				cmdCtx.ui.notify("🥣 notesoup is off · no brain to empty", "error");
 				return;
 			}
 			const requestedWindowId = currentWindowId(cmdCtx);
@@ -181,17 +184,15 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 			const prompt = args.trim() || undefined;
 			const armed = resets.closeOut(requestedWindowId, "manual", prompt);
 			if (armed === "already-pending") {
-				cmdCtx.ui.notify("🥣 Empty brain already queued · the first prompt is kept", "info");
+				cmdCtx.ui.notify("🥣 Brain already being emptied", "info");
 				return;
 			}
-			cmdCtx.ui.notify(prompt
-				? "🥣 Clearing memory · notes first, then your prompt runs"
-				: "🥣 Clearing memory · notes first, then it stops", "info");
+			cmdCtx.ui.notify("🥣 Brain being emptied", "info");
 			try {
 				pi.sendMessage({ customType: MANUAL_WIPE_TYPE, content: WARNING_CONTENT, display: false }, { triggerTurn: true, deliverAs: "steer" });
 			} catch (error) {
 				resets.clear();
-				cmdCtx.ui.notify(`🥣 Couldn't start /fresh-window: ${errorMessage(error)}`, "error");
+				cmdCtx.ui.notify(`🥣 Brain refused to empty: ${errorMessage(error)}`, "error");
 			}
 		},
 	};

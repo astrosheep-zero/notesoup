@@ -159,7 +159,7 @@ test("Claude helper boot uses actual Claude note tool bindings and a fresh snaps
   } }) as string;
   assert.match(boot, /mcp__notesoup__notes_\*/);
   assert.match(boot, /claude:session/);
-  assert.doesNotMatch(boot, /memory cleared|continuation/);
+  assert.doesNotMatch(boot, /brain empty|continuation/);
 });
 
 test("Claude helper serves the shared reset prose and the host's wipe sentence", async () => {
@@ -368,7 +368,7 @@ test("Claude Mod boot failure preserves fallback with available, absent, or fail
         ...upstream,
         blocks: [...upstream.blocks, { name: "notesoup:boot", text: "# notesoup\nYour notes didn't load this time (helper exited unsuccessfully). Try `mcp__notesoup__notes_list`; if it fails too, tell the human." }],
       }, "boot failure keeps the original fallback and upstream fields even if notify is absent or fails");
-      const expectedNotifications = mode === "no ui" || mode === "no toast" ? [] : ["🥣 Notes didn't load"];
+      const expectedNotifications = mode === "no ui" || mode === "no toast" ? [] : ["🥣 Notes went missing"];
       assert.deepEqual(notifications, expectedNotifications, "one user-facing notification reports the notes boot failure");
       assert.equal(bootRequests, 1);
       assert.equal(nextCalls, 1);
@@ -444,7 +444,7 @@ test("Claude Mod resets at Claude's resolved point after the turn, retains one f
   host.session.usage = async () => { throw new Error("usage unavailable"); };
   await invoke("session.measure");
   await invoke("turn.complete");
-  assert.equal(notifications.filter((text) => text.includes("Context usage unavailable")).length, 1, "usage failure logs once per session");
+  assert.equal(notifications.filter((text) => text.includes("Brain fullness unknown")).length, 1, "usage failure logs once per session");
   host.session.usage = async () => measured();
   await dispatch({ op: "tool", tool: "notes_write", identity: { ...identity, home, cwd: home, sessionId: "hook-session" }, params: { address: "@human/MAP.md", content: "FRESH_NOTES_AT_RESET" } });
   await invoke("turn.start");
@@ -492,9 +492,9 @@ test("Claude Mod headless detection skips compaction and logs once", async (t) =
   await invoke("session.measure");
   await invoke("turn.complete");
   assert.equal(attempts, 0, "headless sessions skip the unsupported capability from startup");
-  assert.deepEqual(notifications, ["🥣 Clear-memory is off in headless (-p / SDK) sessions"]);
+  assert.deepEqual(notifications, ["🥣 No brain when headless"]);
   const manual = await invoke("command.run", { command: "empty-brain" }) as { text: string };
-  assert.match(manual.text, /off in headless/);
+  assert.match(manual.text, /No brain when headless/);
   assert.equal(notifications.length, 1);
   const boot = await handlers.get("prompt.context")!(host, {}, async () => ({ blocks: [] })) as { blocks: Array<{ text: string }> };
   assert.match(boot.blocks[0]!.text, /Current context window id: claude:hook-session:0/);
@@ -555,7 +555,7 @@ test("Claude Mod manual reset uses one hidden close-out turn, then recovers its 
   (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
   await invoke("session.start", { cwd: home, isInteractive: true });
   const command = await invoke("command.run", { command: "empty-brain" }) as { text: string };
-  assert.match(command.text, /Clearing memory/);
+  assert.match(command.text, /Brain being emptied/);
   await Promise.resolve();
   assert.equal(compactions, 0, "command.run must not call compact under its held turn");
   assert.equal(timers.length, 1);
@@ -675,7 +675,7 @@ test("Claude Mod skips the automatic reset when thresholds cannot be resolved", 
   await invoke("turn.complete");
   await invoke("session.measure");
   assert.equal(compactions, 0, "an unresolvable point never resets");
-  assert.equal(notifications.filter((text) => text.includes("Context thresholds unavailable")).length, 1, "one line, not one per turn");
+  assert.equal(notifications.filter((text) => text.includes("Brain size unknown")).length, 1, "one line, not one per turn");
 });
 
 test("Claude skill projections stay byte-identical to canonical shared files", () => {
