@@ -472,7 +472,7 @@ test("list and search merge scopes and carry addresses; the path jail rejects es
 			assert.equal(resultError(await call(captured, tool, { address: path, content: "x", edits: [{ oldText: "a", newText: "b" }] }, ctx)).code, "invalid_address");
 		}
 	}
-	assert.equal(resultError(await call(captured, "notes_search", { query: "" }, ctx)).code, "invalid_query");
+	assert.deepEqual(resultData<NotesSearchData>(await call(captured, "notes_search", { query: "" }, ctx)), resultData<NotesSearchData>(await call(captured, "notes_search", {}, ctx)));
 	assert.equal(resultError(await call(captured, "notes_read", { address: "one.md", offset_chars: 99999 }, ctx)).code, "invalid_offset");
 	assert.equal(resultError(await call(captured, "notes_list", { glob: "bad\\glob" }, ctx)).code, "invalid_pattern");
 	assert.equal(resultError(await call(captured, "notes_search", { query: "needle", glob: "bad\\glob" }, ctx)).code, "invalid_pattern");

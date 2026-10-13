@@ -475,6 +475,10 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 		const rows: NoteSearchRow[] = [];
 		for await (const note of scan(stableOptions, status)) {
 			const { address, path, scope, meta, body } = note;
+			if (stableQueries.length === 0) {
+				rows.push({ address, path, scope, meta, matches: [] });
+				continue;
+			}
 			// Offsets address the note body alone: no frontmatter length is predicted, so an
 			// access-counter rewrite cannot move a match out from under the caller.
 			let baseChars = 0;

@@ -65,6 +65,31 @@ test("notes_list and notes_search are recent-first snapshots with narrowing hint
 	assert.equal(narrowed.more, 0);
 });
 
+test("empty notes queries list scoped notes without fabricated matches", async () => {
+	const session = manager();
+	const captured = makeExtension(session);
+	const ctx = context(session);
+	for (const [address, content] of [["empty-query/blank.md", ""], ["empty-query/hit.md", "needle"], ["outside.md", "needle"]]) {
+		await call(captured, "notes_write", { address, content }, ctx);
+	}
+	await call(captured, "notes_write", { address: "empty-query/hidden.md", content: "needle" }, ctx);
+	await call(captured, "notes_update", { address: "empty-query/hidden.md", crumpled: true }, ctx);
+	for (const crumpled of [false, true]) {
+		const filters = { glob: "empty-query/**", crumpled, limit: 1 };
+		const listed = resultData<NotesListData>(await call(captured, "notes_list", filters, ctx));
+		const expected = { ...listed, files: listed.files.map(file => ({ ...file, matches: [] })) };
+		for (const query of [undefined, "", [], ["", ""]]) {
+			assert.deepEqual(resultData<NotesSearchData>(await call(captured, "notes_search", { ...filters, query }, ctx)), expected);
+		}
+	}
+	const filters = { glob: "empty-query/**" };
+	assert.deepEqual(
+		resultData<NotesSearchData>(await call(captured, "notes_search", { ...filters, query: ["", "needle"] }, ctx)),
+		resultData<NotesSearchData>(await call(captured, "notes_search", { ...filters, query: "needle" }, ctx)),
+	);
+	assert.equal(resultError(await call(captured, "notes_search", { query: [42] }, ctx)).code, "invalid_query");
+});
+
 test("notes_list reports omitted files when the wire budget truncates the snapshot", async () => {
 	const session = manager();
 	const captured = makeExtension(session);

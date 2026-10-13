@@ -328,7 +328,7 @@ export const notesList = {
 	render: (result: Outcome<NotesListData>): string => renderOutcome(result, renderListData),
 } as const;
 
-export const notesSearchParameters = Type.Object({ query: searchQuery(), glob: GLOB_PARAMETER, limit: FILE_LIMIT_PARAMETER, max_matches_per_file: Type.Optional(Type.Integer({ minimum: 1, description: "(optional, default all) Max matching lines per note." })), crumpled: CRUMPLED_LIST_PARAMETER }, { additionalProperties: false });
+export const notesSearchParameters = Type.Object({ query: Type.Optional(searchQuery()), glob: GLOB_PARAMETER, limit: FILE_LIMIT_PARAMETER, max_matches_per_file: Type.Optional(Type.Integer({ minimum: 1, description: "(optional, default all) Max matching lines per note." })), crumpled: CRUMPLED_LIST_PARAMETER }, { additionalProperties: false });
 
 function renderSearchData(data: NotesSearchData): string {
 	const lines = [`${data.files.length} ${data.files.length === 1 ? "note" : "notes"}`];
@@ -364,7 +364,7 @@ function fitSearchFile(file: SearchFile, fits: (candidate: SearchFile) => boolea
 
 export const notesSearch = {
 	name: "notes_search", label: "Notes search",
-	description: `Search note bodies for literal text, case-insensitive. Returns matching lines with offsets for \`notes_read\`. Not pageable; \`more\` counts the rest. ${ADDRESS_DESCRIPTION}`,
+	description: `Search note bodies for literal text, case-insensitive. Without a query, lists notes with no match lines. Returns matching lines with offsets for \`notes_read\`. Not pageable; \`more\` counts the rest. ${ADDRESS_DESCRIPTION}`,
 	parameters: notesSearchParameters, outputSchema: resultSchema(NotesSearchDataSchema),
 	async execute(params: Static<typeof notesSearchParameters>, identity: NotesIdentity): Promise<Outcome<NotesSearchData>> {
 		try {

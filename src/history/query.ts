@@ -155,23 +155,14 @@ function pageData(projection: HistoryProjection, params: HistorySelection, vis: 
 	return { items: rows, ...cursors };
 }
 
-/** Filter, then keep only literal matches when a query is present. Query shape errors refuse here. */
-function selectionCandidates(projection: HistoryProjection, params: HistorySelection): Outcome<Candidate[]> {
-	let queries: string[] | undefined;
-	if (params.query !== undefined) {
-		try {
-			queries = searchQueries(params.query);
-		} catch (error) {
-			if (error instanceof InvalidQueryError) return failure("invalid_query", error.message);
-			throw error;
-		}
-	}
-	const events = filteredItems(projection, params, queries === undefined);
-	if (queries === undefined) return success(events.map((event) => ({ event })));
-	const needles = queries;
-	return success(events
+/** Filter, then keep only literal matches when a normalized query is present. */
+function selectionCandidates(projection: HistoryProjection, params: HistorySelection): Candidate[] {
+	const events = filteredItems(projection, params, params.query === undefined);
+	if (params.query === undefined) return events.map((event) => ({ event }));
+	const needles = params.query as string[];
+	return events
 		.map((event) => ({ event, matchOffset: earliestMatchOffsetChars(eventDocument(event), needles) }))
-		.filter((candidate) => candidate.matchOffset >= 0));
+		.filter((candidate) => candidate.matchOffset >= 0);
 }
 
 /**
@@ -181,10 +172,15 @@ function selectionCandidates(projection: HistoryProjection, params: HistorySelec
 export function selectPage(projection: HistoryProjection, params: HistorySelection, fits: (page: HistoryPage) => boolean, maxChars: number): Outcome<HistoryPage> {
 	const bounds = resolveTimeBounds(params);
 	if (!bounds.ok) return bounds;
-	const scoped = { ...params, ...bounds.data };
-	const candidates = selectionCandidates(projection, scoped);
-	if (!candidates.ok) return candidates;
-	const vis = candidates.data;
+	let queries: string[];
+	try {
+		queries = searchQueries(params.query);
+	} catch (error) {
+		if (error instanceof InvalidQueryError) return failure("invalid_query", error.message);
+		throw error;
+	}
+	const scoped = { ...params, ...bounds.data, query: queries.length ? queries : undefined };
+	const vis = selectionCandidates(projection, scoped);
 	// Take the limit from the end `from` names, so a budget for one row keeps the most important one.
 	// At least one: `slice(-0)` would otherwise return the whole selection.
 	const limit = Math.max(1, scoped.limit ?? 20);

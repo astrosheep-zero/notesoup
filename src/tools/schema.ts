@@ -4,7 +4,7 @@ export const nullableString = (description?: string) => Type.Optional(Type.Union
 export const historyRoles = () => Type.Optional(Type.Array(HistoryRoleSchema, { minItems: 1, description: "(optional) Only these roles: user, assistant, tool, context. Omit to see the conversation with tool and context runs folded." }));
 
 /** Search query parameter: one literal, or several literals combined with OR. */
-export const searchQuery = (description?: string) => Type.Union([Type.String(), Type.Array(Type.String(), { minItems: 1 })], description === undefined ? {} : { description });
+export const searchQuery = (description = "(optional) Literal text, or texts combined with OR. Empty text or list means no search filter.") => Type.Union([Type.String(), Type.Array(Type.String())], { description });
 
 /** Expected search-query refusal, distinct from any other Error an operation may raise. */
 export class InvalidQueryError extends Error {
@@ -14,17 +14,10 @@ export class InvalidQueryError extends Error {
 	}
 }
 
-/**
- * Normalize a search `query` parameter into the literal needles to match.
- * A bare string is a one-element list, so single-query behavior is unchanged.
- * An empty list, a non-string element, or an empty string is refused rather than silently
- * searching for nothing: those are argument errors, not empty result sets. An empty string
- * matches every line and every item, so it can never be what the caller meant.
- */
+/** Missing/empty queries disable filtering; empty list entries are ignored, not OR wildcards. */
 export function searchQueries(query: unknown): string[] {
-	const candidates = typeof query === "string" ? [query] : query;
-	if (!Array.isArray(candidates) || candidates.length === 0) throw new InvalidQueryError("`query` must be a string or a non-empty list of strings.");
+	const candidates = query === undefined ? [] : typeof query === "string" ? [query] : query;
+	if (!Array.isArray(candidates)) throw new InvalidQueryError("`query` must be a string or a list of strings.");
 	if (!candidates.every((candidate) => typeof candidate === "string")) throw new InvalidQueryError("Every item in the `query` list must be a string.");
-	if (candidates.some((candidate) => candidate === "")) throw new InvalidQueryError("`query` can't be an empty string; it would match everything.");
-	return candidates as string[];
+	return candidates.filter((candidate) => candidate !== "") as string[];
 }

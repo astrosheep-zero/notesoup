@@ -149,7 +149,7 @@ function renderWindows(data: HistoryWindowsData): string {
 /* ------------------------------------------------------------------ history_list */
 
 export const historyListParameters = Type.Object({
-	query: Type.Optional(searchQuery("(optional) Text, or a list of texts (any match). Searches every role, tool arguments and output included; returns only hits.")),
+	query: Type.Optional(searchQuery("(optional) Text, or a list of texts (any match). Empty text/list means no search filter; empty entries are ignored. Searches every role, tool arguments and output included; returns only hits.")),
 	roles: historyRoles(),
 	before_seq: Type.Optional(Type.Integer({ minimum: 1, description: "(optional) Only events with seq below this." })),
 	after_seq: Type.Optional(Type.Integer({ minimum: 1, description: "(optional) Only events with seq above this." })),

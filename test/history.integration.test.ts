@@ -84,7 +84,7 @@ test("history_list exposes bounded paging, `from` and a literal query, while not
 	for (const retired of [{ before: 5 }, { after: 5 }, { order: "oldest" }, { limit_chars: 10 }]) {
 		assert.equal(Check(listSchema, retired), false, `${Object.keys(retired)[0]} is refused as an unknown parameter`);
 	}
-	assert.equal(Check(listSchema, { query: "" }), true, "an empty literal is schema-valid; the operation refuses it as invalid_query");
+	assert.equal(Check(listSchema, { query: "" }), true, "an empty literal is equivalent to an omitted query");
 	for (const invalid of [{ roles: ["tool_call"] }, { roles: ["system"] }, { tool_name: "bash" }, { roles: [] }]) {
 		assert.equal(Check(listSchema, invalid), false, JSON.stringify(invalid));
 	}
@@ -526,7 +526,7 @@ test("compaction summary becomes context and is folded in the default list", asy
 	assert.deepEqual(contextItems.items.map((item) => [item.role, item.content]), [["context", "summary needle"]]);
 });
 
-test("a query covers every role, carries match offsets and refuses an empty literal", async () => {
+test("a query covers every role, carries match offsets and treats empty queries as omitted", async () => {
 	const session = manager();
 	const captured = makeExtension(session);
 	const ctx = context(session);
@@ -547,7 +547,12 @@ test("a query covers every role, carries match offsets and refuses an empty lite
 	const absent = await call(captured, "history_list", { query: "absent" }, ctx);
 	assert.deepEqual(page(absent).items, []);
 	assert.notEqual(rendered(absent).trim(), "", "an empty page says so instead of rendering nothing");
-	assert.deepEqual(resultError(await call(captured, "history_list", { query: "" }, ctx)).code, "invalid_query");
+	for (const query of ["", [], ["", ""]]) {
+		assert.deepEqual(page(await call(captured, "history_list", { query }, ctx)), page(await call(captured, "history_list", {}, ctx)), "empty queries preserve conversation folding");
+		const filters = { roles: ["context"], after_seq: 1, before_seq: 3 };
+		assert.deepEqual(page(await call(captured, "history_list", { ...filters, query }, ctx)), page(await call(captured, "history_list", filters, ctx)), "other filters still apply");
+	}
+	assert.deepEqual(page(await call(captured, "history_list", { query: ["", "needle"] }, ctx)), all, "empty entries do not turn OR into match-all");
 });
 
 test("page_older and page_newer round-trip a session with no duplicates and no gaps", async () => {
