@@ -15,8 +15,11 @@ export const WARNING_BODY =
 
 export const WARNING_PROMPT = `${WARNING_BODY}\nWhen the notes are ready, call \`clear_memory\` to reset now instead of being cut off mid-task.`;
 
-/** The shared hidden checkpoint text: one manual/budget-triggered request, both hosts. */
-export const WARNING_CONTENT = `${GUIDANCE_OPEN_TAG}\n${WARNING_PROMPT}\n${GUIDANCE_CLOSE_TAG}`;
+/** Pi-only nudge: pi's clear_memory persists a parting line; the dsh tool has no such parameter. */
+export const LAST_WORD_HINT = "If you want, pass `clear_memory` a `last_word`: one short line left visible where this window closes.";
+
+/** The hidden checkpoint text for pi's manual/budget-triggered requests (dsh reads WARNING_PROMPT directly). */
+export const WARNING_CONTENT = `${GUIDANCE_OPEN_TAG}\n${WARNING_PROMPT}\n${LAST_WORD_HINT}\n${GUIDANCE_CLOSE_TAG}`;
 
 /** Claude's variant: the mod resets after the turn, so the model only has to stop. */
 export const CLAUDE_WARNING_PROMPT = `${WARNING_BODY}\nWhen the notes are ready, end your turn; the reset runs after it.`;

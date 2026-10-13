@@ -15,10 +15,11 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { SessionManager as Manager } from "@earendil-works/pi-coding-agent";
 import notesoup from "../src/pi/extension.js";
-import { BOOT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, RESET_MARKER_TYPE } from "../src/pi/entries.js";
+import { BOOT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, RESET_LAST_WORD_TYPE, RESET_MARKER_TYPE } from "../src/pi/entries.js";
 import { MANUAL_WIPE_TYPE } from "../src/pi/entries.js";
 import { toolContext } from "./helpers/extension.js";
 import { WARNING_CONTENT } from "../src/budget/text.js";
+import { MAX_LAST_WORD_CHARS, sanitizeLastWord } from "../src/pi/reset/artifacts.js";
 import {
 	initialResetControl,
 	reduceResetControl,
@@ -91,11 +92,11 @@ function harness() {
 		}) as unknown as ExtensionCommandContext;
 		await command.handler(args, commandCtx);
 	};
-	const callTool = async (name: string): Promise<AgentToolResult<unknown>> => {
+	const callTool = async (name: string, params: Record<string, unknown> = {}): Promise<AgentToolResult<unknown>> => {
 		const tool = tools.get(name);
 		assert.ok(tool, `${name} is registered`);
 		// Pi 1.0 hands a tool the session context plus the nested-call surface; toolContext builds it.
-		return tool.execute("call", {}, new AbortController().signal, () => {}, toolContext(ctx));
+		return tool.execute("call", params, new AbortController().signal, () => {}, toolContext(ctx));
 	};
 	return { sessionManager, handlers, sent, notices, emit, runCommand, callTool };
 }
@@ -642,4 +643,51 @@ test("a committed reset places incoming and budget drafts before marker -> boot 
 		BOOT_TYPE,
 		CONTINUATION_TYPE,
 	], "the persisted reset shape remains marker -> boot -> continuation");
+});
+
+test("a clear_memory last word lands as a visible entry after the continuation", async () => {
+	const h = harness();
+	h.sessionManager.appendMessage({ role: "user", content: [{ type: "text", text: "before reset" }], timestamp: Date.now() });
+	await h.callTool("clear_memory", { last_word: "feed the ants" });
+	const boundary = resultEntries(await h.emit("turn_end", fakeBoundaryEvent()));
+	const lastWords = boundary.entries.filter((entry) => entry.type === "custom_message" && entry.customType === RESET_LAST_WORD_TYPE);
+	assert.equal(lastWords.length, 1, "the boundary persists exactly one parting line");
+	assert.deepEqual(lastWords[0], { type: "custom_message", customType: RESET_LAST_WORD_TYPE, content: "feed the ants", display: true });
+	const continuationIndex = boundary.entries.findIndex((entry) => entry.type === "custom_message" && entry.customType === CONTINUATION_TYPE);
+	assert.ok(boundary.entries.indexOf(lastWords[0]!) > continuationIndex, "the parting line follows the continuation");
+});
+
+test("clear_memory sanitizes the last word: trim, cap, and blank persists no entry", async () => {
+	assert.equal(sanitizeLastWord("  hi  "), "hi");
+	assert.equal(sanitizeLastWord("   "), undefined);
+	assert.equal(sanitizeLastWord(undefined), undefined);
+	assert.equal(sanitizeLastWord("x".repeat(MAX_LAST_WORD_CHARS + 10))?.length, MAX_LAST_WORD_CHARS + 1, "capped with an ellipsis");
+	const h = harness();
+	h.sessionManager.appendMessage({ role: "user", content: [{ type: "text", text: "before reset" }], timestamp: Date.now() });
+	await h.callTool("clear_memory", { last_word: "   " });
+	const boundary = resultEntries(await h.emit("turn_end", fakeBoundaryEvent()));
+	assert.equal(boundary.entries.filter((entry) => entry.type === "custom_message" && entry.customType === RESET_LAST_WORD_TYPE).length, 0, "a blank last word persists no entry");
+});
+
+test("reset-control: a tool request carries its last word to the turn-end commit", () => {
+	const windowId = "pcw:test:window";
+	const armed = reduceResetControl(initialResetControl(), { type: "tool_request", windowId, lastWord: "the shoes were loyal" });
+	assert.equal(armed.effect, "close-out-armed");
+	assert.deepEqual(armed.state.request, { phase: "tool-requested", windowId, source: "tool", lastWord: "the shoes were loyal" });
+	const commit = reduceResetControl(armed.state, { type: "turn_end", facts: turnEndFacts() });
+	assert.equal(commit.effect, "commit-boundary");
+	assert.equal(commit.lastWord, "the shoes were loyal");
+});
+
+test("reset-control: a manual close-out adopts the acknowledging call's last word and still stops at settlement", () => {
+	const windowId = "pcw:test:window";
+	const manual = reduceResetControl(initialResetControl(), { type: "close_out", windowId, source: "manual" });
+	const ack = reduceResetControl(manual.state, { type: "tool_request", windowId, lastWord: "tell them I was funny" });
+	assert.equal(ack.effect, "already-pending", "the acknowledgement never converts the manual close-out");
+	assert.deepEqual(ack.state.request, { phase: "close-out", windowId, source: "manual", lastWord: "tell them I was funny" });
+	const silentAck = reduceResetControl(reduceResetControl(initialResetControl(), { type: "close_out", windowId, source: "manual" }).state, { type: "tool_request", windowId });
+	assert.deepEqual(silentAck.state.request, { phase: "close-out", windowId, source: "manual" }, "no new key without a last word");
+	const commit = reduceResetControl(ack.state, { type: "before_settle", facts: beforeSettleFacts() });
+	assert.equal(commit.effect, "commit-boundary-stop");
+	assert.equal(commit.lastWord, "tell them I was funny");
 });

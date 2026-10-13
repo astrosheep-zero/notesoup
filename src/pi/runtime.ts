@@ -6,7 +6,7 @@ import { registerBudget } from "./budget.js";
 import { output } from "./tool-result.js";
 import { currentReset, currentWindowId, isCheckpointBackedReset, isWindowBoot, isWindowMarker, projectRootWindow, projectWindow, rootWindowId, type WindowMarker } from "./window.js";
 import { registerResetLifecycle } from "./reset/lifecycle.js";
-import { buildResetDrafts, repairResetTail } from "./reset/artifacts.js";
+import { buildResetDrafts, repairResetTail, sanitizeLastWord } from "./reset/artifacts.js";
 import { BOOT_TYPE, MANUAL_WIPE_TYPE } from "./entries.js";
 import { WARNING_CONTENT } from "../budget/text.js";
 import { buildBootMessage, sendBoot, type IncompleteNotesNotifier } from "./boot.js";
@@ -201,17 +201,17 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 	pi.registerTool(defineTool({
 		name: "clear_memory",
 		label: "Clear memory",
-		description: "Clear your in-context memory and start a fresh context window. Your session, notes, and history survive.",
-		parameters: Type.Object({}, { additionalProperties: false }),
-		async execute(_id, _params, _signal, _update, ctx) {
+		description: "Clear your in-context memory and start a fresh context window. Your session, notes, and history survive. Pass `last_word` to leave one short visible line where this window closes.",
+		parameters: Type.Object({ last_word: Type.Optional(Type.String({ description: "A parting line shown where this window closes; the next window can read it too." })) }, { additionalProperties: false }),
+		async execute(_id, params, _signal, _update, ctx) {
 			if (!enabled) return output({ error: "notesoup is off, so memory can't be cleared; the user can turn it on with `/notesoup on`." });
-			return output({ status: resets.request(currentWindowId(ctx)) }, undefined, true);
+			return output({ status: resets.request(currentWindowId(ctx), sanitizeLastWord(params.last_word)) }, undefined, true);
 		},
 	}));
 
 	const resets = registerResetLifecycle(pi, {
 		isEnabled: () => enabled,
-		buildReset: (ctx, isCurrent, prompt) => buildResetDrafts(ctx, notifyIncompleteNotes, isCurrent, prompt),
+		buildReset: (ctx, isCurrent, prompt, lastWord) => buildResetDrafts(ctx, notifyIncompleteNotes, isCurrent, prompt, lastWord),
 		getLifecycleGeneration: () => lifecycleGeneration,
 		onResetReady: (_ctx, drafts) => {
 			const boot = drafts.find((draft) => draft.type === "custom_message" && draft.customType === BOOT_TYPE);

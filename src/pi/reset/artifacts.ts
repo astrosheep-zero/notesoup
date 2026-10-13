@@ -1,11 +1,22 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext, SessionBoundaryDraft, SessionEntry } from "@earendil-works/pi-coding-agent";
-import { BOOT_TYPE, CONTINUATION_TYPE, RESET_MARKER_TYPE, RESET_PROMPT_TYPE } from "../entries.js";
+import { BOOT_TYPE, CONTINUATION_TYPE, RESET_LAST_WORD_TYPE, RESET_MARKER_TYPE, RESET_PROMPT_TYPE } from "../entries.js";
 import { CONTINUATION } from "../../budget/text.js";
 import { currentWindowId, isForeignResetTailEntry, isWindowBootEntry, isWindowMarker, previousWindowId, type WindowMarker } from "../window.js";
 import { buildBootMessage, sendBoot, type IncompleteNotesNotifier } from "../boot.js";
 
 export type ResetTailState = { readonly boot: boolean; readonly continuation: boolean };
+
+/** Cap for the parting line: one visible line, not an essay. */
+export const MAX_LAST_WORD_CHARS = 500;
+
+/** Trim and cap a parting line; blank input leaves no last word. */
+export function sanitizeLastWord(raw: string | undefined): string | undefined {
+	const trimmed = raw?.trim();
+	if (!trimmed) return undefined;
+	const chars = Array.from(trimmed);
+	return chars.length > MAX_LAST_WORD_CHARS ? `${chars.slice(0, MAX_LAST_WORD_CHARS).join("")}…` : trimmed;
+}
 
 /** Match the hidden continuation entry that carries the one reset message. */
 export function isWindowContinuationEntry(entry: SessionEntry): boolean {
@@ -22,13 +33,14 @@ function sendContinuation(pi: ExtensionAPI): void {
 
 /**
  * The closed, ordered reset shape: retain-none native checkpoint, marker, matching boot,
- * continuation, then an optional command prompt. The boot snapshot is acquired asynchronously after capturing this identity.
+ * continuation, then an optional parting line and command prompt. The boot snapshot is acquired asynchronously after capturing this identity.
  */
 export async function buildResetDrafts(
 	ctx: ExtensionContext,
 	notifyIncompleteNotes?: IncompleteNotesNotifier,
 	isCurrent: () => boolean = () => true,
 	prompt?: string,
+	lastWord?: string,
 ): Promise<SessionBoundaryDraft[]> {
 	const sessionId = ctx.sessionManager.getSessionId();
 	const previousId = currentWindowId(ctx);
@@ -46,6 +58,7 @@ export async function buildResetDrafts(
 		{ type: "custom", customType: RESET_MARKER_TYPE, data: { windowId } },
 		{ type: "custom_message", customType: BOOT_TYPE, content: boot.content, display: false, details: { windowId } },
 		{ type: "custom_message", customType: CONTINUATION_TYPE, content: CONTINUATION, display: false },
+		...(lastWord ? [{ type: "custom_message" as const, customType: RESET_LAST_WORD_TYPE, content: lastWord, display: true }] : []),
 		...(prompt ? [{ type: "custom_message" as const, customType: RESET_PROMPT_TYPE, content: prompt, display: true }] : []),
 	];
 }
