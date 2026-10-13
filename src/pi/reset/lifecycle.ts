@@ -2,6 +2,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { getCurrentSystemMessage, isContextOverflow, isRecoverableLength } from "@earendil-works/pi-ai";
 import type { AgentBeforeSettleEvent, ExtensionAPI, ExtensionContext, SessionBoundaryDraft } from "@earendil-works/pi-coding-agent";
 import { currentReset, currentWindowId } from "../window.js";
+import { nextHistorySeq } from "../history.js";
 import { resetBoundaryCommitted } from "./committed.js";
 import { errorMessage } from "../../error-message.js";
 
@@ -15,7 +16,7 @@ type BudgetOwner = {
 type ResetOptions = {
 	isEnabled: () => boolean;
 	budget: BudgetOwner;
-	buildReset: (ctx: ExtensionContext, isCurrent: () => boolean, prompt?: string, lastWord?: string) => SessionBoundaryDraft[] | Promise<SessionBoundaryDraft[]>;
+	buildReset: (ctx: ExtensionContext, isCurrent: () => boolean, prompt: string | undefined, lastWord: string | undefined, firstSeq: number) => SessionBoundaryDraft[] | Promise<SessionBoundaryDraft[]>;
 	getLifecycleGeneration?: () => number;
 	onResetReady?: (ctx: ExtensionContext, drafts: readonly SessionBoundaryDraft[]) => void;
 };
@@ -246,9 +247,11 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 		const isCurrent = () => sessionActive && lifecycleGeneration === generation &&
 			(outerGeneration === undefined || options.getLifecycleGeneration?.() === outerGeneration) && options.isEnabled() &&
 			ctx.signal?.aborted !== true && ctx.sessionManager.getSessionId() === sessionId && currentWindowId(ctx) === windowId;
+		// The retain-none checkpoint belongs to the old window; capture its successor before notes await.
+		const firstSeq = nextHistorySeq(ctx, entries) + 1;
 		let resetDrafts: SessionBoundaryDraft[];
 		try {
-			resetDrafts = await options.buildReset(ctx, isCurrent, prompt, lastWord);
+			resetDrafts = await options.buildReset(ctx, isCurrent, prompt, lastWord, firstSeq);
 		} catch (error) {
 			if (isCurrent()) ctx.ui.notify(`🥣 Brain still full: ${errorMessage(error)}${prompt ? " · prompt not sent" : ""}`, "warning");
 			return entries.length > 0 ? { entries } : undefined;

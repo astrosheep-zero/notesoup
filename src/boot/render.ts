@@ -77,28 +77,43 @@ function mapBodyForBoot(address: string, body: string): string {
 	return `${chars.slice(0, MAP_BOOT_MAX_CHARS).join("")}\n[truncated at ${MAP_BOOT_MAX_CHARS} chars; slim this MAP down, full body at \`${address}\`]`;
 }
 
-/**
- * Render a static, once-per-window boot block from explicit data. This function does not read
- * notes or call runtime UI APIs; acquisition belongs to loadNotesSnapshot and its caller.
- */
+export type BootWindowTree = {
+	readonly trunk: string;
+	readonly windows: ReadonlyArray<{
+		readonly shortName: string;
+		readonly firstSeq?: number;
+		readonly lastSeq?: number;
+		readonly isCurrent: boolean;
+	}>;
+};
+
 export type BootRenderData = {
 	readonly agentName: string;
 	readonly modelName: string;
-	readonly firstWindowId: string;
-	readonly currentWindowId: string;
-	readonly previousWindowId?: string;
+	readonly tree: BootWindowTree;
 	readonly notes: NotesSnapshot;
 	readonly tools: BootToolNames;
 };
 
+/**
+ * Render a static, once-per-window boot block from explicit data. This function does not read
+ * notes or call runtime UI APIs; acquisition belongs to loadNotesSnapshot and its caller.
+ */
 export function renderBootBlock(data: BootRenderData): string {
-	// Codex-style <context_window> identity block: the resolved agent and model names plus
-	// first/current/previous window ids.
+	// Root, the window before this one, and this one: the block is rewritten every window, so an
+	// unbounded list would repeat the whole history once per window for no new information.
+	const shown = new Set([0, data.tree.windows.length - 2, data.tree.windows.length - 1]);
+	const windows = data.tree.windows.filter((_window, index) => shown.has(index));
+	const width = Math.max(8, ...windows.map((window) => window.shortName.length));
 	const lines = [
 		`Agent name: ${data.agentName} (brain: ${data.modelName})`,
-		`First context window id: ${data.firstWindowId}`,
-		`Current context window id: ${data.currentWindowId}`,
-		...(data.previousWindowId ? [`Previous context window id: ${data.previousWindowId}`] : []),
+		"",
+		data.tree.trunk,
+		...windows.map((window) => {
+			const range = window.firstSeq === undefined ? "" : `    ${window.firstSeq}–${window.isCurrent ? "" : window.lastSeq}`;
+			const name = range ? window.shortName.padEnd(width) : window.shortName;
+			return `${window.isCurrent ? "└─" : "├─"} ${name}${range}${window.isCurrent ? "    ← you are here" : ""}`;
+		}),
 	];
 	const identity = `${CONTEXT_WINDOW_OPEN_TAG}\n${lines.join("\n")}\n${CONTEXT_WINDOW_CLOSE_TAG}`;
 	return [identity, renderProtocolBlock(data.tools), notesIndex(data.notes, data.tools)].join("\n\n");

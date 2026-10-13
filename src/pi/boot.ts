@@ -5,7 +5,7 @@ import { loadNotesSnapshot, unavailableNotesSnapshot, type NotesSnapshot } from 
 import { isFilesystemError } from "../notes/index.js";
 import { BOOT_TYPE } from "./entries.js";
 import { renderBootBlock } from "../boot/render.js";
-import { rootWindowId } from "./window.js";
+import { historyFromSession, nextHistorySeq } from "./history.js";
 
 export type IncompleteNotesNotifier = (ctx: ExtensionContext, windowId: string, snapshot: NotesSnapshot) => void;
 
@@ -24,13 +24,35 @@ export type BootMessage = {
 export async function buildBootMessage(
 	ctx: ExtensionContext,
 	windowId: string,
-	previousId: string | undefined,
+	firstSeq: number | undefined,
 	notifyIncompleteNotes?: IncompleteNotesNotifier,
 	isCurrent: () => boolean = () => true,
 ): Promise<BootMessage> {
 	const agentName = agentSlug();
 	const modelName = modelSlug(ctx);
-	const sessionId = ctx.sessionManager.getSessionId();
+	const windows = historyFromSession(ctx).windows.map((window) => {
+		const seqs = window.items.map((item) => item.seq);
+		return {
+			shortName: window.windowId.slice(window.windowId.lastIndexOf(":") + 1),
+			firstSeq: firstSeq === undefined || seqs.length === 0 ? undefined : Math.min(...seqs),
+			lastSeq: firstSeq === undefined || seqs.length === 0 ? undefined : Math.max(...seqs),
+			isCurrent: window.windowId === windowId,
+		};
+	});
+	if (firstSeq !== undefined) {
+		// An empty old window will consume the pending boundary before its marker is written.
+		const last = windows.at(-1)!;
+		last.firstSeq ??= last.isCurrent ? firstSeq : nextHistorySeq(ctx);
+	}
+	if (!windows.some((window) => window.isCurrent)) {
+		windows.push({ shortName: windowId.slice(windowId.lastIndexOf(":") + 1), firstSeq, lastSeq: undefined, isCurrent: true });
+	}
+	// A closing boundary includes folded result slots, pending warnings and the old checkpoint.
+	for (let index = 0; index < windows.length - 1; index++) {
+		const nextFirst = windows[index + 1]!.firstSeq;
+		if (nextFirst !== undefined) windows[index]!.lastSeq = nextFirst - 1;
+	}
+	const tree = { trunk: windowId.slice(0, windowId.lastIndexOf(":")), windows };
 	const openedAt = Date.now();
 	let notes: NotesSnapshot;
 	try {
@@ -42,7 +64,7 @@ export async function buildBootMessage(
 	if (isCurrent()) notifyIncompleteNotes?.(ctx, windowId, notes);
 	return {
 		customType: BOOT_TYPE,
-		content: renderBootBlock({ agentName, modelName, firstWindowId: rootWindowId(sessionId), currentWindowId: windowId, previousWindowId: previousId, notes, tools: DEFAULT_BOOT_TOOL_NAMES }),
+		content: renderBootBlock({ agentName, modelName, tree, notes, tools: DEFAULT_BOOT_TOOL_NAMES }),
 		display: false,
 		details: { windowId },
 	};

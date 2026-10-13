@@ -17,9 +17,10 @@ import { SessionManager as Manager } from "@earendil-works/pi-coding-agent";
 import notesoup from "../src/pi/extension.js";
 import { BOOT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, RESET_LAST_WORD_TYPE, RESET_MARKER_TYPE, RESET_PROMPT_TYPE } from "../src/pi/entries.js";
 import { MANUAL_WIPE_TYPE } from "../src/pi/entries.js";
-import { toolContext } from "./helpers/extension.js";
+import { assertBootHistory, toolContext } from "./helpers/extension.js";
 import { WARNING_CALL_PROMPTED, warningContent } from "../src/budget/text.js";
-import { LAST_WORD_PREFIX, MAX_LAST_WORD_CHARS, sanitizeLastWord } from "../src/pi/reset/artifacts.js";
+import { historyFromSession, nextHistorySeq } from "../src/pi/history.js";
+import { buildResetDrafts, LAST_WORD_PREFIX, MAX_LAST_WORD_CHARS, sanitizeLastWord } from "../src/pi/reset/artifacts.js";
 import {
 	initialResetControl,
 	reduceResetControl,
@@ -306,6 +307,43 @@ test("reset construction failure preserves incoming and budget drafts without co
 	assert.equal(notices.at(-1)?.type, "warning");
 	assert.match(notices.at(-1)?.message ?? "", /Brain still full/);
 	assert.match(notices.at(-1)?.message ?? "", /prompt not sent/);
+});
+
+test("reset seq is captured before asynchronous construction and counts only consuming drafts", async () => {
+	const h = harness();
+	const handlers = new Map<string, Handler>();
+	const api = { on(name: string, handler: Handler) { handlers.set(name, handler); } } as unknown as ExtensionAPI;
+	const ctx = { sessionManager: h.sessionManager, model: undefined, hasPendingMessages: () => false, ui: { notify() {} } } as unknown as ExtensionContext;
+	const targetId = h.sessionManager.appendMessage({ role: "user", content: "recorded", timestamp: Date.now() });
+	const budgetDraft: SessionBoundaryDraft = { type: "custom_message", customType: GUIDANCE_TYPE, content: "pending budget", display: false };
+	const incoming: SessionBoundaryDraft[] = [
+		{ type: "custom", customType: "foreign/metadata" },
+		{ type: "context_edit", targetId, replacement: null },
+		{ type: "custom_message", customType: "foreign/message", content: "pending", display: false },
+		{ type: "compaction", summary: "pending checkpoint", firstKeptEntryId: null },
+	];
+	const before = historyFromSession(ctx).highestSeq;
+	let capturedSeq: number | undefined;
+	let release!: () => void;
+	const pending = new Promise<void>((resolve) => { release = resolve; });
+	const lifecycle = registerResetLifecycle(api, {
+		isEnabled: () => true,
+		budget: { automaticResetEnabled: () => true, hardReserveDue: () => false, consumeTurnEnd: () => [budgetDraft], clear() {} },
+		async buildReset(_ctx, _isCurrent, _prompt, _lastWord, firstSeq) {
+			capturedSeq = firstSeq;
+			await pending;
+			return [];
+		},
+	});
+	lifecycle.request(`pcw:${h.sessionManager.getSessionId().slice(0, 8)}:root`);
+	const result = handlers.get("turn_end")!(fakeBoundaryEvent(incoming), ctx);
+	assert.equal(capturedSeq, before + 5, "three consuming pending drafts, the old checkpoint and the next slot");
+	h.sessionManager.appendCustomMessageEntry("foreign/during-await", "later", false);
+	release();
+	await result;
+	assert.equal(capturedSeq, before + 5, "snapshot latency must not recalculate the window's first seq");
+	appendDrafts(h.sessionManager, [...incoming, budgetDraft]);
+	assert.equal(nextHistorySeq(ctx), historyFromSession(ctx).highestSeq + 1);
 });
 
 test("a stale async reset is discarded after a lifecycle switch without staging a notice", async () => {
@@ -603,13 +641,14 @@ test("a committed reset places incoming and budget drafts before marker -> boot 
 		},
 	} as unknown as ExtensionAPI;
 	const ctx = {
+		cwd: "/private/tmp",
+		isProjectTrusted: () => true,
 		sessionManager,
 		model: undefined,
 		signal: undefined,
 		hasPendingMessages: () => false,
 		ui: { notify() {} },
 	} as unknown as ExtensionContext;
-	const windowId = "pcw:ordering:test";
 	const budgetDraft: SessionBoundaryDraft = { type: "custom_message", customType: GUIDANCE_TYPE, content: "budget draft", display: false };
 	const lifecycle = registerResetLifecycle(api, {
 		isEnabled: () => true,
@@ -619,12 +658,7 @@ test("a committed reset places incoming and budget drafts before marker -> boot 
 			consumeTurnEnd: () => [budgetDraft],
 			clear: () => {},
 		},
-		buildReset: () => [
-			{ type: "compaction", summary: "", firstKeptEntryId: null },
-			{ type: "custom", customType: RESET_MARKER_TYPE, data: { windowId } },
-			{ type: "custom_message", customType: BOOT_TYPE, content: "boot", display: false, details: { windowId } },
-			{ type: "custom_message", customType: CONTINUATION_TYPE, content: "continuation", display: false },
-		],
+		buildReset: (ctx, isCurrent, prompt, lastWord, firstSeq) => buildResetDrafts(ctx, undefined, isCurrent, prompt, lastWord, firstSeq),
 	});
 	lifecycle.request(`pcw:${sessionManager.getSessionId().slice(0, 8)}:root`);
 	const incoming: SessionBoundaryDraft = { type: "custom_message", customType: "foreign/boundary", content: "incoming", display: false };
@@ -654,6 +688,12 @@ test("a committed reset places incoming and budget drafts before marker -> boot 
 	assert.ok(checkpoint?.type === "compaction");
 	assert.equal(checkpoint.summary, "");
 	assert.equal(checkpoint.firstKeptEntryId, checkpoint.id, "Pi materializes null as retain-none");
+	const projection = historyFromSession(ctx);
+	const boot = branch.find((entry) => entry.type === "custom_message" && entry.customType === BOOT_TYPE);
+	assert.ok(boot?.type === "custom_message");
+	assertBootHistory(String(boot.content), projection);
+	assert.equal(projection.windows[0]!.items.at(-1)!.seq, projection.windows[1]!.items[0]!.seq - 1, "the old window includes its checkpoint slot");
+	assert.equal(nextHistorySeq(ctx), projection.highestSeq + 1);
 	assert.deepEqual(customTypes(branch.slice(markerIndex)), [
 		RESET_MARKER_TYPE,
 		BOOT_TYPE,

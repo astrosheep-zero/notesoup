@@ -87,7 +87,11 @@ export async function dispatch(request: unknown): Promise<unknown> {
 		if (typeof window !== "number" || !Number.isSafeInteger(window) || window < 0) throw new Error("invalid context window");
 		const snapshot = await loadNotesSnapshot(id, typeof value.openedAt === "number" ? value.openedAt : Date.now());
 		const windowId = (index: number) => `claude:${id.sessionId}:${index}`;
-		return renderBootBlock({ agentName: id.agent, modelName: id.model, firstWindowId: windowId(0), currentWindowId: windowId(window), ...(window > 0 ? { previousWindowId: windowId(window - 1) } : {}), notes: snapshot, tools: value.tools as BootToolNames });
+		const trunk = `claude:${id.sessionId}`;
+		const tree = { trunk, windows: Array.from({ length: window + 1 }, (_, index) => ({ shortName: String(index), isCurrent: index === window })) };
+		const rendered = renderBootBlock({ agentName: id.agent, modelName: id.model, tree, notes: snapshot, tools: value.tools as BootToolNames });
+		// Retained Claude boots are restored by their full current/previous ids.
+		return `${rendered}\nCurrent context window id: ${windowId(window)}${window > 0 ? `\nPrevious context window id: ${windowId(window - 1)}` : ""}`;
 	}
 	throw new Error("unknown operation");
 }

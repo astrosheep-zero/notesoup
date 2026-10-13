@@ -68,7 +68,7 @@ test("shared boot uses only explicit identity, loader, captured time and logical
 	assert.deepEqual(scopes, ["session", "project", "human", "agent", "model"]);
 	assert.equal(snapshot.openedAt, openedAt);
 	const tools = { notes: "memo_*", notesList: "memo_list", history: "archive_*", remaining: "room", wipe: "forget" };
-	const block = { agentName: notesIdentity.agent, modelName: notesIdentity.model, firstWindowId: "root", currentWindowId: "next", notes: snapshot, tools };
+	const block = { agentName: notesIdentity.agent, modelName: notesIdentity.model, tree: { trunk: "test", windows: [{ shortName: "root", isCurrent: false }, { shortName: "next", isCurrent: true }] }, notes: snapshot, tools };
 	const rendered = renderBootBlock(block);
 	assert.equal(renderBootBlock(block), rendered);
 	assert.ok(rendered.includes("😀\n  checkpoint.md · 1m ago"), "a feed entry is the note's own first line over its locator");

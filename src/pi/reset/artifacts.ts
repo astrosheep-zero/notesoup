@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext, SessionBoundaryDraft, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { BOOT_TYPE, CONTINUATION_TYPE, RESET_LAST_WORD_TYPE, RESET_MARKER_TYPE, RESET_PROMPT_TYPE } from "../entries.js";
 import { CONTINUATION } from "../../budget/text.js";
-import { currentWindowId, isForeignResetTailEntry, isWindowBootEntry, isWindowMarker, previousWindowId, type WindowMarker } from "../window.js";
+import { isForeignResetTailEntry, isWindowBootEntry, isWindowMarker, type WindowMarker } from "../window.js";
 import { buildBootMessage, sendBoot, type IncompleteNotesNotifier } from "../boot.js";
 
 export type ResetTailState = { readonly boot: boolean; readonly continuation: boolean };
@@ -41,9 +41,9 @@ export async function buildResetDrafts(
 	isCurrent: () => boolean = () => true,
 	prompt?: string,
 	lastWord?: string,
+	firstSeq?: number,
 ): Promise<SessionBoundaryDraft[]> {
 	const sessionId = ctx.sessionManager.getSessionId();
-	const previousId = currentWindowId(ctx);
 	const sessionPrefix = sessionId.slice(0, 8);
 	const usedWindowIds = new Set(
 		ctx.sessionManager.getBranch().filter(isWindowMarker).map((entry) => entry.data.windowId),
@@ -52,7 +52,7 @@ export async function buildResetDrafts(
 	do {
 		windowId = `pcw:${sessionPrefix}:${randomUUID().slice(0, 8)}`;
 	} while (usedWindowIds.has(windowId));
-	const boot = await buildBootMessage(ctx, windowId, previousId, notifyIncompleteNotes, isCurrent);
+	const boot = await buildBootMessage(ctx, windowId, firstSeq, notifyIncompleteNotes, isCurrent);
 	return [
 		{ type: "compaction", summary: "", firstKeptEntryId: null },
 		{ type: "custom", customType: RESET_MARKER_TYPE, data: { windowId } },
@@ -104,7 +104,7 @@ export async function repairResetTail(
 ): Promise<void> {
 	const tail = inspectResetTail(ctx, marker.id, marker.data.windowId);
 	if (!tail || (tail.boot && tail.continuation)) return;
-	const boot = tail.boot ? undefined : await buildBootMessage(ctx, marker.data.windowId, previousWindowId(ctx, marker.id), notifyIncompleteNotes, isCurrent);
+	const boot = tail.boot ? undefined : await buildBootMessage(ctx, marker.data.windowId, undefined, notifyIncompleteNotes, isCurrent);
 	if (!isCurrent()) return;
 	const latest = inspectResetTail(ctx, marker.id, marker.data.windowId);
 	if (!latest) return;

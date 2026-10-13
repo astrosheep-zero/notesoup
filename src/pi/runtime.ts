@@ -10,6 +10,7 @@ import { buildResetDrafts, LAST_WORD_PREFIX, MAX_LAST_WORD_CHARS, repairResetTai
 import { BOOT_TYPE, MANUAL_WIPE_TYPE, RESET_LAST_WORD_TYPE } from "./entries.js";
 import { warningContent } from "../budget/text.js";
 import { buildBootMessage, sendBoot, type IncompleteNotesNotifier } from "./boot.js";
+import { nextHistorySeq } from "./history.js";
 import { errorMessage } from "../error-message.js";
 
 function readPackageVersion(): string {
@@ -48,7 +49,7 @@ async function ensureBoot(
 		return;
 	}
 	if (ctx.sessionManager.buildSessionProjection().messages.some((message) => isWindowBoot(message, windowId))) return;
-	const boot = await buildBootMessage(ctx, windowId, undefined, notifyIncompleteNotes, stillCurrent);
+	const boot = await buildBootMessage(ctx, windowId, nextHistorySeq(ctx), notifyIncompleteNotes, stillCurrent);
 	if (!stillCurrent()) return;
 	if (ctx.sessionManager.buildSessionProjection().messages.some((message) => isWindowBoot(message, windowId))) return;
 	sendBoot(pi, boot);
@@ -215,7 +216,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 
 	const resets = registerResetLifecycle(pi, {
 		isEnabled: () => enabled,
-		buildReset: (ctx, isCurrent, prompt, lastWord) => buildResetDrafts(ctx, notifyIncompleteNotes, isCurrent, prompt, lastWord),
+		buildReset: (ctx, isCurrent, prompt, lastWord, firstSeq) => buildResetDrafts(ctx, notifyIncompleteNotes, isCurrent, prompt, lastWord, firstSeq),
 		getLifecycleGeneration: () => lifecycleGeneration,
 		onResetReady: (_ctx, drafts) => {
 			const boot = drafts.find((draft) => draft.type === "custom_message" && draft.customType === BOOT_TYPE);

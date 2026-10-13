@@ -18,6 +18,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import notesoup, { createNotesoup } from "../src/pi/extension.js";
 import { BOOT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, MANUAL_WIPE_TYPE, RESET_MARKER_TYPE, RESET_PROMPT_TYPE, WARNING_TYPE } from "../src/pi/entries.js";
+import { historyFromSession } from "../src/pi/history.js";
+import { assertBootHistory } from "./helpers/extension.js";
 import { CONTEXT_WINDOW_OPEN_TAG } from "../src/boot/text.js";
 import { CONTINUATION, GUIDANCE_OPEN_TAG, warningContent, warningPrompt } from "../src/budget/text.js";
 
@@ -1048,7 +1050,10 @@ test("real AgentSession: two retain-none checkpoints survive session-file reopen
 		const previousWindowId = (previousMarker.data as { windowId: string }).windowId;
 		const latestBoot = branch.find((entry) => entry.type === "custom_message" && entry.customType === BOOT_TYPE && (entry.details as { windowId?: string } | undefined)?.windowId === latestWindowId);
 		assert.ok(latestBoot && latestBoot.type === "custom_message" && typeof latestBoot.content === "string");
-		assert.ok(latestBoot.content.includes(`Previous context window id: ${previousWindowId}`));
+		const projection = historyFromSession({ sessionManager: reopened });
+		assert.equal(projection.windows.at(-2)?.windowId, previousWindowId);
+		assert.equal(projection.windows.at(-1)?.windowId, latestWindowId);
+		assertBootHistory(latestBoot.content, projection);
 	} finally {
 		rmSync(sessionDir, { recursive: true, force: true });
 	}

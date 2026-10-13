@@ -14,6 +14,7 @@ import { listNotes, physicalPath } from "./helpers/notes.js";
 import { CONTINUATION_TYPE, MANUAL_WIPE_TYPE } from "../src/pi/entries.js";
 import {
 	appendText,
+	assertBootHistory,
 	call,
 	commitTurnEndBoundary,
 	context,
@@ -97,9 +98,7 @@ test("the root boot and reset boot carry durable window identity", async () => {
 	const rootText = typeof rootBoot?.message.content === "string" ? rootBoot.message.content : "";
 	assert.ok(rootText.startsWith(CONTEXT_WINDOW_OPEN_TAG), "root block omits the reset line");
 	assert.equal(rootText.includes(CONTINUATION), false, "root startup carries no reset message");
-	assert.equal(rootText.includes("Previous context window id:"), false, "root block omits the previous-id line");
-	assert.match(rootText, new RegExp(`First context window id: pcw:${sessionManager.getSessionId().slice(0, 8)}:root`));
-	assert.match(rootText, new RegExp(`Current context window id: pcw:${sessionManager.getSessionId().slice(0, 8)}:root`));
+	assertBootHistory(rootText, historyFromSession(ctx));
 	assert.ok(rootText.includes("decisions.md"));
 	const decisionsMeta = (await listNotes(ctx, { scope: "session" })).find((row) => row.path === "decisions.md")?.meta;
 	assert.ok(decisionsMeta);
@@ -121,8 +120,77 @@ test("the root boot and reset boot carry durable window identity", async () => {
 	const resetBoot = entries.find((entry) => entry.type === "custom_message" && entry.customType === BOOT_TYPE && entry.details && typeof entry.details === "object" && (entry.details as { windowId?: unknown }).windowId === resetWindowId);
 	assert.ok(resetBoot && resetBoot.type === "custom_message");
 	assert.equal((resetBoot.details as { windowId: string }).windowId, (marker.data as { windowId: string }).windowId);
+	assertBootHistory(String(resetBoot.content), historyFromSession(ctx));
 	const continuation = entries.find((entry) => entry.type === "custom_message" && entry.customType === CONTINUATION_TYPE);
 	assert.ok(continuation && continuation.type === "custom_message" && continuation.display === false, "the resumed run is represented by one hidden continuation");
+});
+
+test("an empty root boot starts at the first projected seq", async () => {
+	const sessionManager = manager();
+	const captured = makeExtension(sessionManager);
+	const ctx = context(sessionManager);
+	await runHandlers(captured, "session_start", { reason: "startup" }, ctx);
+	const body = String(captured.sent[0]?.message.content);
+	const projection = historyFromSession(ctx);
+	assert.equal(projection.windows.length, 1);
+	assert.equal(projection.windows[0]!.items[0]!.seq, 1);
+	assertBootHistory(body, projection);
+});
+
+test("boot ranges include tool-call slots and both completed reset checkpoints", async () => {
+	const sessionManager = manager();
+	const captured = makeExtension(sessionManager);
+	const ctx = context(sessionManager);
+	await runHandlers(captured, "session_start", { reason: "startup" }, ctx);
+	appendText(sessionManager, "user", "before tools");
+	sessionManager.appendMessage({
+		role: "assistant",
+		content: [
+			{ type: "toolCall", id: "boot-call-1", name: "read", arguments: { path: "one" } },
+			{ type: "toolCall", id: "boot-call-2", name: "read", arguments: { path: "two" } },
+		],
+		stopReason: "toolUse",
+		timestamp: Date.now(),
+	} as unknown as Parameters<typeof sessionManager.appendMessage>[0]);
+	for (const id of ["boot-call-1", "boot-call-2"]) {
+		sessionManager.appendMessage({ role: "toolResult", toolCallId: id, toolName: "read", content: [{ type: "text", text: id }], isError: false, timestamp: Date.now() });
+	}
+	for (let reset = 0; reset < 2; reset++) {
+		await call(captured, "empty_brain", {}, ctx);
+		await commitTurnEndBoundary(captured, sessionManager, ctx);
+		const boot = sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === BOOT_TYPE).at(-1);
+		assert.ok(boot?.type === "custom_message");
+		const projection = historyFromSession(ctx);
+		assertBootHistory(String(boot.content), projection);
+		assert.equal(projection.pairedResults.size, 2, "paired results still occupy seq slots");
+		for (let index = 0; index < projection.windows.length - 1; index++) {
+			const old = projection.windows[index]!;
+			assert.equal(Math.max(...old.items.map((item) => item.seq)), projection.windows[index + 1]!.items[0]!.seq - 1);
+		}
+	}
+});
+
+test("a boot beyond three windows shows only root, the previous window, and the current one", async () => {
+	const sessionManager = manager();
+	const captured = makeExtension(sessionManager);
+	const ctx = context(sessionManager);
+	await runHandlers(captured, "session_start", { reason: "startup" }, ctx);
+	for (let round = 0; round < 4; round++) {
+		appendText(sessionManager, "user", `work before reset ${round}`);
+		await call(captured, "empty_brain", {}, ctx);
+		await commitTurnEndBoundary(captured, sessionManager, ctx);
+	}
+	const projection = historyFromSession(ctx);
+	assert.equal(projection.windows.length, 5);
+	const boot = sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === BOOT_TYPE).at(-1);
+	assert.ok(boot?.type === "custom_message");
+	const identity = String(boot.content).split("</context_window>")[0]!;
+	assertBootHistory(String(boot.content), projection);
+	// The block is rewritten once per window, so naming every old window would repeat the whole
+	// history every time. The omitted middle windows stay reachable through history_*.
+	const named = [...identity.matchAll(/^[├└]─ (\S+)/gm)].map((line) => line[1]);
+	assert.deepEqual(named, ["root", projection.windows.at(-2)!.windowId.slice(-8), projection.windows.at(-1)!.windowId.slice(-8)]);
+	assert.equal(identity.includes(projection.windows[1]!.windowId.slice(-8)), false, "an old middle window is not listed");
 });
 
 test("an aborted async boot repair emits no boot, continuation, or incomplete-notes notice", async () => {
@@ -169,6 +237,10 @@ test("a marker tail with only metadata repairs its missing boot and continuation
 	assert.ok(branch.findIndex((entry) => entry.id === continuationEntries[0]?.id) > branch.findIndex((entry) => entry.id === bootEntries[0]?.id), "the continuation follows its boot");
 	assert.equal(captured.sent.length, 2, "repair emits only the missing boot and continuation, without a model turn");
 	assert.equal(captured.sent[0]?.message.customType, BOOT_TYPE);
+	const repairedIdentity = String(captured.sent[0]?.message.content).split("</context_window>")[0]!;
+	const branches = [...repairedIdentity.matchAll(/^[├└]─ (\S+)(.*)$/gm)];
+	assert.deepEqual(branches.map((line) => line[1]), ["root", "metadata-tail"]);
+	assert.equal(branches.some((line) => /\d+–/.test(line[2]!)), false, "repair must not invent seq ranges");
 	assert.equal(captured.sent[1]?.message.customType, CONTINUATION_TYPE);
 	assert.equal(noticesOf(ctx).length, 0, "repairing a reset tail is not a new reset");
 });

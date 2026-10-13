@@ -23,6 +23,7 @@ import notesoup, { createNotesoup } from "../../src/pi/extension.js";
 import { loadNotesSnapshot } from "../../src/boot/snapshot.js";
 import { renderBootBlock } from "../../src/boot/render.js";
 import { agentSlug, modelSlug } from "../../src/pi/notes/adapter.js";
+import type { HistoryProjection } from "../../src/history/history.js";
 import { rootWindowId } from "../../src/pi/window.js";
 import { TOOL_OUTPUT_MAX_BYTES } from "../../src/tools/output.js";
 import { structuredBytes, type OperationError, type TextWindow } from "../../src/tools/result.js";
@@ -186,14 +187,42 @@ export function makeExtension(sessionManager: SessionManager, settingsManager?: 
 	return captured;
 }
 
+/** Compare boot addresses to the host projection, without freezing its prose. */
+export function assertBootHistory(body: string, projection: HistoryProjection): void {
+	const identity = body.split("</context_window>")[0]!;
+	const lines = [...identity.matchAll(/^([├└]─) (\S+)(?: +(\d+)–(\d*))?/gm)];
+	// Only root, the previous window and the current one are shown, however many have existed.
+	const shown = new Set([0, projection.windows.length - 2, projection.windows.length - 1]);
+	const expected = projection.windows.filter((_window, index) => shown.has(index));
+	assert.equal(lines.length, expected.length);
+	assert.equal(new Set(lines.map((line) => line[0].indexOf(`${line[3]}–`))).size, 1, "range columns line up");
+	const trunk = projection.windows[0]!.windowId.slice(0, projection.windows[0]!.windowId.lastIndexOf(":"));
+	assert.ok(identity.split("\n").includes(trunk));
+	for (let index = 0; index < lines.length; index++) {
+		const line = lines[index]!;
+		const window = expected[index]!;
+		assert.equal(`${trunk}:${line[2]}`, window.windowId);
+		assert.equal(Number(line[3]), Math.min(...window.items.map((item) => item.seq)));
+		if (index === lines.length - 1) {
+			assert.equal(line[1], "└─");
+			assert.equal(line[4], "");
+		} else {
+			assert.equal(line[1], "├─");
+			assert.equal(Number(line[4]), Math.max(...window.items.map((item) => item.seq)));
+		}
+	}
+}
+
 export async function explicitBoot(ctx: ExtensionContext, currentWindowId: string, previousWindowId: string | undefined): Promise<string> {
 	return renderBootBlock({
 		tools: DEFAULT_BOOT_TOOL_NAMES,
 		agentName: agentSlug(),
 		modelName: modelSlug(ctx),
-		firstWindowId: rootWindowId(ctx.sessionManager.getSessionId()),
-		currentWindowId,
-		previousWindowId,
+		tree: {
+			trunk: currentWindowId.slice(0, currentWindowId.lastIndexOf(":")),
+			windows: [...new Set([rootWindowId(ctx.sessionManager.getSessionId()), ...(previousWindowId ? [previousWindowId] : []), currentWindowId])]
+				.map((id) => ({ shortName: id.slice(id.lastIndexOf(":") + 1), isCurrent: id === currentWindowId })),
+		},
 		notes: await loadNotesSnapshot(notesIdentityFromPi(ctx), Date.now()),
 	});
 }

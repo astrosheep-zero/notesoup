@@ -66,9 +66,12 @@ function systemSnapshot(event: SessionEvent): WindowSnapshot | undefined {
 }
 
 function snapshotFromBoot(boot: string, openedAt: number): WindowSnapshot | undefined {
-	const id = /^Current context window id: (dsh:.*:(\d+))$/m.exec(boot);
-	if (!id || !Number.isSafeInteger(Number(id[2]))) return undefined;
-	return Object.freeze({ version: 1, window: Number(id[2]), windowId: id[1]!, openedAt, boot, notesDigest: digest(boot) });
+	const identity = /<context_window>\n[\s\S]*?\n(dsh:[^\n]+)\n[\s\S]*?└─ (\d+)(?: +[^\n]*)?\n<\/context_window>/.exec(boot);
+	const legacy = /^Current context window id: (dsh:.*:(\d+))$/m.exec(boot);
+	const shortName = identity?.[2] ?? legacy?.[2];
+	const id = identity ? `${identity[1]}:${shortName}` : legacy?.[1];
+	if (!id || shortName === undefined || !Number.isSafeInteger(Number(shortName))) return undefined;
+	return Object.freeze({ version: 1, window: Number(shortName), windowId: id, openedAt, boot, notesDigest: digest(boot) });
 }
 
 export function recoverSnapshot(events: readonly SessionEvent[]): WindowSnapshot | undefined {
@@ -116,9 +119,9 @@ export class Windows {
 	async mint(agent: Pick<Agent, "session" | "options">, window: number, openedAt: number): Promise<WindowSnapshot> {
 		const identity = notesIdentity(agent, this.config);
 		const notes = await loadNotesSnapshot(identity, openedAt);
-		const previous = this.states.get(agent.session)?.snapshot;
-		const firstWindowId = previous?.boot.match(/^First context window id: (.+)$/m)?.[1] ?? windowId(agent.session.id, 0);
-		const boot = BOOT_OPEN + renderBootBlock({ agentName: identity.agent, modelName: identity.model, firstWindowId, currentWindowId: windowId(agent.session.id, window), ...(window ? { previousWindowId: previous?.windowId ?? windowId(agent.session.id, window - 1) } : {}), notes, tools: DEFAULT_BOOT_TOOL_NAMES }) + BOOT_CLOSE;
+		const trunk = `dsh:${agent.session.id}`;
+		const tree = { trunk, windows: Array.from({ length: window + 1 }, (_, index) => ({ shortName: String(index), isCurrent: index === window })) };
+		const boot = BOOT_OPEN + renderBootBlock({ agentName: identity.agent, modelName: identity.model, tree, notes, tools: DEFAULT_BOOT_TOOL_NAMES }) + BOOT_CLOSE;
 		return Object.freeze({ version: 1, window, windowId: windowId(agent.session.id, window), openedAt, boot, notesDigest: digest(boot) });
 	}
 }

@@ -10,7 +10,7 @@
  */
 import type { ToolCall } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { SessionBoundaryDraft, SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { SessionReader } from "./session-reader.js";
 import { isWindowMarker, rootWindowId } from "./window.js";
 import { contentText, projectHistory, type DecodedHistoryItem, type DecodedHistoryWindow, type HistoryProjection, type NestedCallRecord, type ToolCallStatus } from "../history/history.js";
@@ -28,11 +28,16 @@ function isToolCall(part: unknown): part is ToolCall {
 }
 
 /** Seq allocation depends on entry kind and role, never on visible content. */
-function sequenceCount(entry: SessionEntry): number {
+function sequenceCount(entry: SessionEntry | SessionBoundaryDraft): number {
 	if (entry.type === "compaction" || entry.type === "branch_summary" || entry.type === "custom_message") return 1;
 	if (entry.type !== "message" || mapRole(entry.message.role) === undefined) return 0;
 	if (entry.message.role !== "assistant" || !Array.isArray(entry.message.content)) return 1;
 	return 1 + entry.message.content.filter(isToolCall).length;
+}
+
+/** Pending boundary drafts use the same slots as persisted entries. */
+export function nextHistorySeq(ctx: SessionReader, pending: readonly SessionBoundaryDraft[] = []): number {
+	return 1 + [...ctx.sessionManager.getEntries(), ...pending].reduce((sum, entry) => sum + sequenceCount(entry), 0);
 }
 
 function messageContent(message: AgentMessage): string {

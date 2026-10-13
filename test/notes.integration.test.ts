@@ -250,9 +250,7 @@ test("boot note acquisition is one closed snapshot and isolates one or all faile
 		tools: DEFAULT_BOOT_TOOL_NAMES,
 		agentName: "root",
 		modelName: "default",
-		firstWindowId: "pcw:test:root",
-		currentWindowId: "pcw:test:next",
-		previousWindowId: "pcw:test:root",
+		tree: { trunk: "pcw:test", windows: [{ shortName: "root", isCurrent: false }, { shortName: "next", isCurrent: true }] },
 		notes: snapshot,
 	};
 	const rendered = renderBootBlock(renderData);
@@ -309,8 +307,7 @@ test("boot note acquisition is one closed snapshot and isolates one or all faile
 		tools: DEFAULT_BOOT_TOOL_NAMES,
 		agentName: "root",
 		modelName: "default",
-		firstWindowId: "pcw:test:root",
-		currentWindowId: "pcw:test:next",
+		tree: renderData.tree,
 		notes: oneFailed,
 	});
 	assert.ok(oneFailedText.includes("PROJECT_MAP_BODY") && oneFailedText.includes("THE HUMAN · @human\n──────────────────\n\n  This drawer wouldn't open. Try `notes_list` again."), "healthy homes and a per-section recovery notice survive one failure");
@@ -325,12 +322,10 @@ test("boot note acquisition is one closed snapshot and isolates one or all faile
 		tools: DEFAULT_BOOT_TOOL_NAMES,
 		agentName: "root",
 		modelName: "default",
-		firstWindowId: "pcw:test:root",
-		currentWindowId: "pcw:test:next",
-		previousWindowId: "pcw:test:root",
+		tree: renderData.tree,
 		notes: allFailed,
 	});
-	assert.ok(allFailedText.includes("pcw:test:root") && allFailedText.includes("pcw:test:next"), "identity survives an all-home failure");
+	assert.ok(allFailedText.includes("pcw:test") && allFailedText.includes("root") && allFailedText.includes("next"), "identity survives an all-home failure");
 	assert.ok(allFailedText.includes("Your memory gets wiped when this window ends"), "protocol survives an all-home failure");
 	assert.equal(allFailedText.includes("scripted read failure"), false, "the model-facing notice does not expose OS/error details");
 	await assert.rejects(
