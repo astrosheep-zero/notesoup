@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
-import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { earliestMatchOffsetChars } from "../text-match.js";
 import { assertAddress, assertGlobPattern, addressFor, canonicalAddressFor, globToRegExp, HOME_HEADS } from "./address.js";
@@ -293,16 +293,20 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 		assertWritableHome(from.scope, from.who, identity);
 		assertWritableHome(scope, destination.who, identity);
 		if (operations.length === 0 && stableOptions.origin === undefined && stableOptions.crumpled === undefined && stableOptions.renameTo === undefined) {
-			throw new NoteError("nothing_to_do", "Nothing to change: pass edits, origin, crumpled, or renameTo.");
+			throw new NoteError("nothing_to_do", "Nothing to change: provide edits, an origin, a crumpled state, or a new address.");
 		}
 		const fromPath = physicalPath(from.scope, from.path, identity, from.who);
 		const path = physicalPath(scope, destination.path, identity, destination.who);
-		const moved = resolve(fromPath) !== resolve(path);
+		const differentPaths = resolve(fromPath) !== resolve(path);
 		const mutate = async (): Promise<NoteEditResult> => {
 			const raw = await readFileIfExists(fromPath);
 			if (raw === undefined) throw new NoteError("not_found", `No note at ${noteIdentity(identity, address).address}.`);
-			const targetRaw = moved ? await readFileIfExists(path) : undefined;
-			if (targetRaw !== undefined && parseNote(targetRaw).meta.crumpledAt === undefined) {
+			const targetRaw = differentPaths ? await readFileIfExists(path) : undefined;
+			// Case and symlink aliases must not turn write-then-remove into deleting the result.
+			const sourceReal = targetRaw === undefined ? undefined : await realpath(fromPath);
+			const sameFile = sourceReal !== undefined && sourceReal === await realpath(path);
+			const moved = differentPaths && !sameFile;
+			if (moved && targetRaw !== undefined && parseNote(targetRaw).meta.crumpledAt === undefined) {
 				throw new NoteError("already_exists", `${noteIdentity(identity, stableOptions.renameTo!).address} already holds a note; crumple it first or pick another address.`);
 			}
 			const { meta, body } = parseNote(raw);
@@ -346,12 +350,12 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 			else if (bodyChanged) change = { kind: "body", before: body, after: next };
 			else if (metadataChanged) change = { kind: "metadata", before: frontmatterOf(beforeMeta), after: frontmatterOf(meta) };
 			else change = { kind: "none", before: "", after: "" };
-			await atomicWrite(path, serialized);
+			await atomicWrite(sameFile ? sourceReal! : path, serialized);
 			if (moved) await rm(fromPath, { force: true });
-			return { meta, applied, resolvedScope: scope, change, moved, replacedCrumpledTarget: targetRaw !== undefined };
+			return { meta, applied, resolvedScope: scope, change, moved, replacedCrumpledTarget: moved && targetRaw !== undefined };
 		};
-		// One lock for aliases of the same file; otherwise take both in stable order.
-		if (!moved) return withPathQueue(path, mutate);
+		// Exact aliases share one queue; other spellings lock both paths in stable order.
+		if (!differentPaths) return withPathQueue(path, mutate);
 		const [first, second] = [fromPath, path].sort();
 		return withPathQueue(first!, () => withPathQueue(second!, mutate));
 	}

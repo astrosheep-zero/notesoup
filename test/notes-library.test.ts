@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -235,6 +235,27 @@ test("combined moves validate everything before saving either endpoint", async (
 	assert.equal(same.moved, false);
 	assert.equal(same.change.kind, "body");
 	assert.equal(same.meta.crumpledAt, undefined);
+});
+
+test("same-file case and directory aliases cannot delete a moved note", async (t) => {
+	const { home, notes } = fixture(t);
+	await notes.write("Mixed.md", "precious", { origin: "user" });
+	await notes.update("Mixed.md", undefined, { crumpled: true });
+	const directory = join(home, "pi/session/session-a");
+	symlinkSync(directory, join(directory, "linked"), "dir");
+	const result = await notes.update("Mixed.md", [{ oldText: "precious", newText: "saved" }], { renameTo: "linked/Mixed.md", crumpled: false });
+	assert.equal(result.moved, false);
+	assert.equal(result.replacedCrumpledTarget, false);
+	assert.equal((await notes.read("Mixed.md"))?.body, "saved");
+	assert.equal((await notes.read("linked/Mixed.md"))?.body, "saved");
+	// The host filesystem decides whether these two case spellings alias.
+	if (existsSync(join(directory, "mixed.md"))) {
+		await notes.update("Mixed.md", undefined, { crumpled: true });
+		const caseResult = await notes.update("Mixed.md", [{ oldText: "saved", newText: "still here" }], { renameTo: "mixed.md" });
+		assert.equal(caseResult.moved, false);
+		assert.equal((await notes.read("Mixed.md"))?.body, "still here");
+		assert.equal((await notes.read("mixed.md"))?.body, "still here");
+	}
 });
 
 test("glob is the single query selector for a named project home", async (t) => {
