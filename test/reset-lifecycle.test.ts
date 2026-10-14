@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { Check } from "typebox/value";
 import type { AgentMessage, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type {
 	ExtensionAPI,
@@ -99,7 +100,12 @@ function harness() {
 		// Pi 1.0 hands a tool the session context plus the nested-call surface; toolContext builds it.
 		return tool.execute("call", params, new AbortController().signal, () => {}, toolContext(ctx));
 	};
-	return { sessionManager, handlers, sent, notices, emit, runCommand, callTool };
+	const toolParameters = (name: string) => {
+		const tool = tools.get(name);
+		assert.ok(tool, `${name} is registered`);
+		return tool.parameters;
+	};
+	return { sessionManager, handlers, sent, notices, emit, runCommand, callTool, toolParameters };
 }
 
 function resultEntries(results: unknown[]): { entries: SessionBoundaryDraft[]; continue: boolean } {
@@ -753,6 +759,9 @@ test("empty_brain trims the last word, refuses an oversized one, and a blank per
 	over.sessionManager.appendMessage({ role: "user", content: [{ type: "text", text: "before reset" }], timestamp: Date.now() });
 	const refused = await over.callTool("empty_brain", { last_word: "x".repeat(MAX_LAST_WORD_CHARS + 1) });
 	assert.match(JSON.stringify(refused), /error/, "an oversized note is refused, not truncated");
+	assert.match(JSON.stringify(refused), new RegExp(`${MAX_LAST_WORD_CHARS + 1} characters`), "the refusal names the actual size and the limit");
+	const refusedAstral = await over.callTool("empty_brain", { last_word: "\u{1F41F}".repeat(MAX_LAST_WORD_CHARS + 1) });
+	assert.match(JSON.stringify(refusedAstral), new RegExp(`${MAX_LAST_WORD_CHARS + 1} characters`), "the guard counts code points, not UTF-16 units");
 	const untouched = resultEntries(await over.emit("turn_end", fakeBoundaryEvent()));
 	assert.equal(untouched.entries.filter((entry) => entry.type === "custom_message" && entry.customType === RESET_LAST_WORD_TYPE).length, 0, "a refused call requests no reset");
 	const h = harness();
@@ -760,6 +769,20 @@ test("empty_brain trims the last word, refuses an oversized one, and a blank per
 	await h.callTool("empty_brain", { last_word: "   " });
 	const boundary = resultEntries(await h.emit("turn_end", fakeBoundaryEvent()));
 	assert.equal(boundary.entries.filter((entry) => entry.type === "custom_message" && entry.customType === RESET_LAST_WORD_TYPE).length, 0, "a blank last word persists no entry");
+});
+
+test("empty_brain's schema admits whitespace-wrapped notes and leaves length to the handler", async () => {
+	const parameters = harness().toolParameters("empty_brain");
+	const padded = " ".repeat(300) + "x";
+	assert.equal(Check(parameters, { last_word: padded }), true, "300 spaces plus x is admitted by the schema");
+	assert.equal(Check(parameters, { last_word: "x".repeat(MAX_LAST_WORD_CHARS + 1) }), true, "the schema does not pre-empt the handler's code-point limit");
+	assert.equal(Check(parameters, { last_word: 42 }), false, "a genuine type violation is still refused by the schema");
+	const h = harness();
+	h.sessionManager.appendMessage({ role: "user", content: [{ type: "text", text: "before reset" }], timestamp: Date.now() });
+	await h.callTool("empty_brain", { last_word: padded });
+	const boundary = resultEntries(await h.emit("turn_end", fakeBoundaryEvent()));
+	const lastWords = boundary.entries.filter((entry) => entry.type === "custom_message" && entry.customType === RESET_LAST_WORD_TYPE);
+	assert.deepEqual(lastWords[0], { type: "custom_message", customType: RESET_LAST_WORD_TYPE, content: `${LAST_WORD_PREFIX}x`, display: true }, "the handler records the trimmed note");
 });
 
 test("reset-control: a tool request carries its last word to the turn-end commit", () => {
