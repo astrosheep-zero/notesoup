@@ -2,7 +2,7 @@
 
 ## Memory skill
 
-The package provides `/skill:memory`, a short self-contained guide to the notes and history tools: note addresses and homes, finding and paging notes, searching and paging history, saving recovery state, and what to do when a memory tool is unavailable. It is a fallback for sessions where the boot protocol is missing or unclear and a reference on demand; normal tool calls do not require reading it. It is written independently of the boot text rather than generated from it. The Claude Code Mod does not ship it, because that host has no history tools.
+The package provides `/skill:memory`, a short self-contained guide to the notes and history tools: note addresses and homes, finding and paging notes, searching and paging history, saving recovery state, and what to do when a memory tool is unavailable. It is a fallback for sessions where the boot protocol is missing or unclear and a reference on demand; normal tool calls do not require reading it. It is written independently of the boot text rather than generated from it. The Claude Code Mod ships the same guide; its history tools require the documented main-session transcript path and a confirmed append head.
 
 ## Dream skill
 

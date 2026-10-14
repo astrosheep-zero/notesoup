@@ -1,24 +1,25 @@
 import type { EngineInterface, On, ProcessRunResult, ToolCallResult, ToolSpec } from "claude-code"
 
 const PREFIX = "mcp__notesoup__"
-const TOOL_NAMES = ["notes_write", "notes_update", "notes_read", "notes_list", "notes_search"] as const
+const TOOL_NAMES = ["notes_write", "notes_update", "notes_read", "notes_list", "notes_search", "history_list", "history_read", "history_windows"] as const
 const HELPER = `${import.meta.dir}/../dist/claude/helper.js`
 const TIMEOUT_MS = 10_000
 const OUTPUT_LIMIT = 1024 * 1024
 
 type Identity = { home: string; sessionId: string; cwd: string; agent: string; model: string }
 type SchemaRow = { name: string; description: string; inputSchema: Record<string, unknown> }
+type HistorySource = { sessionId: string; transcriptPath: string; headUuid?: string }
 type Engine = Pick<EngineInterface, "process" | "session" | "ui" | "clock" | "prompt" | "env" | "settings">
 /** The measured context, as much of it as the engine reported. */
 type ContextUsage = { tokens?: number; window?: number; percent?: number }
 /** Shared reset prose, fetched once per session so Pi and Claude cannot drift apart. */
-type SharedTexts = { warning?: string; continuation?: string; wipeSentence?: string }
+type SharedTexts = { warning?: string; continuation?: string; wipeSentence?: string; historyUnavailableSentence?: string }
 type ClaudeLimits = {
   source: string; autoCompact: boolean; unit: "tokens" | "percent"
   native: number; reset: number; warn: number; resetMargin: number; warningRunway: number
 }
 type ResetState = {
-  identity?: Identity; generation: number; window: number; turnRunning: boolean; resetting: boolean
+  identity?: Identity; history?: HistorySource; historyWindowHead?: string; generation: number; window: number; turnRunning: boolean; resetting: boolean
   manualPending: boolean; headless: boolean; usageFailureLogged: boolean; preparedBoot?: string; retainedBoot?: string
   compactDisabled: boolean; limitsFailureLogged: boolean; limitsAttempts: number; limitsWindow: number
   limits?: ClaudeLimits; warnedWindow?: number; texts?: SharedTexts; settingsFailureLogged: boolean
@@ -32,13 +33,14 @@ const MAX_LIMITS_ATTEMPTS = 3
 const RESET_INSTRUCTIONS = "notesoup: reset to a fresh notes-only context window."
 const BOOT_TOOLS = {
   notes: `${PREFIX}notes_*`, notesList: `${PREFIX}notes_list`,
-  history: "history_* (unavailable in Claude)",
+  history: "history_* (unavailable: no main transcript_path)",
   remaining: "get_context_remaining (unavailable in Claude)", wipe: "/fresh-window (user command; no model reset tool in Claude)",
 }
 
 /** The boot names the host's own wipe path, so the protocol block speaks about `/fresh-window`. */
-async function buildBoot($: Engine, identity: Identity, window: number, texts?: SharedTexts) {
-  const tools = texts?.wipeSentence === undefined ? BOOT_TOOLS : { ...BOOT_TOOLS, wipeSentence: texts.wipeSentence }
+async function buildBoot($: Engine, identity: Identity, window: number, texts?: SharedTexts, history?: HistorySource) {
+  const available = history?.sessionId === identity.sessionId
+  const tools = { ...BOOT_TOOLS, ...(available ? { history: `${PREFIX}history_*` } : { historySentence: texts?.historyUnavailableSentence }), ...(texts?.wipeSentence === undefined ? {} : { wipeSentence: texts.wipeSentence }) }
   return run($, { op: "boot", identity, window, tools })
 }
 /** The notes-only reset shape, shared by our own reset and Claude's native auto compaction. */
@@ -47,7 +49,7 @@ async function resetMessages($: Engine, state: ResetState, identity: Identity): 
   const generation = state.generation
   const texts = await loadTexts($, state)
   if (texts?.continuation === undefined) return { skip: "reset text didn't load" }
-  const boot = await buildBoot($, identity, state.window + 1, texts)
+  const boot = await buildBoot($, identity, state.window + 1, texts, state.history)
   if (generation !== state.generation) return { skip: "session changed while building the notes boot" }
   if (!boot.ok) return { skip: `notes didn't load: ${boot.error}` }
   // The same closed reset shape as Pi: notes boot first, then the one reset message.
@@ -67,6 +69,7 @@ function sharedTextsOf(value: unknown): SharedTexts | undefined {
   if (typeof row.warning === "string" && row.warning.length > 0) texts.warning = row.warning
   if (typeof row.continuation === "string" && row.continuation.length > 0) texts.continuation = row.continuation
   if (typeof row.wipeSentence === "string" && row.wipeSentence.length > 0) texts.wipeSentence = row.wipeSentence
+  if (typeof row.historyUnavailableSentence === "string" && row.historyUnavailableSentence.length > 0) texts.historyUnavailableSentence = row.historyUnavailableSentence
   return Object.keys(texts).length > 0 ? texts : undefined
 }
 /** The helper's resolved points, accepted only when every number is a real number. */
@@ -229,6 +232,7 @@ async function run($: { process: { run: (argv: readonly string[], init?: { cwd?:
 function forgetSession(state: ResetState) {
   state.generation++
   state.identity = undefined
+  state.historyWindowHead = undefined
   state.window = 0
   state.turnRunning = state.resetting = state.manualPending = state.usageFailureLogged = false
   state.preparedBoot = state.retainedBoot = undefined
@@ -253,25 +257,59 @@ async function refreshIdentity($: Engine, state: ResetState): Promise<Identity |
   if (generation !== state.generation) return undefined
   if (state.identity?.sessionId === sessionId) {
     state.identity = { ...state.identity, cwd, model }
+    await syncHistoryWindow($, state)
     return state.identity
   }
   const home = await $.env.get("PI_NOTES_HOME") ?? `${await $.env.get("HOME") ?? await $.env.get("USERPROFILE") ?? ""}/.agents/notes`
   if (generation !== state.generation) return undefined
   forgetSession(state)
   state.identity = { home, sessionId, cwd, agent: "claude", model }
+  if (state.history?.sessionId !== sessionId) state.history = undefined
   const freshGeneration = state.generation
   // History is not inference context; recover a retained boot only for this session id.
   try {
     const messages = await $.session.messages()
     if (freshGeneration === state.generation) restoreWindow(state, messages)
   } catch { /* A fresh session starts at zero. */ }
+  await syncHistoryWindow($, state)
   return freshGeneration === state.generation ? state.identity : undefined
+}
+
+/** A committed append is the head evidence; the persisted file may trail it briefly. */
+async function syncHistoryWindow($: Engine, state: ResetState) {
+  if (!state.identity || !state.history?.headUuid || state.history.sessionId !== state.identity.sessionId || state.resetting || state.historyWindowHead === state.history.headUuid) return
+  const generation = state.generation, head = state.history.headUuid
+  const response = await run($, { op: "history_state", identity: state.identity, history: state.history })
+  if (generation !== state.generation || state.history?.headUuid !== head || !response.ok || typeof response.result !== "object" || response.result === null) return
+  const window = (response.result as { window?: unknown }).window
+  if (typeof window !== "number" || !Number.isSafeInteger(window) || window < 0) return
+  state.historyWindowHead = head
+  if (state.window !== window) { state.window = window; state.retainedBoot = undefined }
 }
 
 export function register(on: On) {
   const manualSignal: { wake?: () => void } = {}
   const state: ResetState = { generation: 0, window: 0, turnRunning: false, resetting: false, manualPending: false, headless: false, usageFailureLogged: false, compactDisabled: false, limitsFailureLogged: false, limitsAttempts: 0, limitsWindow: 0, settingsFailureLogged: false }
   const registered = new Set<string>()
+  // Classic SessionStart precedes typed session.start and startup appends. Keep this binding
+  // across forgetSession; re-key it only against the actual session id, never a guessed path.
+  on("classic.SessionStart", async ($, e, next) => {
+    if (e.agent_id !== undefined) return next(e)
+    if (e.source !== "compact" || state.history?.sessionId !== e.session_id) {
+      state.history = { sessionId: e.session_id, transcriptPath: e.transcript_path }
+      state.historyWindowHead = undefined
+    } else state.history.transcriptPath = e.transcript_path
+    return next(e)
+  })
+  on("session.append", async ($, e, next) => {
+    const sessionId = await $.session.id(), source = state.history
+    const result = await next(e)
+    if (e.agentId === undefined && result.uuid !== undefined && state.history === source && source?.sessionId === sessionId) {
+      source.headUuid = result.uuid
+      state.historyWindowHead = undefined
+    }
+    return result
+  })
   on("session.start", async ($, e, next) => {
     forgetSession(state)
     await refreshIdentity($, state)
@@ -295,6 +333,7 @@ export function register(on: On) {
     return next(e)
   })
   on("session.end", async ($, e, next) => {
+    state.history = undefined
     forgetSession(state)
     return next(e)
   })
@@ -302,8 +341,10 @@ export function register(on: On) {
     if (!registered.has(e.tool)) return next(e)
     const identity = await refreshIdentity($, state)
     if (!identity) return errorResult("session changed during identity lookup")
-    const { tool, tool_use_id: _toolUseId, agentId: _agentId, ...params } = e
-    const result = await run($, { op: "tool", tool: tool.slice(PREFIX.length), params, identity })
+    const { tool, tool_use_id: _toolUseId, agentId, ...params } = e
+    const name = tool.slice(PREFIX.length)
+    if (name.startsWith("history_") && agentId !== undefined) return errorResult("history is unavailable for subagents; main-session history is not their transcript")
+    const result = await run($, { op: "tool", tool: name, params, identity, history: state.history })
     if (!result.ok) return errorResult(result.error)
     // The outcome already decided success or refusal; Claude requires isError: true on errors and no discriminator on success.
     const outcome = toolResultOf(result.result)
@@ -396,7 +437,7 @@ export function register(on: On) {
     let blocks = retained ? result.blocks.filter((block) => block.name !== "notesoup:boot") : [...result.blocks]
     if (!retained && !blocks.some((block) => block.name === "notesoup:boot") && identity) {
       const texts = await loadTexts($, state)
-      const boot = await buildBoot($, identity, state.window, texts)
+      const boot = await buildBoot($, identity, state.window, texts, state.history)
       if (generation !== state.generation) return result
       if (!boot.ok) {
         try {

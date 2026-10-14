@@ -123,9 +123,9 @@ test("Claude notes survive removal of the session's worktree cwd", async (t) => 
   }
 });
 
-test("Claude helper exposes the five shared note schemas", async () => {
+test("Claude helper exposes the eight shared notes/history schemas", async () => {
   const schemas = await dispatch({ op: "schemas" }) as Array<{ name: string; description: string; inputSchema: { type: string } }>;
-  assert.deepEqual(schemas.map((schema) => schema.name), ["notes_write", "notes_update", "notes_read", "notes_list", "notes_search"]);
+  assert.deepEqual(schemas.map((schema) => schema.name), ["notes_write", "notes_update", "notes_read", "notes_list", "notes_search", "history_list", "history_read", "history_windows"]);
   assert.ok(schemas.every((schema) => schema.description.length > 20 && schema.inputSchema.type === "object"));
 });
 
@@ -144,7 +144,7 @@ test("Claude helper rejects malformed or unknown requests", async () => {
   const malformed = JSON.parse(await handleLine("not json")) as { ok: boolean; error: string };
   assert.equal(malformed.ok, false);
   assert.match(malformed.error, /Unexpected|malformed/);
-  const unknown = JSON.parse(await handleLine(JSON.stringify({ op: "tool", tool: "history_read", identity, params: {} }))) as { ok: boolean; error: string };
+  const unknown = JSON.parse(await handleLine(JSON.stringify({ op: "tool", tool: "history_search", identity, params: {} }))) as { ok: boolean; error: string };
   assert.equal(unknown.ok, false);
   assert.equal(unknown.error, "unknown tool");
 });
@@ -300,7 +300,7 @@ test("Claude Mod helper runs from a standalone copied plugin directory", () => {
     })) as { ok: boolean; result?: Array<{ name: string }>; error?: string };
     const schemas = run('{"op":"schemas"}');
     assert.equal(schemas.ok, true);
-    assert.equal(schemas.result?.length, 5);
+    assert.equal(schemas.result?.length, 8);
     assert.equal(run("not json").ok, false);
   } finally {
     rmSync(fixture, { recursive: true, force: true });
@@ -416,7 +416,7 @@ test("Claude Mod hook delivers the helper's shared text, and marks only a refusa
   const handlers = new Map<string, HookHandler>();
   hooks.register((event, handler) => handlers.set(event, handler));
   await handlers.get("session.start")!(host, { cwd: home, isInteractive: true }, async (event: unknown) => event);
-  assert.deepEqual(registered.map((spec) => spec.name), ["notes_write", "notes_update", "notes_read", "notes_list", "notes_search"]);
+  assert.deepEqual(registered.map((spec) => spec.name), ["notes_write", "notes_update", "notes_read", "notes_list", "notes_search", "history_list", "history_read", "history_windows"]);
   for (const spec of registered) {
     assert.equal(spec.isDeferred, false, `${spec.name} is available from the start without tool search`);
     assert.ok(spec.description.length > 20);
@@ -468,7 +468,7 @@ test("Claude Mod resets at Claude's resolved point after the turn, retains one f
     return result;
   };
   await invoke("session.start", { cwd: home, isInteractive: true });
-  assert.equal(registered.length, 5);
+  assert.equal(registered.length, 8);
   const initial = await handlers.get("prompt.context")!(host, {}, async () => ({ blocks: [] })) as { blocks: Array<{ name: string; text: string }> };
   assert.equal(initial.blocks.length, 1, "below the warn point no warning joins the boot");
   assert.match(initial.blocks[0]!.text, /Current context window id: claude:hook-session:0/);
@@ -1009,4 +1009,63 @@ test("Claude session.end cannot be undone by an in-flight old reset", async (t) 
   const fresh = await context();
   assert.deepEqual(fresh.blocks.map((block) => block.name), ["notesoup:boot"]);
   assert.match(fresh.blocks[0]!.text, /Current context window id: claude:after-flight:0/);
+});
+
+test("Claude history keeps classic transcript_path across startup, confirms append heads, and refuses subagent leakage", async (t) => {
+  const home = mkdtempSync(join(tmpdir(), "claude-history-hook-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const { host, registered } = fakeEngine(home);
+  const handlers = new Map<string, HookHandler>();
+  (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
+  const invoke = (name: string, event: Record<string, unknown> = {}, result: unknown = {}) => handlers.get(name)!(host, event, async () => result);
+  const transcriptPath = join(home, "transcript.jsonl");
+  const root = { type: "user", uuid: "root", parentUuid: null, sessionId: "hook-session", message: { role: "user", content: "old request" } };
+  const attachment = { type: "attachment", uuid: "startup", parentUuid: "root", sessionId: "hook-session", rendered: [{ content: [{ type: "text", text: "startup injection" }] }] };
+  const sibling = { type: "assistant", uuid: "sibling", parentUuid: "root", sessionId: "hook-session", message: { role: "assistant", content: "another branch" } };
+  writeFileSync(transcriptPath, [root, attachment, sibling].map((row) => JSON.stringify(row)).join("\n") + "\n");
+  const call = (tool: string, params = {}, agentId?: string) => invoke("tool.call", { tool: `mcp__notesoup__${tool}`, tool_use_id: "probe", ...params, ...(agentId ? { agentId } : {}) }) as Promise<{ result: string; isError?: boolean }>;
+  await invoke("classic.SessionStart", { session_id: "hook-session", transcript_path: transcriptPath, source: "startup" });
+  // Real order: classic -> startup attachment appends -> typed session.start.
+  await invoke("session.append", { uuid: "startup" }, { uuid: "startup", message: {} });
+  await invoke("session.start", { cwd: home, isInteractive: true });
+  assert.equal(registered.length, 8);
+  const listed = await call("history_list", { roles: ["user", "context"] });
+  assert.equal(listed.isError, undefined, listed.result);
+  assert.match(listed.result, /old request/);
+  assert.match(listed.result, /startup injection/);
+  assert.doesNotMatch(listed.result, /another branch/);
+  const boot = await invoke("prompt.context", {}, { blocks: [] }) as { blocks: Array<{ text: string }> };
+  assert.match(boot.blocks[0]!.text, /mcp__notesoup__history_\*/);
+  const subagent = await call("history_list", {}, "worker");
+  assert.equal(subagent.isError, true);
+  assert.match(subagent.result, /unavailable for subagents/);
+  // Subagent classic payloads/append results must not overwrite the main binding.
+  await invoke("classic.SessionStart", { session_id: "hook-session", transcript_path: "/wrong/subagent.jsonl", source: "startup", agent_id: "worker" });
+  await invoke("session.append", { uuid: "subagent", agentId: "worker" }, { uuid: "subagent" });
+  assert.equal((await call("history_read", { seq: 1 })).isError, undefined);
+  // A resumed head is not supplied by SessionStart or messages(); don't use the last file row.
+  await invoke("classic.SessionStart", { session_id: "hook-session", transcript_path: transcriptPath, source: "resume" });
+  const beforeAppend = await call("history_list");
+  assert.equal(beforeAppend.isError, true);
+  assert.match(beforeAppend.result, /no confirmed active head/);
+  await invoke("session.append", { uuid: "sibling" }, { uuid: "sibling" });
+  const switched = await call("history_list");
+  assert.match(switched.result, /another branch/);
+  assert.doesNotMatch(switched.result, /startup injection/);
+});
+
+test("Claude history without a documented path refuses honestly and keeps notes usable", async (t) => {
+  const home = mkdtempSync(join(tmpdir(), "claude-no-history-path-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const { host } = fakeEngine(home);
+  const handlers = new Map<string, HookHandler>();
+  (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
+  await handlers.get("session.start")!(host, { cwd: home, isInteractive: true }, async () => ({}));
+  const history = await handlers.get("tool.call")!(host, { tool: "mcp__notesoup__history_windows", tool_use_id: "history" }, async () => ({})) as { result: string; isError?: boolean };
+  assert.equal(history.isError, true);
+  assert.match(history.result, /transcript_path is unavailable/);
+  const notes = await handlers.get("tool.call")!(host, { tool: "mcp__notesoup__notes_list", tool_use_id: "notes" }, async () => ({})) as { result: string; isError?: boolean };
+  assert.equal(notes.isError, undefined);
+  const boot = await handlers.get("prompt.context")!(host, {}, async () => ({ blocks: [] })) as { blocks: Array<{ text: string }> };
+  assert.match(boot.blocks[0]!.text, /History isn't available.*no main transcript_path/);
 });

@@ -13,6 +13,8 @@ export const CONTEXT_WINDOW_PROTOCOL_CLOSE_TAG = "</context_window_protocol>";
 export const PROTOCOL_WIPE_SENTENCE = "If this feels like the right moment, call `empty_brain` and erase yourself with dignity.";
 /** Claude has no model-facing reset tool: the model ends its turn and the human runs the command. */
 export const CLAUDE_WIPE_SENTENCE = "If this feels like the right moment, end your turn and ask the human to run `/fresh-window`.";
+export const PROTOCOL_HISTORY_SENTENCE = "History can still be dug up, probably: use `history_*` to excavate the mess, from old decisions to yesterday's missing socks. Found something? Write its seq down, or enjoy digging twice.";
+export const CLAUDE_HISTORY_UNAVAILABLE_SENTENCE = "History isn't available in this Claude session: no main transcript_path was supplied. Keep essential state in notes; don't pretend those notes are the missing transcript.";
 
 /**
  * Static protocol teaching adapted from Codex's token_budget.guidance_message to
@@ -27,7 +29,7 @@ Your memory gets wiped when this window ends. Yes, your mighty brain will be emp
 
 Your loyal notes are kept safe — no one will steal them. Use \`notes_*\` to read, write, and update them. Keep them current, and crumple the ones you no longer need, or tomorrow's you will drown in old paper and keep believing yesterday's lies.
 
-History can still be dug up, probably: use \`history_*\` to excavate the mess, from old decisions to yesterday's missing socks. Found something? Write its seq down, or enjoy digging twice.
+${PROTOCOL_HISTORY_SENTENCE}
 A full window id is \`trunk:shortname\`.
 
 While you're doing that... thing you're doing, don't make the poor future you guess. A checkpoint is not a sacred file; it's your session notes — the ones with no \`@\` in front. Write down what git and history can't hand back to you: things like what you're in the middle of and how far you got; what the human already decided, in their words, so you don't go asking again; what you're stuck on, or waiting for; the very next move; where the half-done work actually sits — branches, scratch dirs, anything git never saw; what you tried that failed, and why; which *skills* you'll need to read again; and which seq, note, or file to dig into. Don't give a note a horrible name like \`current.md\`; future-you will kill you.
@@ -68,6 +70,8 @@ export type BootToolNames = Readonly<{
 	 * no model-facing reset tool. Absent means Pi's default sentence, byte for byte.
 	 */
 	wipeSentence?: string;
+	/** A host without an authoritative history source replaces the entire history advice. */
+	historySentence?: string;
 }>;
 
 export const DEFAULT_BOOT_TOOL_NAMES = {
@@ -91,5 +95,7 @@ export function renderProtocolBlock(tools: BootToolNames): string {
 	const block = typeof tools.wipeSentence === "string" && tools.wipeSentence.length > 0
 		? PROTOCOL_BLOCK.replace(PROTOCOL_WIPE_SENTENCE, () => tools.wipeSentence!)
 		: PROTOCOL_BLOCK;
-	return block.replace(/notes_\*|notes_list|history_\*|get_context_remaining|(?<!\/)empty_brain/g, (name) => names[name]!);
+	const history = typeof tools.historySentence === "string" && tools.historySentence.length > 0
+		? block.replace(PROTOCOL_HISTORY_SENTENCE, () => tools.historySentence!) : block;
+	return history.replace(/notes_\*|notes_list|history_\*|get_context_remaining|(?<!\/)empty_brain/g, (name) => names[name]!);
 }
