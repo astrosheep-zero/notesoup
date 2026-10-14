@@ -8,7 +8,7 @@ import {
   DefaultResourceLoader,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { createNotesoup } from "notesoup";
+import { createNotesoup } from "notesoup/pi";
 
 const cwd = process.cwd();
 const agentDir = "/tmp/my-pi-agent";
@@ -32,7 +32,7 @@ const { session } = await createAgentSession({
 });
 ```
 
-The root entry exports only the default Pi extension and `createNotesoup`. This is a breaking source/API refactor: `NotesContext` is replaced by `NotesIdentity`; old internal export bags, root history helpers and the `./dist/src/index.js` export alias are removed. Import the root for Pi integration and `/notes` for the standalone library. The configured dream executable is now `dist/src/pi/dream/cli.js`. Stored notes, session paths, metadata and raw histories are unchanged; no migration runs.
+The package root exports the host-neutral core (the notes library, the boot snapshot/renderer and bindings, the shared operations, and the budget prose); the Pi plugin entry is `notesoup/pi`, which exports the default Pi extension and `createNotesoup`. This is a breaking source/API refactor: `NotesContext` is replaced by `NotesIdentity`; old internal export bags, root history helpers and the `./dist/src/index.js` export alias are removed. Import `notesoup/pi` for Pi integration and `/notes` for the standalone library. The configured dream executable is now `dist/plugins/pi/dream/cli.js`. Stored notes, session paths, metadata and raw histories are unchanged; no migration runs.
 
 The manager must be shared by the resource loader's factory and `createAgentSession`. If the host replaces its settings authority, it must create and bind a new `createNotesoup({ settingsManager })` factory together with the replacement manager; an existing factory remains bound to the manager it was created with.
 

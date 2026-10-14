@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createNotesStore, type NoteRow, type NotesQuery, type Scope } from "../../src/notes/index.js";
-import { notesIdentityFromPi } from "../../src/pi/notes/adapter.js";
+import { notesIdentityFromPi } from "../../plugins/pi/notes/adapter.js";
 import { physicalPath as corePhysicalPath, scopeDir as coreScopeDir } from "../../src/notes/paths.js";
 
 /** Test-only conveniences for fixtures that still model notes through a live Pi context. */

@@ -5,8 +5,8 @@ import test from "node:test";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { acquireLock, releaseLock } from "../src/dream/lock.js";
-import { dreamerDeleteToolDefinition, dreamerWriteToolDefinitions, type DreamerSession, type DreamerSessionFactory } from "../src/pi/dream/runner.js";
-import { main } from "../src/pi/dream/cli.js";
+import { dreamerDeleteToolDefinition, dreamerWriteToolDefinitions, type DreamerSession, type DreamerSessionFactory } from "../plugins/pi/dream/runner.js";
+import { main } from "../plugins/pi/dream/cli.js";
 
 const fixture = () => mkdtempSync(join(tmpdir(), "dream-test-"));
 

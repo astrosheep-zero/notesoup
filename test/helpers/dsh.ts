@@ -15,8 +15,8 @@ import Tools from "@deepseek-ai/dsh-tools";
 import Meter from "@deepseek-ai/dsh-token-meter";
 import Query from "@deepseek-ai/dsh-session-query-sqlite";
 import { createLaunchEnvironmentSnapshot } from "@deepseek-ai/dsh-launch-environment";
-import NotesoupEngine, { type EngineConfig } from "../../src/dsh/engine.js";
-import notesoup from "../../src/dsh/index.js";
+import NotesoupEngine, { type EngineConfig } from "../../plugins/dsh/engine.js";
+import notesoup from "../../plugins/dsh/index.js";
 import { messagesServer } from "./dsh-messages.js";
 
 export async function dshFixture(t: TestContext, config: EngineConfig = {}) {

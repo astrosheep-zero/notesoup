@@ -1,6 +1,6 @@
 # Add to $DSH_HOME/profiles/<profile>/cordis.patch.yml after installing notesoup.
 # For a source checkout, run npm ci --ignore-scripts && npm run build, then replace
-# notesoup/dsh[/engine] below with absolute file:///.../dist/src/dsh/...js paths.
+# notesoup/dsh[/engine] below with absolute file:///.../dist/plugins/dsh/...js paths.
 - id: compaction-basic
   disabled: true
 

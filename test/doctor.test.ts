@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { main } from "../src/pi/dream/cli.js";
+import { main } from "../plugins/pi/dream/cli.js";
 import { doctor } from "../src/dream/doctor.js";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import test from "node:test";

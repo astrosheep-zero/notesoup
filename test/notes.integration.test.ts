@@ -1,4 +1,4 @@
-import { notesIdentityFromPi } from "../src/pi/notes/adapter.js";
+import { notesIdentityFromPi } from "../plugins/pi/notes/adapter.js";
 import { DEFAULT_BOOT_TOOL_NAMES } from "../src/boot/text.js";
 import assert from "node:assert/strict";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -8,7 +8,8 @@ import test from "node:test";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { loadNotesSnapshot } from "../src/boot/snapshot.js";
 import { renderBootBlock } from "../src/boot/render.js";
-import { MAP_BOOT_MAX_CHARS, MAPS_BLOCK, NOTES_PROTOCOL_CLOSE_TAG, NOTES_PROTOCOL_OPEN_TAG, PI_PRE_RESET_HINTS } from "../src/boot/text.js";
+import { MAP_BOOT_MAX_CHARS, MAPS_BLOCK, NOTES_PROTOCOL_CLOSE_TAG, NOTES_PROTOCOL_OPEN_TAG } from "../src/boot/text.js";
+import { PI_PRE_RESET_HINTS } from "../plugins/pi/text.js";
 import { localIso } from "../src/notes/frontmatter.js";
 import type { NoteRow, Scope } from "../src/notes/index.js";
 import { listNotes, physicalPath, scopeDir } from "./helpers/notes.js";

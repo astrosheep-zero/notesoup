@@ -1,5 +1,6 @@
-import { notesIdentityFromPi } from "../../src/pi/notes/adapter.js";
-import { DEFAULT_BOOT_TOOL_NAMES, PI_PRE_RESET_HINTS, WINDOW_IDENTITY_CLOSE_TAG } from "../../src/boot/text.js";
+import { notesIdentityFromPi } from "../../plugins/pi/notes/adapter.js";
+import { DEFAULT_BOOT_TOOL_NAMES, WINDOW_IDENTITY_CLOSE_TAG } from "../../src/boot/text.js";
+import { PI_PRE_RESET_HINTS } from "../../plugins/pi/text.js";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,12 +20,12 @@ import {
 	type ToolDefinition,
 	type TurnEndEvent,
 } from "@earendil-works/pi-coding-agent";
-import notesoup, { createNotesoup } from "../../src/pi/extension.js";
+import notesoup, { createNotesoup } from "../../plugins/pi/extension.js";
 import { loadNotesSnapshot } from "../../src/boot/snapshot.js";
 import { renderBootBlock } from "../../src/boot/render.js";
-import { agentSlug, modelSlug } from "../../src/pi/notes/adapter.js";
+import { agentSlug, modelSlug } from "../../plugins/pi/notes/adapter.js";
 import type { HistoryProjection } from "../../src/history/history.js";
-import { rootWindowId } from "../../src/pi/window.js";
+import { rootWindowId } from "../../plugins/pi/window.js";
 import { TOOL_OUTPUT_MAX_BYTES } from "../../src/tools/output.js";
 import { structuredBytes, type OperationError, type TextWindow } from "../../src/tools/result.js";
 

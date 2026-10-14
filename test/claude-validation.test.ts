@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-const plugin = join(process.cwd(), "mods/notesoup");
+const plugin = join(process.cwd(), "plugins/claude");
 
 /** Only an absent executable may skip the real loader gate; other failures fail the suite. */
 function validate(t: test.TestContext, dir: string) {
@@ -30,11 +30,11 @@ test("Claude mod passes the installed engine's strict loader validation", (t) =>
   if (!result) return;
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.equal(result.report.success, true, result.stdout);
-  t.diagnostic("claude plugin validate mods/notesoup --strict: passed");
+  t.diagnostic("claude plugin validate plugins/claude --strict: passed");
 });
 
 test("Claude mod typechecks against the vendored engine contract without Node globals", () => {
-  const result = spawnSync(process.execPath, ["node_modules/typescript/bin/tsc", "-p", "mods/notesoup/tsconfig.json"], {
+  const result = spawnSync(process.execPath, ["node_modules/typescript/bin/tsc", "-p", "plugins/claude/tsconfig.json"], {
     encoding: "utf8", timeout: 30_000,
   });
   assert.ifError(result.error);

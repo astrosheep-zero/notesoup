@@ -13,17 +13,21 @@
 			"types": "./dist/src/notes/index.d.ts",
 			"import": "./dist/src/notes/index.js"
 		},
+		"./pi": {
+			"types": "./dist/plugins/pi/index.d.ts",
+			"import": "./dist/plugins/pi/index.js"
+		},
 		"./package.json": "./package.json",
 		"./dsh": {
-			"types": "./dist/src/dsh/index.d.ts",
-			"import": "./dist/src/dsh/index.js"
+			"types": "./dist/plugins/dsh/index.d.ts",
+			"import": "./dist/plugins/dsh/index.js"
 		},
 		"./dsh/engine": {
-			"types": "./dist/src/dsh/engine.d.ts",
-			"import": "./dist/src/dsh/engine.js"
+			"types": "./dist/plugins/dsh/engine.d.ts",
+			"import": "./dist/plugins/dsh/engine.js"
 		}
 	},
-	"description": "Codex-style context windows for Pi: durable reset windows, session history tools, and persistent notes.",
+	"description": "Host-neutral notes, history and context-window core, with plugins for Pi, Claude Code and the DeepSeek Harness.",
 	"license": "MIT",
 	"keywords": [
 		"pi-package",
@@ -37,7 +41,7 @@
 	},
 	"pi": {
 		"extensions": [
-			"./src/index.ts"
+			"./plugins/pi/index.ts"
 		],
 		"skills": [
 			"./skills"
@@ -45,23 +49,23 @@
 	},
 	"files": [
 		"src",
+		"plugins",
 		"dist",
 		"docs",
 		"LICENSE",
 		"README.md",
 		"playbook.md",
 		"skills",
-		"mods",
-		"!mods/notesoup/types",
-		"!mods/notesoup/tsconfig.json",
+		"!plugins/claude/types",
+		"!plugins/claude/tsconfig.json",
 		"cordis.patch.yml"
 	],
 	"bin": {
-		"dream": "dist/src/pi/dream/cli.js"
+		"dream": "dist/plugins/pi/dream/cli.js"
 	},
 	"scripts": {
-		"build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json && node scripts/build-extension.mjs && node -e \"require('node:fs').chmodSync('dist/src/pi/dream/cli.js', 0o755)\"",
-		"typecheck": "tsc -p tsconfig.json --noEmit && tsc -p mods/notesoup/tsconfig.json",
+		"build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json && node scripts/build-extension.mjs && node -e \"require('node:fs').chmodSync('dist/plugins/pi/dream/cli.js', 0o755)\"",
+		"typecheck": "tsc -p tsconfig.json --noEmit && tsc -p plugins/claude/tsconfig.json",
 		"test": "npm run build && node --test --test-concurrency=4 dist/test/*.test.js",
 		"prepublishOnly": "npm run typecheck",
 		"prepack": "npm run build"

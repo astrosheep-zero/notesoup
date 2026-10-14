@@ -19,7 +19,7 @@ import { globToRegExp } from "../src/notes/address.js";
 import type { Scope } from "../src/notes/index.js";
 import { listNotes, physicalPath, scopeDir } from "./helpers/notes.js";
 import { notesList, notesSearch, type NotesListData, type NotesReadData, type NotesSearchData, type NotesUpdateData, type NotesWriteData } from "../src/tools/notes.js";
-import { notesIdentityFromPi } from "../src/pi/notes/adapter.js";
+import { notesIdentityFromPi } from "../plugins/pi/notes/adapter.js";
 import { call, context, explicitBoot, makeExtension, manager, resultData, resultError, resultRead } from "./helpers/extension.js";
 import { installExtensionTestHooks } from "./helpers/extension-test-environment.js";
 

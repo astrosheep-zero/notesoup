@@ -3,7 +3,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_REMINDER_MARGIN_TOKENS, DEFAULT_RESERVE_TOKENS } from "../src/budget/constants.js";
-import { GUIDANCE_TYPE, WARNING_TYPE } from "../src/pi/entries.js";
+import { GUIDANCE_TYPE, WARNING_TYPE } from "../plugins/pi/entries.js";
 import { NOTESOUP_SETTINGS_KEY } from "../src/settings.js";
 import {
 	appendText,

@@ -3,13 +3,13 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { claudeHistoryFromJsonl, readClaudeHistory } from "../src/claude/history.js";
+import { claudeHistoryFromJsonl, readClaudeHistory } from "../plugins/claude/src/history.js";
 import { renderBootBlock } from "../src/boot/render.js";
 import { unavailableNotesSnapshot } from "../src/boot/snapshot.js";
 import { DEFAULT_BOOT_TOOL_NAMES } from "../src/boot/text.js";
 import { allItems, eventDocument } from "../src/history/history.js";
 import { historyList, historyRead, historyWindows } from "../src/tools/history.js";
-import { dispatch, type ClaudeToolResult } from "../src/claude/helper.js";
+import { dispatch, type ClaudeToolResult } from "../plugins/claude/src/helper.js";
 
 type Row = Record<string, unknown>;
 const sessionId = "synthetic-session";

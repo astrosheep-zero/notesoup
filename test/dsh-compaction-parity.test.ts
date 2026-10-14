@@ -5,7 +5,7 @@ import type { CompactionResult } from "@deepseek-ai/dsh-compaction";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { pluginRecordOf, type Session, type SessionEvent } from "@deepseek-ai/dsh-session";
 import { dshFixture } from "./helpers/dsh.js";
-import { WINDOW_RECORD } from "../src/dsh/window.js";
+import { WINDOW_RECORD } from "../plugins/dsh/window.js";
 
 /** Pin the shared host contract while naming our intentional template-vs-LLM differences. */
 function transactionShape(session: Session, from: number, head: number, result?: CompactionResult) {

@@ -1,6 +1,6 @@
 # Reset lifecycle
 
-All lifecycle control flow is native Pi integration. `src/pi/reset/lifecycle.ts` owns actual tool requests, command settlement policy, bounded overflow recovery and scheduling. `src/pi/budget.ts` reads usage/settings and stages reminders; `src/budget/policy.ts` derives thresholds. `src/pi/reset/artifacts.ts` constructs ordered drafts and repairs incomplete suffixes; `src/pi/reset/committed.ts` confirms durable boundaries. `src/pi/window.ts` owns markers and provider projection. `src/pi/runtime.ts` wires commands, tools and public Pi hooks.
+All lifecycle control flow is native Pi integration. `plugins/pi/reset/lifecycle.ts` owns actual tool requests, command settlement policy, bounded overflow recovery and scheduling. `plugins/pi/budget.ts` reads usage/settings and stages reminders; `src/budget/policy.ts` derives thresholds. `plugins/pi/reset/artifacts.ts` constructs ordered drafts and repairs incomplete suffixes; `plugins/pi/reset/committed.ts` confirms durable boundaries. `plugins/pi/window.ts` owns markers and provider projection. `plugins/pi/runtime.ts` wires commands, tools and public Pi hooks.
 
 Boot acquisition/rendering is shared: `src/boot/snapshot.ts` receives explicit identity, a captured time and an optional scope loader; `src/boot/render.ts` receives the snapshot and logical tool bindings. Pi supplies its existing names. Shared history is an addressed query projection, never an inference transcript or reset scheduler. There is no generic HostEvent or Harness reducer, and no second commit database.
 

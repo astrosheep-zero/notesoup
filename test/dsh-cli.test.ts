@@ -24,8 +24,8 @@ test("dsh profile loads our rows and a second process restores the on-disk windo
 	await writeFile(join(profile, "package.json"), JSON.stringify({ name: "notesoup-test", private: true, version: "0.0.0", dsh: { profile: { bundles: ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-headless"] } } }));
 	const example = await readFile(join(repository, "docs/dsh.profile.patch.yml"), "utf8");
 	const patch = example
-		.replace("'notesoup/dsh/engine'", `'${pathToFileURL(join(repository, "dist/src/dsh/engine.js")).href}'`)
-		.replace("'notesoup/dsh'", `'${pathToFileURL(join(repository, "dist/src/dsh/index.js")).href}'`)
+		.replace("'notesoup/dsh/engine'", `'${pathToFileURL(join(repository, "dist/plugins/dsh/engine.js")).href}'`)
+		.replace("'notesoup/dsh'", `'${pathToFileURL(join(repository, "dist/plugins/dsh/index.js")).href}'`)
 		.replace("# notesHome: /absolute/path/to/notes", `notesHome: ${join(directory, "notes")}`);
 	await writeFile(join(profile, "cordis.patch.yml"), patch + "\n- id: session-title-llm\n  disabled: true\n");
 	const env = { ...process.env, DSH_HOME: home, DEEPSEEK_API_KEY: "mock-key", DEEPSEEK_BASE_URL: mock.url, DSH_TOOLS_MODE: "native" };

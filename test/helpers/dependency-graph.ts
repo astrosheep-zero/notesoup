@@ -46,14 +46,15 @@ export function dependencyViolations(root: string, entries: string[], options: t
 	const runtime = new Map<string, string[]>();
 	const cache = ts.createModuleResolutionCache(root, (path) => path, options);
 	const sourceRoot = resolve(root, "src");
-	const rootEntry = resolve(sourceRoot, "index.ts");
+	const pluginRoot = resolve(root, "plugins");
+	const notesRoot = resolve(sourceRoot, "notes");
 	const notesEntry = resolve(sourceRoot, "notes/index.ts");
 	const display = (path: string) => relative(root, path).split(sep).join("/");
-	const local = (file: string) => file.startsWith(sourceRoot + sep) || file.startsWith(resolve(root, "mods/notesoup") + sep);
+	const local = (file: string) => file.startsWith(sourceRoot + sep) || file.startsWith(pluginRoot + sep);
 	const adapter = (file: string): Adapter | undefined => {
 		const path = display(file);
-		return file === rootEntry ? "pi" : /^src\/(pi|claude|dsh)\//.exec(path)?.[1] as Adapter | undefined
-			?? (path.startsWith("mods/notesoup/") ? "claude" : packageAdapter(file.split(sep).join("/").split("/node_modules/").at(-1)!));
+		return /^plugins\/(pi|claude|dsh)\//.exec(path)?.[1] as Adapter | undefined
+			?? packageAdapter(file.split(sep).join("/").split("/node_modules/").at(-1)!);
 	};
 	const walk = (file: string, chain: string[]): void => {
 		file = realpathSync(file);
@@ -72,9 +73,10 @@ export function dependencyViolations(root: string, entries: string[], options: t
 			if (!resolution) { violations.push([...here, `unresolved ${specifier}`].join(" -> ")); continue; }
 			const target = realpathSync(resolution.resolvedFileName);
 			const targetOwner = adapter(target);
-			if (target === rootEntry || (targetOwner && targetOwner !== owner) ||
-				(owner && target.startsWith(resolve(sourceRoot, "notes") + sep) && target !== notesEntry) ||
-				(owner === "dsh" && target.startsWith(resolve(sourceRoot, "dream") + sep))) {
+			if ((targetOwner && targetOwner !== owner) ||
+				(owner && target.startsWith(notesRoot + sep) && target !== notesEntry) ||
+				(owner === "dsh" && target.startsWith(resolve(sourceRoot, "dream") + sep)) ||
+				(!owner && target.startsWith(pluginRoot + sep))) {
 				violations.push([...here, display(target)].join(" -> ")); continue;
 			}
 			// Core dependencies must be intentional, not accidentally supplied by a host.

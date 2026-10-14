@@ -16,12 +16,13 @@ import {
 	type ExtensionAPI,
 	type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
-import notesoup, { createNotesoup } from "../src/pi/extension.js";
-import { BOOT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, MANUAL_WIPE_TYPE, RESET_MARKER_TYPE, WARNING_TYPE } from "../src/pi/entries.js";
-import { historyFromSession } from "../src/pi/history.js";
+import notesoup, { createNotesoup } from "../plugins/pi/extension.js";
+import { BOOT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, MANUAL_WIPE_TYPE, RESET_MARKER_TYPE, WARNING_TYPE } from "../plugins/pi/entries.js";
+import { historyFromSession } from "../plugins/pi/history.js";
 import { assertBootHistory } from "./helpers/extension.js";
 import { NOTES_PROTOCOL_OPEN_TAG, WINDOW_IDENTITY_OPEN_TAG } from "../src/boot/text.js";
-import { FORCED_CONTINUATIONS, GUIDANCE_OPEN_TAG, NORMAL_CONTINUATIONS, warningContent, warningPrompt } from "../src/budget/text.js";
+import { FORCED_CONTINUATIONS, GUIDANCE_OPEN_TAG, NORMAL_CONTINUATIONS, warningPrompt } from "../src/budget/text.js";
+import { warningContent } from "../plugins/pi/text.js";
 
 type StreamScript = (request: number, context: AgentContext) => AssistantMessage | Promise<AssistantMessage>;
 type Hook = (pi: ExtensionAPI, getSession: () => AgentSession, requests: AgentContext[]) => void;

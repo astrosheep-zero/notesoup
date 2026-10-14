@@ -1,17 +1,17 @@
 import { DEFAULT_REMINDER_MARGIN_TOKENS, WARNING_RUNWAY_TOKENS } from "./constants.js";
 import { positiveInteger } from "./parse.js";
-import { NOTESOUP_SETTINGS_KEY, type NotesoupSettings } from "../settings.js";
+import { NOTESOUP_SETTINGS_KEY } from "../settings.js";
 
 export type ResolvedThresholds = { reminder: number; reserve: number; warning: number };
 
 /**
- * Pure derivation of the thresholds from Pi's reserve: the reminder fires at reserve
+ * Pure derivation of the thresholds from the host's reserve: the reminder fires at reserve
  * plus the notesoup margin, the warning steer at reserve plus WARNING_RUNWAY_TOKENS.
  * An invalid margin degrades to the default and reports one warning. Automatic
  * threshold/overflow handling is represented by reset lifecycle boundary drafts;
  * no compaction summary is generated.
  */
-export function deriveThresholds(reserveTokens: number, margins: NotesoupSettings): { thresholds: ResolvedThresholds; warnings: string[] } {
+export function deriveThresholds(reserveTokens: number, margins: Record<string, unknown>): { thresholds: ResolvedThresholds; warnings: string[] } {
 	const warnings: string[] = [];
 	const reminderKey = `${NOTESOUP_SETTINGS_KEY}.reminderMarginTokens`;
 	let reminderMargin: number;

@@ -11,10 +11,7 @@ export const NOTES_PROTOCOL_CLOSE_TAG = "</notesoup:notes_protocol>";
  * model-facing reset tool replaces the whole sentence through BootToolNames.wipeSentence.
  */
 export const PROTOCOL_WIPE_SENTENCE = "If this feels like the right moment, call `empty_brain` and erase yourself with dignity.";
-/** Claude has no model-facing reset tool: the model ends its turn and the human runs the command. */
-export const CLAUDE_WIPE_SENTENCE = "If this feels like the right moment, end your turn and ask the human to run `/fresh-window`.";
 export const PROTOCOL_HISTORY_SENTENCE = "History can still be dug up, probably: use `history_*` to excavate the mess, from old decisions to yesterday's missing socks. Found something? Write its seq down, or enjoy digging twice.";
-export const CLAUDE_HISTORY_UNAVAILABLE_SENTENCE = "History isn't available in this Claude session: no main transcript_path was supplied. Keep essential state in notes; don't pretend those notes are the missing transcript.";
 
 /**
  * Static protocol teaching adapted from Codex's token_budget.guidance_message to
@@ -89,15 +86,6 @@ remembering, new Cheatsheet line. And when a line stops being true, kill it — 
 reads that page as fact.
 </notesoup:maps>`;
 
-/**
- * Pi-only closing hints. Pi's TUI drops the human's visible transcript when a window resets, and
- * the model, not the human, owns when that reset happens. A host whose reset leaves the human's
- * view intact must not carry these — the claim would be false there. The bare `empty_brain` token
- * is interpolated by renderProtocolBlock; the prose itself stays plain English.
- */
-export const PI_PRE_RESET_HINTS = `Resetting clears the human's chat view too. Don't put a long explanation right before a reset and assume they'll still be able to read it. Save the handoff in notes; give the explanation after the reset.
-Unless the human explicitly directs otherwise, decide for yourself when to call empty_brain. Don't keep asking them whether to reset.`;
-
 /** Logical tool names are supplied by the composing host, not discovered here. */
 export type BootToolNames = Readonly<{
 	notes: string;
@@ -107,14 +95,15 @@ export type BootToolNames = Readonly<{
 	wipe: string;
 	/**
 	 * Replaces the whole voluntary-wipe sentence (PROTOCOL_WIPE_SENTENCE) when the host has
-	 * no model-facing reset tool. Absent means Pi's default sentence, byte for byte.
+	 * no model-facing reset tool. Absent means the shared tool-driven-reset sentence, byte for byte.
 	 */
 	wipeSentence?: string;
 	/** A host without an authoritative history source replaces the entire history advice. */
 	historySentence?: string;
 	/**
-	 * Extra protocol prose appended before the closing tag. Pi passes PI_PRE_RESET_HINTS; hosts
-	 * whose reset leaves the human's view intact leave it absent.
+	 * Extra protocol prose appended before the closing tag. A host whose reset also drops the
+	 * human's visible transcript supplies its own hints here; a host whose reset leaves that
+	 * view intact leaves it absent, because the claim would be false there.
 	 */
 	preResetHints?: string;
 }>;

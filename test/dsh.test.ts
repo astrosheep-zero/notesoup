@@ -14,11 +14,11 @@ import { notesRead } from "../src/tools/notes.js";
 import { success } from "../src/tools/result.js";
 import { createNotesStore } from "../src/notes/index.js";
 import { dshFixture } from "./helpers/dsh.js";
-import { decodeHistory } from "../src/dsh/history.js";
-import { checkpointSnapshot, notesIdentity, recoverSnapshot, WINDOW_RECORD } from "../src/dsh/window.js";
-import { measureBudget } from "../src/dsh/budget.js";
+import { decodeHistory } from "../plugins/dsh/history.js";
+import { checkpointSnapshot, notesIdentity, recoverSnapshot, WINDOW_RECORD } from "../plugins/dsh/window.js";
+import { measureBudget } from "../plugins/dsh/budget.js";
 import { COUNTDOWN_LINE, FORCED_CONTINUATIONS, NORMAL_CONTINUATIONS } from "../src/budget/text.js";
-import { preflight } from "../src/dsh/engine.js";
+import { preflight } from "../plugins/dsh/engine.js";
 import type { Agent } from "@deepseek-ai/dsh-agent";
 import { BasicCompactionEngine } from "@deepseek-ai/dsh-compaction-basic";
 

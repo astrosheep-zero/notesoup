@@ -3,9 +3,9 @@ import { copyFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
 const projections = [
-	["skills/memory/SKILL.md", "mods/notesoup/skills/memory/SKILL.md"],
-	["skills/dream/SKILL.md", "mods/notesoup/skills/dream/SKILL.md"],
-	["playbook.md", "mods/notesoup/playbook.md"],
+	["skills/memory/SKILL.md", "plugins/claude/skills/memory/SKILL.md"],
+	["skills/dream/SKILL.md", "plugins/claude/skills/dream/SKILL.md"],
+	["playbook.md", "plugins/claude/playbook.md"],
 ];
 for (const [source, projection] of projections) {
 	mkdirSync(dirname(projection), { recursive: true });
@@ -13,8 +13,8 @@ for (const [source, projection] of projections) {
 }
 
 await build({
-	entryPoints: ["src/claude/helper.ts"],
-	outfile: "mods/notesoup/dist/claude/helper.js",
+	entryPoints: ["plugins/claude/src/helper.ts"],
+	outfile: "plugins/claude/dist/claude/helper.js",
 	bundle: true,
 	platform: "node",
 	format: "esm",

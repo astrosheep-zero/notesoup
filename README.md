@@ -87,7 +87,19 @@ npm test            # build from a clean dist, then run the suite
 npm run typecheck
 git diff --check
 node scripts/check-notes-package.mjs  # optional built /notes CRUD smoke; no install
+npx tsx scripts/boot-smoke.mts [cwd]  # optional live boot render against the real notes homes
 ```
+
+The repository splits host-neutral code from host plugins:
+
+| Path | What it is |
+| --- | --- |
+| `src/` | The core: notes library, boot snapshot/renderer, history projection, budget policy and the shared tool operations. It never imports an SDK or a plugin. |
+| `plugins/pi/` | The Pi extension (`plugins/pi/index.ts` is what `pi.extensions` loads from source) and the `dream` CLI. |
+| `plugins/claude/` | The self-contained Claude Code plugin (`.claude-plugin/`, `hooks/`, bundled `dist/claude/helper.js`, skills and playbook), with its adapter sources in `plugins/claude/src/`. |
+| `plugins/dsh/` | The Cordis rows published as `notesoup/dsh` and `notesoup/dsh/engine`. |
+
+Each plugin owns its host's words — Pi's pre-reset hints and `last_word` nudge live in `plugins/pi/text.ts`, Claude's reset and missing-history prose in `plugins/claude/src/text.ts` — while the shared boot, protocol and warning bodies stay in `src/boot/text.ts` and `src/budget/text.ts`.
 
 The harness runs against the real installed Pi `SessionManager`/`SettingsManager` in temporary directories with fake credentials — no model or network calls, and the real `~/.pi` is never touched. See [CONTRIBUTING.md](CONTRIBUTING.md) for ownership and verification rules.
 

@@ -4,8 +4,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { renderBootBlock } from "../src/boot/render.js";
 import { loadNotesSnapshot } from "../src/boot/snapshot.js";
-import { CLAUDE_WIPE_SENTENCE, DEFAULT_BOOT_TOOL_NAMES, MAPS_BLOCK, NOTES_PROTOCOL_CLOSE_TAG, NOTES_PROTOCOL_OPEN_TAG, PI_PRE_RESET_HINTS, WINDOW_IDENTITY_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG, renderProtocolBlock } from "../src/boot/text.js";
-import { CLAUDE_WARNING_PROMPT, COUNTDOWN_LINE, FORCED_CONTINUATIONS, GUIDANCE_CLOSE_TAG, GUIDANCE_OPEN_TAG, LAST_WORD_HINT, NORMAL_CONTINUATIONS, WARNING_BODY, selectContinuation, tokenBudgetGuidance, warningContent } from "../src/budget/text.js";
+import { DEFAULT_BOOT_TOOL_NAMES, MAPS_BLOCK, NOTES_PROTOCOL_CLOSE_TAG, NOTES_PROTOCOL_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG, renderProtocolBlock } from "../src/boot/text.js";
+import { CLAUDE_WARNING_PROMPT, CLAUDE_WIPE_SENTENCE } from "../plugins/claude/src/text.js";
+import { PI_PRE_RESET_HINTS, LAST_WORD_HINT, warningContent } from "../plugins/pi/text.js";
+import { COUNTDOWN_LINE, FORCED_CONTINUATIONS, GUIDANCE_CLOSE_TAG, GUIDANCE_OPEN_TAG, NORMAL_CONTINUATIONS, WARNING_BODY, selectContinuation, tokenBudgetGuidance } from "../src/budget/text.js";
 import type { NoteRow, Scope } from "../src/notes/index.js";
 
 /**

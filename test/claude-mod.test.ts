@@ -6,14 +6,15 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { build } from "esbuild";
-import { dispatch, handleLine, type ClaudeToolResult } from "../src/claude/helper.js";
-import { DEFAULT_CLAUDE_RESET_MARGIN_TOKENS, resolveClaudeLimits } from "../src/claude/thresholds.js";
+import { dispatch, handleLine, type ClaudeToolResult } from "../plugins/claude/src/helper.js";
+import { DEFAULT_CLAUDE_RESET_MARGIN_TOKENS, resolveClaudeLimits } from "../plugins/claude/src/thresholds.js";
 import { WARNING_RUNWAY_TOKENS } from "../src/budget/constants.js";
-import { PROTOCOL_WIPE_SENTENCE, CLAUDE_WIPE_SENTENCE, renderProtocolBlock } from "../src/boot/text.js";
-import { CLAUDE_WARNING_PROMPT, COUNTDOWN_LINE, FORCED_CONTINUATIONS } from "../src/budget/text.js";
+import { PROTOCOL_WIPE_SENTENCE, renderProtocolBlock } from "../src/boot/text.js";
+import { CLAUDE_WARNING_PROMPT, CLAUDE_WIPE_SENTENCE } from "../plugins/claude/src/text.js";
+import { COUNTDOWN_LINE, FORCED_CONTINUATIONS } from "../src/budget/text.js";
 import { createNotesStore } from "../src/notes/index.js";
 import { resolveProjectHome } from "../src/notes/project-home.js";
-import { notesIdentityFromPi } from "../src/pi/notes/adapter.js";
+import { notesIdentityFromPi } from "../plugins/pi/notes/adapter.js";
 import { context, manager } from "./helpers/extension.js";
 
 const identity = { home: mkdtempSync(join(tmpdir(), "claude-mod-")), sessionId: "session", cwd: process.cwd(), agent: "claude", model: "claude" };
@@ -57,7 +58,7 @@ async function callTool(tool: string, params: Record<string, unknown>): Promise<
  * gets the real one; nothing else about the module is changed.
  */
 async function loadHookModule(t: test.TestContext): Promise<{ register: (on: (event: string, handler: HookHandler) => void) => void }> {
-  const hooksDir = join(process.cwd(), "mods/notesoup/hooks");
+  const hooksDir = join(process.cwd(), "plugins/claude/hooks");
   const transpiled = await build({
     stdin: { contents: readFileSync(join(hooksDir, "register.ts"), "utf8"), loader: "ts", resolveDir: hooksDir, sourcefile: "register.ts" },
     bundle: false, format: "esm", platform: "node", target: "node22", write: false,
@@ -299,7 +300,7 @@ test("Claude Mod helper runs from a standalone copied plugin directory", () => {
   const fixture = mkdtempSync(join(tmpdir(), "claude-mod-install-"));
   try {
     const plugin = join(fixture, "notesoup");
-    cpSync(join(process.cwd(), "mods/notesoup"), plugin, { recursive: true });
+    cpSync(join(process.cwd(), "plugins/claude"), plugin, { recursive: true });
     const hook = readFileSync(join(plugin, "hooks/register.ts"), "utf8");
     assert.ok(hook.includes('${import.meta.dir}/../dist/claude/helper.js'));
     const helper = join(plugin, "dist/claude/helper.js");
@@ -749,18 +750,18 @@ test("Claude Mod skips the automatic reset when thresholds cannot be resolved", 
 
 test("Claude skill projections stay byte-identical to canonical shared files", () => {
   assert.deepEqual(
-    readFileSync(join(process.cwd(), "mods/notesoup/skills/memory/SKILL.md")),
+    readFileSync(join(process.cwd(), "plugins/claude/skills/memory/SKILL.md")),
     readFileSync(join(process.cwd(), "skills/memory/SKILL.md")),
   );
   assert.deepEqual(
-    readFileSync(join(process.cwd(), "mods/notesoup/skills/dream/SKILL.md")),
+    readFileSync(join(process.cwd(), "plugins/claude/skills/dream/SKILL.md")),
     readFileSync(join(process.cwd(), "skills/dream/SKILL.md")),
   );
   assert.deepEqual(
-    readFileSync(join(process.cwd(), "mods/notesoup/playbook.md")),
+    readFileSync(join(process.cwd(), "plugins/claude/playbook.md")),
     readFileSync(join(process.cwd(), "playbook.md")),
   );
-  const skill = readFileSync(join(process.cwd(), "mods/notesoup/skills/dream/SKILL.md"), "utf8");
+  const skill = readFileSync(join(process.cwd(), "plugins/claude/skills/dream/SKILL.md"), "utf8");
   assert.match(skill, /\.\.\/\.\.\/playbook\.md/);
   assert.doesNotMatch(skill, /Claude.*runner|dream runner/i);
 });

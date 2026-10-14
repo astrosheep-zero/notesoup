@@ -30,8 +30,8 @@ test("dream skill is publicly discoverable and resolves the CLI's shared playboo
 	const root = packageRoot();
 	const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 	assert.deepEqual(manifest.pi.skills, ["./skills"]);
-	assert.deepEqual(manifest.pi.extensions, ["./src/index.ts"]);
-	assert.equal(manifest.bin.dream, "dist/src/pi/dream/cli.js");
+	assert.deepEqual(manifest.pi.extensions, ["./plugins/pi/index.ts"]);
+	assert.equal(manifest.bin.dream, "dist/plugins/pi/dream/cli.js");
 	assert.ok(manifest.files.includes("skills"));
 
 	discoverSkill(join(root, "skills"), "memory");
@@ -57,8 +57,8 @@ test("npm tarball keeps the skill's relative playbook path portable after extrac
 		assert.ok(packedPaths.includes("skills/dream/SKILL.md"));
 		assert.ok(packedPaths.includes("skills/memory/SKILL.md"));
 		assert.ok(packedPaths.includes("playbook.md"));
-		assert.ok(packedPaths.includes("src/index.ts"));
-		assert.ok(packedPaths.includes("dist/src/pi/dream/cli.js"));
+		assert.ok(packedPaths.includes("plugins/pi/index.ts"));
+		assert.ok(packedPaths.includes("dist/plugins/pi/dream/cli.js"));
 
 		const extracted = join(fixture, "extracted");
 		execFileSync("mkdir", ["-p", extracted]);

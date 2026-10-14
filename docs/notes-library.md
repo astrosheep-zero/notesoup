@@ -26,7 +26,7 @@ const files = await notes.list({ glob: "@project/**" });
 const matches = await notes.search(["library"]);
 ```
 
-`/notes` ships JavaScript and TypeScript declarations. It does not import Pi or read `PI_*` environment variables. Pi packages are optional peers: a notes-only installation does not install them. Using the plugin, root SDK entry, or `dream` CLI still requires Pi. This is a filesystem library for Node, not a browser storage API.
+`/notes` ships JavaScript and TypeScript declarations. It does not import Pi or read `PI_*` environment variables. Pi packages are optional peers: a notes-only installation does not install them. Using the Pi plugin (`notesoup/pi`), the dsh rows (`notesoup/dsh`), or the `dream` CLI still requires its host. This is a filesystem library for Node, not a browser storage API.
 
 ## API and identity
 
@@ -50,8 +50,8 @@ Addresses are a relative path (a current-session note), `@project/`, `@human/`, 
 Ownership is explicit in the file tree:
 
 ```text
-src/
-  index.ts               # only the Pi extension and createNotesoup factory
+src/                     # host-neutral core; never imports a plugin or an SDK
+  index.ts               # curated core surface: notes, boot, operations, budget prose
   notes/                 # filesystem semantics and explicit NotesIdentity
   boot/                  # five-home snapshot and pure rendering with tool bindings
   history/               # decoded query projection, pairing, paging and folding
@@ -59,7 +59,8 @@ src/
   tools/                 # operation schemas, typed outcomes and bounded presentation
   dream/                 # jail, deletion policy, locks, gates, audit, reports, doctor
   settings.ts            # SDK-independent settings keys and per-key parsing
-  pi/                    # native integration, not part of /notes
+plugins/                 # one directory per host; each owns its SDK and its words
+  pi/                    # Pi plugin; index.ts is the extension entry
     extension.ts         # registration composition
     runtime.ts           # native lifecycle, commands, provider projection and UI
     window.ts            # native markers, checkpoints, branches and usage
@@ -67,8 +68,14 @@ src/
     notes/               # live identity extraction, registration and native diffs
     reset/               # reducer, boundary drafts, commit confirmation and repair
     dream/               # Pi session backend, settings reads and CLI
+    text.ts              # Pi-only pre-reset hints, last-word nudge, prompted close-out
+  claude/                # the self-contained Claude Code plugin (hooks, dist, skills)
+    src/                 # helper, transcript decoding, threshold derivation, text
+  dsh/                   # Cordis plugin rows (notesoup, notesoup-engine)
 ```
+
+The disk layout is older than this split and is shared by every host: `pi/session/<sessionId>/` is a historical directory name, not the Pi adapter's private layout, and nothing here migrates or renames it.
 
 The public runtime exports are `createNotesStore`, `NoteError`, `projectKey(cwd)`, and `slugify(value)`, alongside the API's TypeScript types. The factory and `projectKey` remain synchronous; `projectKey` provides the existing repository/worktree identity algorithm, while `slugify` normalizes an agent/model name. The six primary store methods return promises and use asynchronous filesystem operations. Path/glob helpers, serialization, validation internals and constants are implementation details, not exported through `/notes`.
 
-The Pi adapter supplies the root and live session/project/agent/model identity on each call. Tools and boot use the same storage implementation. Shared tool schemas use `typebox`, declared as a peer supplied by Pi and as a dev dependency for standalone development; their handlers accept explicit identities or decoded history projections. Pi owns registration, execution-context extraction and native edit diff rendering. Boot snapshot acquisition receives identity, a captured timestamp and an optional home loader; rendering receives explicit logical tool names. Native session traversal, stable seq allocation, branch selection and inference projection stay in Pi. Shared history is a query view, never a way to reconstruct inference messages. There are no compatibility shims or generic host runtime. Internal source paths are not the supported library API.
+The Pi plugin supplies the root and live session/project/agent/model identity on each call. Tools and boot use the same storage implementation. Shared tool schemas use `typebox`, declared as a peer supplied by Pi and as a dev dependency for standalone development; their handlers accept explicit identities or decoded history projections. Pi owns registration, execution-context extraction and native edit diff rendering. Boot snapshot acquisition receives identity, a captured timestamp and an optional home loader; rendering receives explicit logical tool names. Native session traversal, stable seq allocation, branch selection and inference projection stay in Pi. Shared history is a query view, never a way to reconstruct inference messages. There are no compatibility shims or generic host runtime. Internal source paths are not the supported library API.

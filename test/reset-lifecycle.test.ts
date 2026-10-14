@@ -15,13 +15,14 @@ import type {
 	TurnEndEvent,
 } from "@earendil-works/pi-coding-agent";
 import { SessionManager as Manager } from "@earendil-works/pi-coding-agent";
-import notesoup from "../src/pi/extension.js";
-import { BOOT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, RESET_LAST_WORD_TYPE, RESET_MARKER_TYPE } from "../src/pi/entries.js";
-import { MANUAL_WIPE_TYPE } from "../src/pi/entries.js";
+import notesoup from "../plugins/pi/extension.js";
+import { BOOT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, RESET_LAST_WORD_TYPE, RESET_MARKER_TYPE } from "../plugins/pi/entries.js";
+import { MANUAL_WIPE_TYPE } from "../plugins/pi/entries.js";
 import { assertBootHistory, toolContext } from "./helpers/extension.js";
-import { COUNTDOWN_LINE, FORCED_CONTINUATIONS, LAST_WORD_HINT, NORMAL_CONTINUATIONS, WARNING_CALL_PROMPTED, warningContent } from "../src/budget/text.js";
-import { historyFromSession, nextHistorySeq } from "../src/pi/history.js";
-import { buildResetDrafts, LAST_WORD_PREFIX, MAX_LAST_WORD_CHARS, sanitizeLastWord } from "../src/pi/reset/artifacts.js";
+import { COUNTDOWN_LINE, FORCED_CONTINUATIONS, NORMAL_CONTINUATIONS } from "../src/budget/text.js";
+import { LAST_WORD_HINT, WARNING_CALL_PROMPTED, warningContent } from "../plugins/pi/text.js";
+import { historyFromSession, nextHistorySeq } from "../plugins/pi/history.js";
+import { buildResetDrafts, LAST_WORD_PREFIX, MAX_LAST_WORD_CHARS, sanitizeLastWord } from "../plugins/pi/reset/artifacts.js";
 import {
 	initialResetControl,
 	reduceResetControl,
@@ -29,7 +30,7 @@ import {
 	type ResetBeforeSettleFacts,
 	type ResetControlState,
 	type ResetTurnEndFacts,
-} from "../src/pi/reset/lifecycle.js";
+} from "../plugins/pi/reset/lifecycle.js";
 
 const previousNotesHome = process.env.PI_NOTES_HOME;
 const testNotesHome = mkdtempSync(join(tmpdir(), "notesoup-lifecycle-notes-"));

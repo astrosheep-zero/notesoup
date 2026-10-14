@@ -1,5 +1,3 @@
-import { PI_PRE_RESET_HINTS } from "../boot/text.js";
-
 export const GUIDANCE_OPEN_TAG = "<notesoup:budget_notice>";
 export const GUIDANCE_CLOSE_TAG = "</notesoup:budget_notice>";
 
@@ -39,23 +37,8 @@ export const WARNING_BODY =
 
 export const WARNING_CALL = "When the notes are ready, call `empty_brain` to reset now instead of being cut off mid-task.";
 
-/**
- * With a prompt attached the close-out is an order rather than a nudge: the human already
- * said when to reset, and a task line for the next window just preceded it.
- */
-export const WARNING_CALL_PROMPTED = "Organize the notes first, then call `empty_brain` right away — do not wait to be cut off.";
-
-/**
- * The human typed `/empty <prompt>`: the raw command line leads the close-out so the
- * closing model sees what the next window was asked to do, verbatim. The tag names it as the
- * next window's prompt, so no prose has to explain that.
- */
-function promptBlock(commandLine: string): string {
-	return `<notesoup:next_window_prompt>\n${commandLine}\n</notesoup:next_window_prompt>`;
-}
-
-export function warningPrompt(commandLine?: string): string {
-	return `${WARNING_BODY}\n${commandLine ? `${promptBlock(commandLine)}\n${WARNING_CALL_PROMPTED}` : WARNING_CALL}`;
+export function warningPrompt(): string {
+	return `${WARNING_BODY}\n${WARNING_CALL}`;
 }
 
 /**
@@ -63,17 +46,6 @@ export function warningPrompt(commandLine?: string): string {
  * turn, not on a timer. The first-tier guidance never carries it.
  */
 export const COUNTDOWN_LINE = "Brain emptied in 3… 2…";
-
-/** Pi-only nudge: pi's empty_brain persists a parting line; the dsh tool has no such parameter. */
-export const LAST_WORD_HINT = "If you want, pass `empty_brain` a `last_word`: a tiny sticky note (at most 250 characters) slapped on your forehead after the wipe.";
-
-/** The hidden checkpoint text for pi's manual/budget-triggered requests (dsh reads warningPrompt() directly). */
-export function warningContent(commandLine?: string): string {
-	return `${GUIDANCE_OPEN_TAG}\n${warningPrompt(commandLine)}\n${PI_PRE_RESET_HINTS}\n${LAST_WORD_HINT}\n${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}`;
-}
-
-/** Claude's variant: the mod resets after the turn, so the model only has to stop. */
-export const CLAUDE_WARNING_PROMPT = `${WARNING_BODY}\nWhen the notes are ready, end your turn; the reset runs after it.\n${COUNTDOWN_LINE}`;
 
 /**
  * Codex-equivalent low-budget reminder. The measured remaining count is frozen into

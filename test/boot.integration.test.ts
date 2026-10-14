@@ -1,17 +1,17 @@
-import { resetBoundaryCommitted } from "../src/pi/reset/committed.js";
-import { inspectResetTail } from "../src/pi/reset/artifacts.js";
+import { resetBoundaryCommitted } from "../plugins/pi/reset/committed.js";
+import { inspectResetTail } from "../plugins/pi/reset/artifacts.js";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { historyFromSession } from "../src/pi/history.js";
-import { BOOT_TYPE, GUIDANCE_TYPE, RESET_MARKER_TYPE } from "../src/pi/entries.js";
+import { historyFromSession } from "../plugins/pi/history.js";
+import { BOOT_TYPE, GUIDANCE_TYPE, RESET_MARKER_TYPE } from "../plugins/pi/entries.js";
 import { NOTES_PROTOCOL_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG } from "../src/boot/text.js";
 import { FORCED_CONTINUATIONS, NORMAL_CONTINUATIONS } from "../src/budget/text.js";
 import { listNotes, physicalPath } from "./helpers/notes.js";
-import { CONTINUATION_TYPE, MANUAL_WIPE_TYPE } from "../src/pi/entries.js";
+import { CONTINUATION_TYPE, MANUAL_WIPE_TYPE } from "../plugins/pi/entries.js";
 import {
 	appendText,
 	assertBootHistory,

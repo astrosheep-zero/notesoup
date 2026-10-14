@@ -8,8 +8,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import ts from "typescript";
 import { dependencyViolations, moduleReferences } from "./helpers/dependency-graph.js";
-import * as entry from "../src/index.js";
-import notesoup, { createNotesoup } from "../src/pi/extension.js";
+import * as core from "../src/index.js";
+import * as pi from "../plugins/pi/index.js";
+import notesoup, { createNotesoup } from "../plugins/pi/index.js";
 
 function repository(): string {
 	let root = dirname(fileURLToPath(import.meta.url));
@@ -23,14 +24,14 @@ function sources(directory: string): string[] {
 
 const options: ts.CompilerOptions = { module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext, target: ts.ScriptTarget.ES2022 };
 
-test("all shared domains resolve without any direct or transitive SDK, Pi adapter or root entry dependency", () => {
+test("the host-neutral core resolves without any SDK or plugin dependency", () => {
 	const root = repository();
 	const config = ts.readConfigFile(join(root, "tsconfig.json"), ts.sys.readFile);
 	assert.equal(config.error, undefined);
 	const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root);
 	assert.deepEqual(parsed.errors, []);
 	const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-	const shared = sources(join(root, "src")).filter((file) => !["pi", "claude", "dsh"].some((adapter) => file.startsWith(join(root, "src", adapter) + "/")) && file !== join(root, "src/index.ts"));
+	const shared = sources(join(root, "src"));
 	for (const domain of ["notes", "boot", "history", "budget", "tools", "dream"]) assert.ok(shared.some((file) => file.startsWith(join(root, "src", domain) + "/")), `${domain} is included`);
 	assert.deepEqual(dependencyViolations(root, shared, parsed.options, new Set(["typebox"])), []);
 	for (const name of ["@earendil-works/pi-agent-core", "@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "typebox"]) {
@@ -39,41 +40,40 @@ test("all shared domains resolve without any direct or transitive SDK, Pi adapte
 	}
 });
 
-test("each adapter resolves only its own host, shared domains and the public notes entry", () => {
+test("each plugin resolves only its own host, the core, and the public notes entry", () => {
 	const root = repository();
-	for (const adapter of ["pi", "claude", "dsh"]) {
-		const entries = sources(join(root, "src", adapter));
-		if (adapter === "claude") entries.push(...sources(join(root, "mods/notesoup/hooks")));
-		assert.deepEqual(dependencyViolations(root, entries, options, new Set(["typebox"])), [], adapter);
+	for (const plugin of ["pi", "claude", "dsh"]) {
+		const entries = sources(join(root, "plugins", plugin));
+		if (plugin === "claude") entries.push(...sources(join(root, "plugins/claude/hooks")));
+		assert.deepEqual(dependencyViolations(root, entries, options, new Set(["typebox"])), [], plugin);
 	}
 });
 
 test("dependency guard follows indirect types, re-exports, dynamic imports and import-type edges through resolved aliases", (t) => {
-	const root = mkdtempSync(join(tmpdir(), "context-dependencies-"));
+	const root = mkdtempSync(join(tmpdir(), "notesoup-dependencies-"));
 	t.after(() => rmSync(root, { recursive: true, force: true }));
 	const put = (path: string, text: string) => { mkdirSync(dirname(join(root, path)), { recursive: true }); writeFileSync(join(root, path), text); };
 	put("package.json", '{"type":"module"}');
-	put("src/pi/native.ts", "export type Native = string;");
-	put("src/index.ts", 'export * from "./pi/native.js";');
+	put("plugins/pi/native.ts", "export type Native = string;");
 	put("src/notes/bridge.ts", 'export type { Native } from "@native";');
 	put("src/notes/identity.ts", 'import type { Native } from "./bridge.js"; export type Identity = Native;');
-	put("src/dream/jail.ts", 'export const backend = () => import("../index.js");');
-	put("src/boot/snapshot.ts", 'export type Snapshot = import("../pi/native.js").Native;');
+	put("src/dream/jail.ts", 'export const backend = () => import("../../plugins/pi/native.js");');
+	put("src/boot/snapshot.ts", 'export type Snapshot = import("../../plugins/pi/native.js").Native;');
 	put("src/history/decoder.ts", 'import type { SessionEntry } from "@earendil-works/pi-coding-agent"; export type Entry = SessionEntry;');
 	put("src/history/query.ts", 'export type { Entry } from "./decoder.js";');
-	const fixtureOptions = { ...options, baseUrl: root, paths: { "@native": ["src/pi/native.ts"] } };
+	const fixtureOptions = { ...options, baseUrl: root, paths: { "@native": ["plugins/pi/native.ts"] } };
 	const violations = dependencyViolations(root, ["src/notes/identity.ts", "src/dream/jail.ts", "src/boot/snapshot.ts", "src/history/query.ts"], fixtureOptions, new Set());
 	assert.deepEqual(violations, [
-		"src/notes/identity.ts -> src/notes/bridge.ts -> src/pi/native.ts",
-		"src/dream/jail.ts -> src/index.ts",
-		"src/boot/snapshot.ts -> src/pi/native.ts",
+		"src/notes/identity.ts -> src/notes/bridge.ts -> plugins/pi/native.ts",
+		"src/dream/jail.ts -> plugins/pi/native.ts",
+		"src/boot/snapshot.ts -> plugins/pi/native.ts",
 		"src/history/query.ts -> src/history/decoder.ts -> @earendil-works/pi-coding-agent",
 	]);
-	put("src/boot/snapshot.ts", 'export type Snapshot = import("../dsh/native.js").Native;');
-	put("src/dsh/native.ts", "export type Native = string;");
+	put("src/boot/snapshot.ts", 'export type Snapshot = import("../../plugins/dsh/native.js").Native;');
+	put("plugins/dsh/native.ts", "export type Native = string;");
 	put("src/history/query.ts", 'export type { Session } from "@deepseek-ai/dsh-session";');
 	assert.deepEqual(dependencyViolations(root, ["src/boot/snapshot.ts", "src/history/query.ts"], fixtureOptions, new Set()), [
-		"src/boot/snapshot.ts -> src/dsh/native.ts",
+		"src/boot/snapshot.ts -> plugins/dsh/native.ts",
 		"src/history/query.ts -> @deepseek-ai/dsh-session",
 	]);
 	put("src/notes/bridge.ts", 'export type { Value as Native } from "./safe.js";');
@@ -81,8 +81,8 @@ test("dependency guard follows indirect types, re-exports, dynamic imports and i
 	assert.deepEqual(dependencyViolations(root, ["src/notes/identity.ts"], fixtureOptions, new Set()), [], "a host-neutral type/re-export chain is allowed");
 });
 
-test("adapter policies reject foreign hosts and notes internals, including reachable Claude hooks", (t) => {
-	const root = mkdtempSync(join(tmpdir(), "context-adapters-"));
+test("plugin policies reject foreign hosts and notes internals, including reachable Claude hooks", (t) => {
+	const root = mkdtempSync(join(tmpdir(), "notesoup-plugins-"));
 	t.after(() => rmSync(root, { recursive: true, force: true }));
 	const put = (path: string, text: string) => { mkdirSync(dirname(join(root, path)), { recursive: true }); writeFileSync(join(root, path), text); };
 	put("package.json", '{"type":"module"}');
@@ -90,31 +90,32 @@ test("adapter policies reject foreign hosts and notes internals, including reach
 	put("src/notes/store.ts", "export type Note = string;");
 	const hosts = ["pi", "claude", "dsh"];
 	const sdks = ["@earendil-works/pi-coding-agent", "claude-code", "@deepseek-ai/cordis"];
-	for (const host of hosts) put(`src/${host}/native.ts`, "export const value = 1;");
+	for (const host of hosts) put(`plugins/${host}/native.ts`, "export const value = 1;");
 	for (const [index, host] of hosts.entries()) {
-		const entry = `src/${host}/entry.ts`;
+		const entry = `plugins/${host}/entry.ts`;
 		const check = () => dependencyViolations(root, [entry], options, new Set());
-		put(entry, `export type { Note } from "../notes/index.js"; import type { Native } from "${sdks[index]}";`);
+		put(entry, `export type { Note } from "../../src/notes/index.js"; import type { Native } from "${sdks[index]}";`);
 		assert.deepEqual(check(), [], `${host} may use its SDK and the notes entry`);
-		put(entry, 'export type { Note } from "../notes/store.js";');
+		put(entry, 'export type { Note } from "../../src/notes/store.js";');
 		assert.deepEqual(check(), [`${entry} -> src/notes/store.ts`]);
 		const other = (index + 1) % hosts.length;
 		put(entry, `export { value } from "../${hosts[other]}/native.js";`);
-		assert.deepEqual(check(), [`${entry} -> src/${hosts[other]}/native.ts`]);
+		assert.deepEqual(check(), [`${entry} -> plugins/${hosts[other]}/native.ts`]);
 		put(entry, `export type { Native } from "${sdks[other]}";`);
 		assert.deepEqual(check(), [`${entry} -> ${sdks[other]}`]);
 	}
-	put("src/claude/entry.ts", 'export { value } from "../../mods/notesoup/hooks/register.js";');
-	put("mods/notesoup/hooks/register.ts", 'export { value } from "../../../src/pi/native.js";');
-	assert.deepEqual(dependencyViolations(root, ["src/claude/entry.ts"], options, new Set()), ["src/claude/entry.ts -> mods/notesoup/hooks/register.ts -> src/pi/native.ts"]);
-	put("mods/notesoup/hooks/register.ts", 'export type { Note } from "../../../src/notes/index.js";');
-	assert.deepEqual(dependencyViolations(root, ["src/claude/entry.ts"], options, new Set()), []);
-	put("src/pi/entry.ts", 'export type { Note } from "@notes-internal";');
-	assert.deepEqual(dependencyViolations(root, ["src/pi/entry.ts"], { ...options, baseUrl: root, paths: { "@notes-internal": ["src/notes/store.ts"] } }, new Set()), ["src/pi/entry.ts -> src/notes/store.ts"]);
+	// The Claude hook module is reachable from the Claude plugin and must obey the same rules.
+	put("plugins/claude/src/entry.ts", 'export { value } from "../hooks/register.js";');
+	put("plugins/claude/hooks/register.ts", 'export { value } from "../../pi/native.js";');
+	assert.deepEqual(dependencyViolations(root, ["plugins/claude/src/entry.ts"], options, new Set()), ["plugins/claude/src/entry.ts -> plugins/claude/hooks/register.ts -> plugins/pi/native.ts"]);
+	put("plugins/claude/hooks/register.ts", 'export type { Note } from "../../../src/notes/index.js";');
+	assert.deepEqual(dependencyViolations(root, ["plugins/claude/src/entry.ts"], options, new Set()), []);
+	put("plugins/pi/entry.ts", 'export type { Note } from "@notes-internal";');
+	assert.deepEqual(dependencyViolations(root, ["plugins/pi/entry.ts"], { ...options, baseUrl: root, paths: { "@notes-internal": ["src/notes/store.ts"] } }, new Set()), ["plugins/pi/entry.ts -> src/notes/store.ts"]);
 });
 
 test("runtime cycles are rejected but explicit and implicitly erased type edges are allowed", (t) => {
-	const root = mkdtempSync(join(tmpdir(), "context-cycles-"));
+	const root = mkdtempSync(join(tmpdir(), "notesoup-cycles-"));
 	t.after(() => rmSync(root, { recursive: true, force: true }));
 	mkdirSync(join(root, "src/boot"), { recursive: true });
 	writeFileSync(join(root, "package.json"), '{"type":"module"}');
@@ -143,20 +144,26 @@ test("AST guard sees every literal module edge, not import-like prose or comment
 	assert.deepEqual(moduleReferences(source), ["type-import", "type-reexport", "reexport", "import-type", "dynamic-import", "import-equals", "require-call"]);
 });
 
-test("the intentional root exports only the Pi extension and its settings-bound factory", () => {
-	assert.deepEqual(Object.keys(entry).sort(), ["createNotesoup", "default"]);
-	assert.equal(entry.default, notesoup);
-	assert.equal(entry.createNotesoup, createNotesoup);
-	assert.equal(typeof entry.createNotesoup(), "function");
+test("the core entry is host-neutral and the Pi plugin entry owns the extension", () => {
+	assert.deepEqual(Object.keys(core).sort(), [
+		"DEFAULT_BOOT_TOOL_NAMES", "NoteError", "createNotesStore", "deriveThresholds", "historyList", "historyRead", "historyWindows",
+		"loadNotesSnapshot", "noteIdentity", "notesList", "notesRead", "notesSearch", "notesUpdate", "notesWrite", "projectHistory",
+		"projectKey", "remainingBudget", "renderBootBlock", "renderProtocolBlock", "selectContinuation", "slugify",
+		"tokenBudgetGuidance", "unavailableNotesSnapshot", "warningPrompt", "WARNING_BODY",
+	].sort(), "the core exports a curated host-neutral surface and no extension");
+	assert.deepEqual(Object.keys(pi).sort(), ["createNotesoup", "default"], "the Pi plugin entry owns the extension");
+	assert.equal(pi.default, notesoup);
+	assert.equal(pi.createNotesoup, createNotesoup);
+	assert.equal(typeof createNotesoup(), "function");
 });
 
-
-test("configured extension source and moved dream CLI are executable current entries", async () => {
+test("the configured extension source and the moved dream CLI are executable current entries", async () => {
 	const root = repository();
 	const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+	assert.deepEqual(manifest.pi.extensions, ["./plugins/pi/index.ts"], "Pi loads the plugin entry from TypeScript source");
 	const entrySource = resolve(root, manifest.pi.extensions[0]);
 	assert.ok(existsSync(entrySource), "the manifest entry exists as TypeScript source (Pi loads it directly; plain Node cannot)");
-	const built = await import(pathToFileURL(resolve(root, "dist/src/index.js")).href);
+	const built = await import(pathToFileURL(resolve(root, "dist/plugins/pi/index.js")).href);
 	const tools: ToolDefinition[] = [];
 	const commands: string[] = [];
 	built.default({
