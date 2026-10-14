@@ -1,7 +1,6 @@
 import type { EngineInterface, On, ProcessRunResult, ToolCallResult, ToolSpec } from "claude-code"
 
 const PREFIX = "mcp__notesoup__"
-const TOOL_NAMES = ["notes_write", "notes_update", "notes_read", "notes_list", "notes_search", "history_list", "history_read", "history_windows"] as const
 const HELPER = `${import.meta.dir}/../dist/claude/helper.js`
 const TIMEOUT_MS = 10_000
 const OUTPUT_LIMIT = 1024 * 1024
@@ -297,7 +296,6 @@ export function register(on: On) {
     if (e.agent_id !== undefined) return next(e)
     if (e.source !== "compact" || state.history?.sessionId !== e.session_id) {
       state.history = { sessionId: e.session_id, transcriptPath: e.transcript_path }
-      state.historyWindowHead = undefined
     } else state.history.transcriptPath = e.transcript_path
     return next(e)
   })
@@ -326,7 +324,6 @@ export function register(on: On) {
     const schemas = await run($, { op: "schemas" })
     if (!schemas.ok || !Array.isArray(schemas.result)) return next(e)
     for (const row of schemas.result as SchemaRow[]) {
-      if (!TOOL_NAMES.includes(row.name as typeof TOOL_NAMES[number])) continue
       const full = await $.tool.register({ name: row.name, description: row.description, inputSchema: row.inputSchema, isDeferred: false } satisfies ToolSpec)
       registered.add(full.tool)
     }

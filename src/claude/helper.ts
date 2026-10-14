@@ -16,16 +16,13 @@ import type { Operation, Outcome } from "../tools/result.js";
 
 const MAX_REQUEST_BYTES = 512 * 1024;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
-const NOTE_NAMES = ["notes_write", "notes_update", "notes_read", "notes_list", "notes_search"] as const;
-const HISTORY_NAMES = ["history_list", "history_read", "history_windows"] as const;
-const TOOL_NAMES = [...NOTE_NAMES, ...HISTORY_NAMES];
 export type ClaudeIdentityInput = Readonly<{ home: string; sessionId: string; cwd: string; agent: string; model: string }>;
 /** One tool call as the hook receives it: the shared text the model reads, and the shared outcome it came from. */
 export type ClaudeToolResult = { text: string; outcome: Outcome<unknown> };
-type BoundOperation<TContext> = {
+type BoundOperation<TContext extends readonly unknown[]> = {
 	readonly description: string;
 	readonly parameters: TSchema;
-	call(params: unknown, context: TContext): Promise<ClaudeToolResult>;
+	call(params: unknown, ...context: TContext): Promise<ClaudeToolResult>;
 };
 
 function identity(input: ClaudeIdentityInput): NotesIdentity {
@@ -44,24 +41,23 @@ function paramProblem(schema: TSchema, params: unknown): string {
 }
 
 /** Bind one shared operation to the identity Claude supplies. Validate untyped Claude parameters against the shared operation schema before execution. */
-function boundOperation<TParams extends TSchema, TData, TContext, TRest extends readonly unknown[]>(
-	operation: Operation<TParams, TData, [TContext, ...TRest]>,
-	...rest: TRest
+function boundOperation<TParams extends TSchema, TData, TContext extends readonly unknown[]>(
+	operation: Operation<TParams, TData, TContext>,
 ): BoundOperation<TContext> {
 	return {
 		description: operation.description,
 		parameters: operation.parameters,
-		async call(params, id) {
+		async call(params, ...context) {
 			// Refuse before the operation can act: a rejected shape never reaches a write.
 			if (!Check(operation.parameters, params)) throw new Error(`invalid ${operation.name} parameters: ${paramProblem(operation.parameters, params)}`);
 			// The same business outcome and the same renderer as the Pi tool; only the envelope differs.
-			const outcome = await operation.execute(params as Static<TParams>, id, ...rest);
+			const outcome = await operation.execute(params as Static<TParams>, ...context);
 			return { text: operation.render(outcome), outcome };
 		},
 	};
 }
 
-const OPERATIONS: Record<typeof NOTE_NAMES[number], BoundOperation<NotesIdentity>> = {
+const OPERATIONS: Record<string, BoundOperation<[NotesIdentity]>> = {
 	notes_write: boundOperation(notesWrite),
 	notes_update: boundOperation(notesUpdate),
 	notes_read: boundOperation(notesRead),
@@ -69,7 +65,11 @@ const OPERATIONS: Record<typeof NOTE_NAMES[number], BoundOperation<NotesIdentity
 	notes_search: boundOperation(notesSearch),
 };
 
-const HISTORY_OPERATIONS = { history_list: boundOperation(historyList), history_read: boundOperation(historyRead) };
+const HISTORY_OPERATIONS: Record<string, BoundOperation<[HistoryProjection, string]>> = {
+	history_list: boundOperation(historyList),
+	history_read: boundOperation(historyRead),
+	history_windows: boundOperation(historyWindows),
+};
 function historySource(value: unknown, sessionId: string): ClaudeHistorySource {
 	if (!value || typeof value !== "object") throw new Error("Claude history transcript_path is unavailable");
 	const source = value as ClaudeHistorySource;
@@ -80,7 +80,7 @@ function historySource(value: unknown, sessionId: string): ClaudeHistorySource {
 export async function dispatch(request: unknown): Promise<unknown> {
 	if (!request || typeof request !== "object" || Array.isArray(request)) throw new Error("malformed request");
 	const value = request as Record<string, unknown>;
-	if (value.op === "schemas") return [...Object.entries(OPERATIONS), ...Object.entries(HISTORY_OPERATIONS), [historyWindows.name, historyWindows] as const].map(([name, operation]) => ({ name, description: operation.description, inputSchema: JSON.parse(JSON.stringify(operation.parameters)) }));
+	if (value.op === "schemas") return [...Object.entries(OPERATIONS), ...Object.entries(HISTORY_OPERATIONS)].map(([name, operation]) => ({ name, description: operation.description, inputSchema: JSON.parse(JSON.stringify(operation.parameters)) }));
 	// The shared reset prose lives here, not in the sandboxed hooks module, so Pi and Claude
 	// cannot drift apart. The hooks module caches one copy per session.
 	if (value.op === "texts") return { warning: CLAUDE_WARNING_PROMPT, continuation: CONTINUATION, wipeSentence: CLAUDE_WIPE_SENTENCE, historyUnavailableSentence: CLAUDE_HISTORY_UNAVAILABLE_SENTENCE };
@@ -88,14 +88,13 @@ export async function dispatch(request: unknown): Promise<unknown> {
 	// read, unvalidated. resolveClaudeLimits guards every field and never throws.
 	if (value.op === "limits") return resolveClaudeLimits(value.facts);
 	if (value.op === "tool") {
-		if (typeof value.tool !== "string" || !(TOOL_NAMES as readonly string[]).includes(value.tool)) throw new Error("unknown tool");
+		if (typeof value.tool !== "string" || (!Object.hasOwn(OPERATIONS, value.tool) && !Object.hasOwn(HISTORY_OPERATIONS, value.tool))) throw new Error("unknown tool");
 		const id = identity(value.identity as ClaudeIdentityInput);
-		if ((HISTORY_NAMES as readonly string[]).includes(value.tool)) {
+		if (Object.hasOwn(HISTORY_OPERATIONS, value.tool)) {
 			const projection = await readClaudeHistory(historySource(value.history, id.sessionId));
-			const operation: BoundOperation<HistoryProjection> = value.tool === "history_windows" ? boundOperation(historyWindows, id.sessionId) : HISTORY_OPERATIONS[value.tool as keyof typeof HISTORY_OPERATIONS];
-			return operation.call(value.params, projection);
+			return HISTORY_OPERATIONS[value.tool]!.call(value.params, projection, id.sessionId);
 		}
-		return OPERATIONS[value.tool as typeof NOTE_NAMES[number]].call(value.params, id);
+		return OPERATIONS[value.tool]!.call(value.params, id);
 	}
 	if (value.op === "history_state") {
 		const id = identity(value.identity as ClaudeIdentityInput);

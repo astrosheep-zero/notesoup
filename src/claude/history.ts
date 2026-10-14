@@ -109,7 +109,6 @@ function bootOrdinal(row: Row, sessionId: string, retained: boolean): number | u
 /** All addresses are allocated on the full first-occurrence log, before branch selection. */
 export function claudeHistoryFromJsonl(text: string, source: Omit<ClaudeHistorySource, "transcriptPath">): HistoryProjection {
 	const nodes = new Map<string, Node>();
-	const versions: Version[] = [];
 	let nextSeq = 1;
 	for (const row of rowsOf(text)) {
 		if (METADATA.has(row.type as string)) continue;
@@ -123,7 +122,6 @@ export function claudeHistoryFromJsonl(text: string, source: Omit<ClaudeHistoryS
 		// of its rewritten version belongs to the new window.
 		const ancestor = boundary(row) && typeof row.logicalParentUuid === "string" ? row.logicalParentUuid : parent(row);
 		const version: Version = { row, ancestorUuid: ancestor, ancestor: ancestor === undefined ? undefined : nodes.get(ancestor)?.latest };
-		versions.push(version);
 		const previous = nodes.get(uuid);
 		if (previous) {
 			// Native resume/compaction rewrites provenance and parent links, not logical identities.
@@ -137,17 +135,14 @@ export function claudeHistoryFromJsonl(text: string, source: Omit<ClaudeHistoryS
 		nextSeq += items.length;
 		nodes.set(uuid, { first: version, latest: version, items });
 	}
-	// Hook notices can reach disk before the attachment they name as parent. Resolve
-	// those forward links to the FIRST eventual version, without changing seq allocation.
-	for (const version of versions) {
-		if (version.ancestorUuid !== undefined && version.ancestor === undefined) version.ancestor = nodes.get(version.ancestorUuid)?.first;
-	}
 	function ordinalOf(version: Version): number {
 		// Persisted history is not limited to the host's newest 4096 inference rows.
 		// Resolve long parent chains iteratively, not with the JavaScript call stack.
 		const chain: Version[] = [], calculating = new Set<Version>();
 		let cursor = version;
 		while (cursor.ordinal === undefined) {
+			// A notice can precede its parent on disk; use that parent's first eventual version.
+			cursor.ancestor ??= cursor.ancestorUuid === undefined ? undefined : nodes.get(cursor.ancestorUuid)?.first;
 			if (calculating.has(cursor)) throw new Error("cyclic Claude transcript ancestry");
 			if (cursor.ancestorUuid !== undefined && cursor.ancestor === undefined) throw new Error(`missing Claude transcript ancestor: ${cursor.ancestorUuid}`);
 			calculating.add(cursor);
