@@ -31,6 +31,7 @@ test("low-budget guidance and warning persist at turn_end, once per active windo
 	const low = context(sessionManager, undefined, { tokens: 165_000, percent: 82.5, contextWindow: 200_000 });
 	const guidance = await runContextHook(captured, low);
 	assert.deepEqual(guidance?.messages.map((message) => (message as { customType?: string }).customType), [GUIDANCE_TYPE], "guidance reaches the crossing request");
+	assert.match(String((guidance?.messages[0] as { content?: string }).content), /About 18616 tokens of room left in your brain\./, "the reminder reports room to the reserve, not to the warning");
 	assert.equal(captured.sent.length, 0, "guidance does not trigger a detached turn");
 	const guidanceBoundary = await commitTurnEndBoundary(captured, sessionManager, low);
 	assert.equal(guidanceBoundary.entries.filter((entry) => entry.type === "custom_message" && entry.customType === GUIDANCE_TYPE).length, 1);
@@ -67,7 +68,7 @@ test("early guidance stays silent and the final warning notifies immediately onc
 	assert.equal(noticesOf(final).filter((notice) => notice.message === "🥣 Brain almost full · taking notes").length, 1, "repeated injection and commit do not notify again");
 });
 
-test("the visible countdown ends at the warning line, clamps at zero, and preserves unknown usage", async () => {
+test("the reported room ends at the hard reserve, clamps at zero, and preserves unknown usage", async () => {
 	const fixture = settingsFixture({
 		reserveTokens: 16_384,
 		project: { compaction: { reserveTokens: 32_768 } },
@@ -79,8 +80,9 @@ test("the visible countdown ends at the warning line, clamps at zero, and preser
 		const ctx = context(sm, undefined, { tokens, contextWindow: 200_000, percent: tokens === null ? null : tokens / 2000 }, true, fixture.cwd, trusted);
 		return resultJson<{ remaining_tokens: number | null }>(await call(captured, "get_context_remaining", {}, ctx)).remaining_tokens;
 	};
-	assert.equal(await readBudget(72_563), 78_285, "the reported 127437 physical tokens exclude reserve plus runway (49152)");
-	assert.equal(await readBudget(167_232), 0, "inside the runway the countdown reads zero");
+	assert.equal(await readBudget(72_563), 94_669, "the reported room excludes only the project reserve (32768)");
+	assert.equal(await readBudget(150_848), 16_384, "the warning line still has the entire runway left");
+	assert.equal(await readBudget(167_232), 0, "the hard reserve reads zero");
 	assert.equal(await readBudget(190_000), 0, "below the reserve, still zero");
 	assert.equal(await readBudget(210_000), 0, "over the physical window");
 	assert.equal(await readBudget(null), null, "unknown usage remains unknown");
@@ -88,7 +90,7 @@ test("the visible countdown ends at the warning line, clamps at zero, and preser
 	assert.equal(resultJson<{ remaining_tokens: number | null }>(await call(captured, "get_context_remaining", {}, absent)).remaining_tokens, null);
 	const untrusted = context(sm, undefined, { tokens: 72_563, contextWindow: 200_000, percent: 36.2815 }, true, fixture.cwd, false);
 	await runHandlers(captured, "session_start", {}, untrusted);
-	assert.equal(await readBudget(72_563, false), 94_669, "session start reloads the global reserve when the project is untrusted");
+	assert.equal(await readBudget(72_563, false), 111_053, "session start reloads the global reserve when the project is untrusted");
 });
 
 test("absent notesoup key or margins reproduce the default reminder threshold at Pi's default reserve", async () => {

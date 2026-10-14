@@ -12,7 +12,7 @@ import type { NoteRow, Scope } from "../src/notes/index.js";
  * The reviewed Design text is what the model actually reads, so the golden copies below pin it
  * character for character: an edit that drifts the wording has to change them too.
  */
-const GOLDEN_GUIDANCE = `About {remaining} tokens left. Then this brain is emptied.
+const GOLDEN_GUIDANCE = `About {remaining} tokens of room left in your brain.
 Your notes don't go anywhere — no wipe reaches the shelves. History has it too, already written down, though digging it back out is on you.
 What lives only in this brain leaves with it.
 A decent moment to put down where you are, while you still remember why.

@@ -235,7 +235,7 @@ test("dsh budget follows configured host reserve, close-out tool runs across ste
 	assert.equal(budget?.reserve, 60000);
 	assert.equal(budget?.warning, 76384);
 	assert.equal(budget?.reminder, 84576);
-	assert.equal(budget?.countdown, Math.max(0, 123616 - budget!.used));
+	assert.equal(budget?.countdown, Math.max(0, 140000 - budget!.used));
 	mock.script.push({ tool: "notes_write", input: { address: "handoff", content: "checkpoint", }, inputTokens: 125000 }, { tool: "empty_brain", input: {} }, { text: "fresh" });
 	await run(agent, "continue");
 	assert.equal(engine.windows.get(agent.session).snapshot.window, 1);

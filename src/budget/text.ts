@@ -81,5 +81,5 @@ export const CLAUDE_WARNING_PROMPT = `${WARNING_BODY}\nWhen the notes are ready,
  * at write time; get_context_remaining remains the live source for the current figure.
  */
 export function tokenBudgetGuidance(remaining: number, wipeTool: string): string {
-	return `${GUIDANCE_OPEN_TAG}\nAbout ${remaining} tokens left. Then this brain is emptied.\nYour notes don't go anywhere — no wipe reaches the shelves. History has it too, already written down, though digging it back out is on you.\nWhat lives only in this brain leaves with it.\nA decent moment to put down where you are, while you still remember why.\nReady when you are: \`${wipeTool}\`.\n${GUIDANCE_CLOSE_TAG}`;
+	return `${GUIDANCE_OPEN_TAG}\nAbout ${remaining} tokens of room left in your brain.\nYour notes don't go anywhere — no wipe reaches the shelves. History has it too, already written down, though digging it back out is on you.\nWhat lives only in this brain leaves with it.\nA decent moment to put down where you are, while you still remember why.\nReady when you are: \`${wipeTool}\`.\n${GUIDANCE_CLOSE_TAG}`;
 }

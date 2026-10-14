@@ -1370,7 +1370,7 @@ test("real AgentSession: injected settings managers own live policy and ignore c
 
 		await Promise.all([first.session.prompt("INJECTED_FIRST"), second.session.prompt("INJECTED_SECOND")]);
 		await Promise.all([first.session.waitForIdle(), second.session.waitForIdle()]);
-		assert.deepEqual(contextRemainingResults(first), [0], "the injected high reserve reaches the warning line in the real tool result");
+		assert.deepEqual(contextRemainingResults(first), [0], "the injected high reserve reaches the hard-reserve line in the real tool result");
 		assert.ok((contextRemainingResults(second)[0] ?? 0) > 0, "the second injected reserve produces a distinct real tool result");
 		assert.equal(resetMarkers(first).length, 1, "enabled injected policy resets at the first session's reserve");
 		assert.equal(resetMarkers(second).length, 0, "disabled injected policy does not inherit the first session's reset decision");

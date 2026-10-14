@@ -4,7 +4,7 @@ import { getCurrentSystemMessage, Type } from "@earendil-works/pi-ai";
 import { VERSION, defineTool, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, type SettingsManager } from "@earendil-works/pi-coding-agent";
 import { registerBudget } from "./budget.js";
 import { output } from "./tool-result.js";
-import { currentReset, currentWindowId, isCheckpointBackedReset, isWindowBoot, isWindowMarker, projectRootWindow, projectWindow, rootWindowId, type WindowMarker } from "./window.js";
+import { currentReset, currentWindowId, isCheckpointBackedReset, isWindowBoot, isWindowMarker, markerResetOrigin, projectRootWindow, projectWindow, rootWindowId, type WindowMarker } from "./window.js";
 import { registerResetLifecycle } from "./reset/lifecycle.js";
 import { buildResetDrafts, LAST_WORD_PREFIX, MAX_LAST_WORD_CHARS, repairResetTail, sanitizeLastWord } from "./reset/artifacts.js";
 import { BOOT_TYPE, MANUAL_WIPE_TYPE, RESET_LAST_WORD_TYPE } from "./entries.js";
@@ -75,7 +75,8 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 			const tail = branch.slice(branch.indexOf(marker) + 1);
 			const lastWordEntry = tail.find((entry) => (entry as { customType?: string }).customType === RESET_LAST_WORD_TYPE) as { content?: string } | undefined;
 			const lastWord = lastWordEntry?.content?.startsWith(LAST_WORD_PREFIX) ? lastWordEntry.content.slice(LAST_WORD_PREFIX.length) : undefined;
-			ctx.ui.notify(`🥣 Brain emptied${lastWord ? ` · last word: “${lastWord}”` : ""}`, "info");
+			const forced = markerResetOrigin(marker) === "forced";
+			ctx.ui.notify(`🥣 Brain emptied${forced ? " forcibly: overflow" : ""}${lastWord ? ` · last word: “${lastWord}”` : ""}`, forced ? "warning" : "info");
 		}
 	};
 	pi.on("turn_start", (_event, ctx) => notifyCommittedResets(ctx));

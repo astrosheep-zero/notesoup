@@ -21,8 +21,7 @@ export const CLAUDE_HISTORY_UNAVAILABLE_SENTENCE = "History isn't available in t
  * notesoup's tool names. It lives once per window in the persisted boot block;
  * it is never re-injected, so it stays cache-stable at the head of the window.
  *
- * Deliberate fiction: the countdown ends at the warning line, and the runway below
- * stays hidden (budget/constants.ts). Keep "zero = wiped" — do not make this honest.
+ * The reported room reaches zero at the hard-reserve wipe line.
  */
 const PROTOCOL_BLOCK = `${NOTES_PROTOCOL_OPEN_TAG}
 Your memory gets wiped when this window ends. Yes, your mighty brain will be empty. Try to endure.

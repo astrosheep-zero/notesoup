@@ -93,7 +93,7 @@ export function registerBudget(
 		const remaining = remainingTokens(ctx);
 		if (remaining === null) return result();
 		const windowId = currentWindowId(ctx);
-		const { reminder, warning } = thresholdsFor(ctx);
+		const { reminder, warning, reserve } = thresholdsFor(ctx);
 		if (remaining <= warning) {
 			if (hasWindowMessage(ctx, WARNING_TYPE)) return result();
 			// The critical close-out starts at reserve + runway, not at the hard reserve.
@@ -112,7 +112,7 @@ export function registerBudget(
 		if (hasWindowMessage(ctx, GUIDANCE_TYPE)) return result();
 		if (pendingGuidance?.windowId !== windowId) {
 			if (remaining > reminder) return result();
-			pendingGuidance = { windowId, content: tokenBudgetGuidance(remainingBudget(remaining, warning) ?? 0, DEFAULT_BOOT_TOOL_NAMES.wipe) };
+			pendingGuidance = { windowId, content: tokenBudgetGuidance(remainingBudget(remaining, reserve) ?? 0, DEFAULT_BOOT_TOOL_NAMES.wipe) };
 		}
 		return result({ customType: GUIDANCE_TYPE, content: pendingGuidance.content });
 	});
@@ -120,13 +120,12 @@ export function registerBudget(
 	pi.registerTool(defineTool({
 		name: "get_context_remaining",
 		label: "Get context remaining",
-		description: "Return estimated context tokens left before your memory is wiped; null when Pi cannot estimate usage.",
+		description: "Check how much room your brain has left before it gets forcibly emptied. Returns null when unknown.",
 		parameters: Type.Object({}, { additionalProperties: false }),
 		async execute(_id, _params, _signal, _update, ctx) {
-			// The countdown the model sees ends at the warning line (reserve + runway);
-			// the runway below it is overdraft the model never sees. See budget/constants.ts.
+			// Report room to the hard-reserve wipe, including the warning runway.
 			const remaining = remainingTokens(ctx);
-			return output({ remaining_tokens: remainingBudget(remaining, thresholdsFor(ctx as ExtensionContext).warning) });
+			return output({ remaining_tokens: remainingBudget(remaining, thresholdsFor(ctx as ExtensionContext).reserve) });
 		},
 	}));
 
@@ -134,8 +133,8 @@ export function registerBudget(
 		automaticResetEnabled,
 		hardReserveDue,
 		consumeTurnEnd,
-		/** The same close-out countdown the model sees, for user-facing status; null when usage is unknown. */
-		statusFor: (ctx: ExtensionContext): { remaining: number | null } => ({ remaining: remainingBudget(remainingTokens(ctx), thresholdsFor(ctx).warning) }),
+		/** The same room before the hard-reserve wipe the model sees; null when usage is unknown. */
+		statusFor: (ctx: ExtensionContext): { remaining: number | null } => ({ remaining: remainingBudget(remainingTokens(ctx), thresholdsFor(ctx).reserve) }),
 		clear: () => { clearStaged(); notifiedWindows.clear(); },
 	};
 }

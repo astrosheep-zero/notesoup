@@ -26,7 +26,7 @@ export function deriveThresholds(reserveTokens: number, margins: NotesoupSetting
 	return { thresholds: { reminder: reserveTokens + reminderMargin, reserve: reserveTokens, warning: reserveTokens + WARNING_RUNWAY_TOKENS }, warnings };
 }
 
-/** Countdown excludes the hidden warning runway; unknown usage stays unknown. */
-export function remainingBudget(remaining: number | null, warning: number): number | null {
-	return remaining === null ? null : Math.max(0, remaining - warning);
+/** Room before the hard-reserve wipe; unknown usage stays unknown. */
+export function remainingBudget(remaining: number | null, reserve: number): number | null {
+	return remaining === null ? null : Math.max(0, remaining - reserve);
 }

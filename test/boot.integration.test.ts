@@ -113,7 +113,7 @@ test("the root boot and reset boot carry durable window identity", async () => {
 	assert.equal(boundary.continue, true);
 	await runHandlers(captured, "turn_start", {}, ctx);
 	await runHandlers(captured, "agent_settled", {}, ctx);
-	assert.equal(noticesOf(ctx).filter((notice) => notice.message.includes("Brain emptied")).length, 1, "the committed reset is announced once");
+	assert.deepEqual(noticesOf(ctx).filter((notice) => notice.message.includes("Brain emptied")), [{ message: "🥣 Brain emptied", type: "info" }], "the committed reset is announced once");
 	const entries = sessionManager.getBranch();
 	const marker = entries.find((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE);
 	assert.ok(marker && marker.type === "custom");
@@ -425,6 +425,15 @@ test("notesoup command toggles future work, /empty-brain schedules a turn-end re
 	assert.match(notices[0]?.message ?? "", /on/);
 });
 
+
+test("forced reset confirmation warns about overflow", async () => {
+	const sessionManager = manager();
+	const captured = makeExtension(sessionManager);
+	const ctx = context(sessionManager, undefined, { tokens: 199_000, contextWindow: 200_000, percent: 99.5 });
+	await commitTurnEndBoundary(captured, sessionManager, ctx);
+	await runHandlers(captured, "agent_settled", {}, ctx);
+	assert.deepEqual(noticesOf(ctx).filter((notice) => notice.message.includes("Brain emptied")), [{ message: "🥣 Brain emptied forcibly: overflow", type: "warning" }]);
+});
 
 test("committed reset confirmation survives later work while repair refuses that suffix", async () => {
 	const sessionManager = manager();

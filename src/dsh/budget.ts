@@ -31,5 +31,5 @@ export async function measureBudget(ctx: Context, agent: CompactionAgentContext,
 		if (event.type === "user/message" && event.data.source.kind === "compact-checkpoint") { used = measured.surfaceTokens + estimateToolsTokens(agent.session.requestHeader()); break; }
 	}
 	const remaining = Math.max(0, contextWindow - used);
-	return { used, contextWindow, reserve, resetAt, remaining, countdown: remainingBudget(remaining, thresholds.warning)!, warning: thresholds.warning, reminder: thresholds.reminder };
+	return { used, contextWindow, reserve, resetAt, remaining, countdown: remainingBudget(remaining, reserve)!, warning: thresholds.warning, reminder: thresholds.reminder };
 }

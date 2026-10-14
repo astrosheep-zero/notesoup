@@ -93,7 +93,7 @@ export function registerTools(ctx: Context, engine: NotesoupCompactionEngine): v
 	}));
 	ctx.tools.register(defineTool({
 		name: "get_context_remaining",
-		description: "Estimated tokens left before the notes close-out warning; null when dsh has no model contextWindow.",
+		description: "Check how much room your brain has left before it gets forcibly emptied. Returns null when unknown.",
 		parameters: {},
 		output: { schema: { type: "object", properties: { remaining_tokens: { oneOf: [{ type: "integer" }, { type: "null" }], required: true } }, additionalProperties: false }, render: (_args, value) => [{ type: "text", text: JSON.stringify(value) }] },
 		async execute(_args, exec) {

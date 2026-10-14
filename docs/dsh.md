@@ -34,7 +34,7 @@ warning = reserve + 16384
 reminder = reserve + reminderMarginTokens
 ```
 
-The defaults are `auto: true`, `thresholdRatio: 0.8`, `headroomTokens: 65536`, and `reminderMarginTokens: 24576`. For the example's **200000/8192/0.7/32768**, resetAt is **140000**, reserve **60000**, warning **76384** remaining, and reminder **84576** remaining. `get_context_remaining` subtracts the warning line and clamps at zero. Missing model capacity returns null. A profile with no positive reset budget fails with `BUDGET_CONFIG` and the numbers to fix. No independent percentage cutoff is added by notesoup.
+The defaults are `auto: true`, `thresholdRatio: 0.8`, `headroomTokens: 65536`, and `reminderMarginTokens: 24576`. For the example's **200000/8192/0.7/32768**, resetAt is **140000**, reserve **60000**, warning **76384** remaining, and reminder **84576** remaining. `get_context_remaining` and the numeric reminder report room to resetAt: physical remaining minus reserve, clamped at zero. The warning runway is included. Missing model capacity returns null. A profile with no positive reset budget fails with `BUDGET_CONFIG` and the numbers to fix. No independent percentage cutoff is added by notesoup.
 
 The adapter uses `tokenMeter.measure`, model context from `resolveModelInfo`, and the mounted engine's resolved `config`. Alpha.2 keeps an old provider-usage anchor across surface replacement; until the fresh window has a response, notesoup uses the meter's current `surfaceTokens` plus its public tool-schema estimator instead of that stale anchor.
 
