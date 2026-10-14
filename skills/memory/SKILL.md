@@ -24,6 +24,7 @@ The address decides who a note belongs to and how long it lasts.
 | `@self/<path>` | self note | your reminders; yours alone if you have a name, shared by everyone nameless |
 | `@model/<path>` | model note | what applies to this model only |
 | `@projects/<name>/<path>` | named project, read-only | discover names and root paths with `notes_list` glob `@projects/*/**` |
+| `@sessions/<id>/<path>` | named session, read-only | recover earlier task state; discover with glob `@sessions/*/**` |
 
 When notes conflict, the one most relevant to what you're doing applies. If that doesn't settle it, judge the case.
 
@@ -36,6 +37,8 @@ Any other `@` prefix is refused. A path is relative and `/`-separated, with no e
 Write only what git and history cannot give back. Crumple notes that are no longer true; a stale note is worse than none.
 
 ## Finding things again
+
+For list/search, omit `glob` or use the collection alias `@default` for this session and current shared homes. Use `**` for all homes or `@sessions/*/**` for all sessions. Results carry readable note addresses; `@default` itself is not a read/write address.
 
 - **A note**: `notes_list` with a `glob` when you know roughly where it lives, `notes_search` when you know a phrase; then `notes_read` the address.
 - **Something that happened**: `history_list` to browse or search this session's events; `history_read` the seq for the whole event.

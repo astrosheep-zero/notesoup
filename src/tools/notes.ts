@@ -14,8 +14,9 @@ const ORIGIN = Type.Optional(Type.Union([...ORIGIN_VALUES], {
 const CRUMPLED_PARAMETER = Type.Optional(Type.Boolean({ description: "(optional) true = crumple (hide from list and search, still readable); false = restore." }));
 const CRUMPLED_LIST_PARAMETER = Type.Optional(Type.Boolean({ description: "(optional) true = list only crumpled notes." }));
 const FILE_LIMIT_PARAMETER = Type.Optional(Type.Integer({ minimum: 1, description: "(optional, default as many as fit) Max notes." }));
-const GLOB_PARAMETER = nullableString("(optional) Glob over full addresses.");
-const ADDRESS_DESCRIPTION = "Addresses: a bare path is this session's note; `@project/`, `@human/`, `@self/`, `@model/` are durable homes; `@projects/<name>/<path>` reads a named project (discover with glob `@projects/*/**`). Not file paths: never pass them to file tools.";
+const GLOB_PARAMETER = nullableString("(optional) Glob over full addresses, or @default for the current homes.");
+const QUERY_HOMES_DESCRIPTION = "Omit `glob` or use `@default` for this session and current shared homes; `**` searches all homes, `@sessions/*/**` searches all sessions.";
+const ADDRESS_DESCRIPTION = "Addresses: a bare path is this session's note; `@project/`, `@human/`, `@self/`, `@model/` are durable homes; `@projects/<name>/<path>` and `@sessions/<id>/<path>` read named project and session notes (read-only). Not file paths: never pass them to file tools.";
 
 /**
  * Typed refusal. Every fact a caller needs is already in the message; there is no separate context.
@@ -311,7 +312,7 @@ function renderListData(data: NotesListData): string {
 
 export const notesList = {
 	name: "notes_list", label: "Notes list",
-	description: `List notes in this session and the four @ homes, newest first. Not pageable; \`more\` counts the rest. ${ADDRESS_DESCRIPTION}`,
+	description: `List notes, newest first. Not pageable; \`more\` counts the rest. ${QUERY_HOMES_DESCRIPTION} ${ADDRESS_DESCRIPTION}`,
 	parameters: notesListParameters, outputSchema: resultSchema(NotesListDataSchema),
 	async execute(params: Static<typeof notesListParameters>, identity: NotesIdentity): Promise<Outcome<NotesListData>> {
 		try {
@@ -358,7 +359,7 @@ function fitSearchFile(file: SearchFile, fits: (candidate: SearchFile) => boolea
 
 export const notesSearch = {
 	name: "notes_search", label: "Notes search",
-	description: `Search note bodies for literal text, case-insensitive. Without a query, lists notes with no match lines. Returns matching lines with offsets for \`notes_read\`. Not pageable; \`more\` counts the rest. ${ADDRESS_DESCRIPTION}`,
+	description: `Search note bodies for literal text, case-insensitive. Without a query, lists notes with no match lines. Returns matching lines with offsets for \`notes_read\`. Not pageable; \`more\` counts the rest. ${QUERY_HOMES_DESCRIPTION} ${ADDRESS_DESCRIPTION}`,
 	parameters: notesSearchParameters, outputSchema: resultSchema(NotesSearchDataSchema),
 	async execute(params: Static<typeof notesSearchParameters>, identity: NotesIdentity): Promise<Outcome<NotesSearchData>> {
 		try {

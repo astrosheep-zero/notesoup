@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { SLUG_PATTERN } from "./paths.js";
+import { isSessionId, SLUG_PATTERN } from "./paths.js";
 
 /** Explicit, host-neutral identity for one notes store. */
 export type NotesIdentity = Readonly<{
@@ -15,12 +15,6 @@ function requireString(field: string, value: unknown): string {
 	return value;
 }
 
-function assertDirectoryComponent(field: string, value: string): void {
-	if (value === "." || value === ".." || /[\\/\0:]/.test(value)) {
-		throw new TypeError(`notes context ${field} must be a safe single directory component`);
-	}
-}
-
 /** Validate and snapshot caller identity; no global or environment defaults are consulted. */
 export function snapshotNotesIdentity(value: NotesIdentity): NotesIdentity {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new TypeError("notes context must be a plain object");
@@ -29,7 +23,7 @@ export function snapshotNotesIdentity(value: NotesIdentity): NotesIdentity {
 	const projectKey = requireString("projectKey", value.projectKey);
 	const agent = requireString("agent", value.agent);
 	const model = requireString("model", value.model);
-	assertDirectoryComponent("sessionId", sessionId);
+	if (!isSessionId(sessionId)) throw new TypeError("notes context sessionId must be a safe single directory component");
 	if (!SLUG_PATTERN.test(projectKey)) throw new TypeError("notes context projectKey must be a canonical lowercase slug");
 	if (!SLUG_PATTERN.test(agent)) throw new TypeError("notes context agent must be a canonical lowercase slug");
 	if (!SLUG_PATTERN.test(model)) throw new TypeError("notes context model must be a canonical lowercase slug");

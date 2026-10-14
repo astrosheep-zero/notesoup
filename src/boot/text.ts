@@ -47,6 +47,7 @@ An address decides who the note belongs to — and how long it is meant to last.
 - \`@self/<path>\` — yours. It follows you, not them. Reminders, grudges, who owes you a shoe, whatever. Got a name? Private. No name? Then it gets passed around every nameless nobody out there. Strangers. Reading your grudges. Sleep tight~
 - \`@model/<path>\` — different brains get different notes: big brains, small brains, careful ones, careless ones. They don't share homework. When a fallback swaps brains mid-window, the notebook swaps too.
 - \`@projects/<name>/<path>\` — read-only named project notes; discover names and root paths with \`notes_list\` glob \`@projects/*/**\`.
+- \`@sessions/<id>/<path>\` — read-only notes from a named session; find them with glob \`@sessions/*/**\`.
 
 Notes fighting?! HAH! Let them brawl!
 Whichever one is actually about what you're doing wins.

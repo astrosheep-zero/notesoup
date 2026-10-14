@@ -8,6 +8,11 @@ export type Scope = "session" | "project" | "human" | "agent" | "model";
 /** The one legal home-name shape: lowercase [a-z0-9-] runs separated by single dashes. */
 export const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+/** Session identities use the same single-directory-component grammar as NotesIdentity, not slugs. */
+export function isSessionId(value: string): boolean {
+	return value.length > 0 && value !== "." && value !== ".." && !/[\\/\0:]/.test(value);
+}
+
 /** Slugify a caller-declared identity; identity is never inferred from note content. */
 export function slugify(value: string): string {
 	const slug = value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
@@ -35,19 +40,20 @@ export function sessionHomesRoot(home: string): string {
 /** Absolute directory holding one scope's notes. The identity's home is already resolved. */
 export function scopeDir(scope: Scope, identity: NotesIdentity, who?: string): string {
 	if (!["session", "project", "human", "agent", "model"].includes(scope)) throw new TypeError("invalid notes scope");
-	if (who !== undefined && (scope !== "project" && scope !== "agent" && scope !== "model" || !SLUG_PATTERN.test(who))) throw new TypeError("who must be a canonical project/agent/model slug");
+	if (who !== undefined && (scope === "session" ? !isSessionId(who) : scope === "human" || !SLUG_PATTERN.test(who))) throw new TypeError("who must be a session directory component or canonical project/agent/model slug");
 	if (scope === "human") return join(identity.home, "human");
 	if (scope === "project") return join(identity.home, "project", who ?? identity.projectKey);
 	if (scope === "agent") return join(identity.home, "agents", who ?? identity.agent);
 	if (scope === "model") return join(identity.home, "models", who ?? identity.model);
-	return join(sessionHomesRoot(identity.home), identity.sessionId);
+	return join(sessionHomesRoot(identity.home), who ?? identity.sessionId);
 }
 
-/** Every existing home directory of the agents/ or models/ namespace, as names. */
-export async function namespaceSlugs(namespace: "agents" | "models", home: string): Promise<string[]> {
+/** Every addressable home directory in a namespace; sessions keep their original identity spelling. */
+export async function namespaceSlugs(namespace: "sessions" | "project" | "agents" | "models", home: string): Promise<string[]> {
+	const root = namespace === "sessions" ? sessionHomesRoot(home) : join(home, namespace);
 	try {
-		return (await readdir(join(home, namespace), { withFileTypes: true }))
-			.filter((entry) => entry.isDirectory())
+		return (await readdir(root, { withFileTypes: true }))
+			.filter((entry) => entry.isDirectory() && (namespace === "sessions" ? isSessionId(entry.name) : SLUG_PATTERN.test(entry.name)))
 			.map((entry) => entry.name)
 			.sort();
 	} catch (error) {

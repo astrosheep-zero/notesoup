@@ -9,8 +9,8 @@ import { snapshotNotesIdentity, type NotesIdentity } from "./identity.js";
 import { NoteError } from "./errors.js";
 import { MAX_NOTE_BYTES, MAX_NOTE_PATH_BYTES } from "./constants.js";
 import { isOrigin, localIso, parseNote, serializeNote, stripLeadingFrontmatter, type NoteMeta, type Origin } from "./frontmatter.js";
-import { namespaceSlugs, noteFileName, physicalPath, scopeDir, SLUG_PATTERN, type Scope } from "./paths.js";
-import { projectHomes, projectReceipt, type ProjectReceipt } from "./project-home.js";
+import { namespaceSlugs, noteFileName, physicalPath, scopeDir, isSessionId, SLUG_PATTERN, type Scope } from "./paths.js";
+import { projectReceipt, type ProjectReceipt } from "./project-home.js";
 
 export type { NoteMeta, Origin, Scope };
 
@@ -28,7 +28,10 @@ export type NoteSearchRow = { address: string; scope: Scope; path: string; meta:
 export type EditOperation = { oldText: string; newText: string };
 export type WriteOptions = { origin?: Origin };
 export type EditOptions = { origin?: Origin; crumpled?: boolean; replaceAll?: boolean; renameTo?: string };
-export type NotesQuery = { glob?: string; crumpled?: boolean };
+/** Omitted/null/empty glob or bare @default selects current homes; explicit globs match full addresses.
+ * Only the current session also matches its bare-path alias (e.g. *.md or deep/**).
+ */
+export type NotesQuery = { glob?: string | null; crumpled?: boolean };
 /** A read exposes metadata and the pure body; the serialized frontmatter is never part of the body. */
 export type NoteReadResult = { meta: NoteMeta; body: string; resolvedScope: Scope };
 export type NoteWriteResult = { meta: NoteMeta; outcome: "created" | "overwrote" | "uncrumpled" };
@@ -115,21 +118,55 @@ async function walkMarkdown(dir: string, base = dir): Promise<string[]> {
 /** Which homes one call iterates; reserved heads narrow traversal before any file is read. */
 type HomeRef = { scope: Scope; who?: string };
 
-async function homesForPattern(pattern: string | undefined, identity: NotesIdentity): Promise<HomeRef[] | undefined> {
-	if (!pattern || !pattern.startsWith("@")) return undefined;
-	const [rawHead, ...tail] = pattern.split("/");
-	const head = tail.length === 0 ? undefined : HOME_HEADS.get(rawHead!.slice(1)); // a bare "@projects" names no homes
-	if (head === undefined) return [];
-	if (head.home === undefined) return [{ scope: head.scope }];
-	const name = tail[0];
-	if (name !== undefined && name.length > 0 && !/[*?]/.test(name)) return [{ scope: head.scope, who: assertWho(name) }];
-	const names = head.home === "project" ? projectHomes(identity.home).map(home => home.name) : await namespaceSlugs(head.home, identity.home);
-	return names.map((who) => ({ scope: head.scope, who }));
+async function homesForPattern(pattern: string | undefined, identity: NotesIdentity, status?: NoteQueryStatus): Promise<HomeRef[]> {
+	if (pattern === undefined) return SCOPE_ORDER.map((scope) => ({ scope }));
+
+	const families = [
+		{ scope: "session", home: "sessions", current: identity.sessionId },
+		{ scope: "project", home: "project", current: identity.projectKey },
+		{ scope: "agent", home: "agents", current: identity.agent },
+		{ scope: "model", home: "models", current: identity.model },
+	] as const;
+	async function enumerate(family: typeof families[number], relative: boolean): Promise<HomeRef[]> {
+		let names: string[];
+		try {
+			names = await namespaceSlugs(family.home, identity.home);
+		} catch (error) {
+			if (!status || !isFilesystemError(error)) throw error;
+			status.homesUnavailable.push(`@${family.home === "project" ? "projects" : family.home}`);
+			return [];
+		}
+		// Include the current home even when missing or a non-directory, and only once.
+		return [...new Set([family.current, ...names])].map((who) => ({
+			scope: family.scope,
+			who: relative && who === family.current ? undefined : who,
+		}));
+	}
+
+	if (pattern.startsWith("@")) {
+		const [rawHead, ...tail] = pattern.slice(1).split("/");
+		if (!/[*?]/.test(rawHead!)) {
+			const head = HOME_HEADS.get(rawHead!);
+			if (head === undefined || tail.length === 0) return [];
+			if (head.home === undefined) return [{ scope: head.scope }];
+			const name = tail[0];
+			if (name && !/[*?]/.test(name)) return [{ scope: head.scope, who: assertWho(name, head.scope) }];
+			return enumerate(families.find((family) => family.home === head.home)!, false);
+		}
+	}
+	// Unreserved patterns see the full universe, not just the current identities.
+	const homes: HomeRef[] = [];
+	for (const scope of SCOPE_ORDER) {
+		if (scope === "human") homes.push({ scope });
+		else homes.push(...await enumerate(families.find((family) => family.scope === scope)!, true));
+	}
+	return homes;
 }
 
 /** Relative pattern heads resolve to canonical names, so they match canonical addresses. */
 function normalizePattern(pattern: string | undefined, identity: NotesIdentity): string | undefined {
 	if (!pattern) return pattern;
+	if (pattern.startsWith("@project/")) return `@projects/${identity.projectKey}/${pattern.slice("@project/".length)}`;
 	if (pattern.startsWith("@self/")) return `@agents/${identity.agent}/${pattern.slice("@self/".length)}`;
 	if (pattern.startsWith("@model/")) return `@models/${identity.model}/${pattern.slice("@model/".length)}`;
 	return pattern;
@@ -140,9 +177,9 @@ function assertOrigin(value: unknown): Origin {
 	return value;
 }
 
-function assertWho(value: unknown): string {
-	if (typeof value !== "string" || !SLUG_PATTERN.test(value)) {
-		throw new NoteError("invalid_scope", "who must be a canonical lowercase slug");
+function assertWho(value: unknown, scope: Scope): string {
+	if (typeof value !== "string" || !(scope === "session" ? isSessionId(value) : SLUG_PATTERN.test(value))) {
+		throw new NoteError("invalid_scope", scope === "session" ? "session id must be a safe single directory component" : "who must be a canonical lowercase slug");
 	}
 	return value;
 }
@@ -216,9 +253,10 @@ function frontmatterOf(meta: NoteMeta): string {
 	return serializeNote(meta, "").slice(0, -2);
 }
 
-/** Explicit project homes are always read-only; agent/model homes allow their owner. */
+/** Explicit session/project homes are always read-only; agent/model homes allow their owner. */
 function assertWritableHome(scope: Scope, who: string | undefined, identity: NotesIdentity): void {
 	if (who === undefined) return;
+	if (scope === "session") throw new NoteError("invalid_scope", `@sessions/${who}/ is read-only; use a bare path to write to this session.`);
 	if (scope === "project") throw new NoteError("invalid_scope", `@projects/${who}/ is read-only; use @project/ to write to your own project.`);
 	const current = scope === "agent" ? identity.agent : identity.model;
 	if (who === current) return;
@@ -275,7 +313,7 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 			if (raw === undefined) return undefined;
 			const now = Date.now();
 			const parsed = parseNote(raw, now);
-			if (scope === "project" && destination.who !== undefined) return { meta: { ...parsed.meta, scope }, body: parsed.body, resolvedScope: scope };
+			if ((scope === "project" || scope === "session") && destination.who !== undefined) return { meta: { ...parsed.meta, scope }, body: parsed.body, resolvedScope: scope };
 			// A read records its own access, exactly as a write records an edit.
 			const meta: NoteMeta = { ...parsed.meta, scope, lastAccessed: now, accessCount: (typeof parsed.meta.accessCount === "number" ? parsed.meta.accessCount : 0) + 1 };
 			await atomicWrite(path, serializeNote(meta, parsed.body));
@@ -367,17 +405,11 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 	}
 
 	async function* scan(options: NotesQuery, status?: NoteQueryStatus): AsyncGenerator<Omit<NoteRow, "sizeBytes">> {
-		const pattern = normalizePattern(options.glob, identity);
-		const normalized = assertGlobPattern(pattern);
+		const glob = assertGlobPattern(options.glob);
+		const pattern = glob === "@default" ? undefined : glob;
+		const normalized = normalizePattern(pattern, identity);
 		const matcher = normalized === undefined ? undefined : globToRegExp(normalized);
-		let homes: HomeRef[];
-		try {
-			homes = await homesForPattern(normalized, identity) ?? SCOPE_ORDER.map((scope) => ({ scope }));
-		} catch (error) {
-			if (!status || !isFilesystemError(error) || !/^@(projects|agents|models)\//.test(options.glob ?? "")) throw error;
-			status.homesUnavailable.push(options.glob!.split("/")[0]!);
-			return;
-		}
+		const homes = await homesForPattern(pattern, identity, status);
 		for (const home of homes) {
 			const scope = home.scope;
 			const root = scopeDir(scope, identity, home.who);
@@ -390,7 +422,8 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 				continue;
 			}
 			for (const path of paths) {
-				if (matcher && !matcher.test(canonicalAddressFor(identity, scope, path, home.who))) continue;
+				if (matcher && !matcher.test(canonicalAddressFor(identity, scope, path, home.who))
+					&& !(scope === "session" && home.who === undefined && !pattern!.startsWith("@") && matcher.test(path))) continue;
 				const address = addressFor(identity, scope, path, home.who);
 				const fullPath = join(root, path);
 				let raw: string;

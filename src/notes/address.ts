@@ -1,17 +1,18 @@
 import { NoteError, shown } from "./errors.js";
 import type { NotesIdentity } from "./identity.js";
-import { assertVirtualPath, SLUG_PATTERN, type Scope } from "./paths.js";
+import { assertVirtualPath, isSessionId, SLUG_PATTERN, type Scope } from "./paths.js";
 
 export type NoteAddress = { scope: Scope; path: string; who?: string };
 
-export const ADDRESS_FORMS = "Use <path> for this session, or @project/, @human/, @self/, or @model/ followed by a path; @projects/<name>/<path> reads a named project home.";
+export const ADDRESS_FORMS = "Use <path> for this session, or @project/, @human/, @self/, or @model/ followed by a path; @projects/<name>/<path> and @sessions/<id>/<path> read named homes.";
 
 /** The one home-head vocabulary: the scope each public `@head` names, and the home directory family a head with `home` lists. */
-export const HOME_HEADS: ReadonlyMap<string, { readonly scope: Scope; readonly home?: "project" | "agents" | "models" }> = new Map([
+export const HOME_HEADS: ReadonlyMap<string, { readonly scope: Scope; readonly home?: "sessions" | "project" | "agents" | "models" }> = new Map([
 	["project", { scope: "project" }],
 	["human", { scope: "human" }],
 	["self", { scope: "agent" }],
 	["model", { scope: "model" }],
+	["sessions", { scope: "session", home: "sessions" }],
 	["projects", { scope: "project", home: "project" }],
 	["agents", { scope: "agent", home: "agents" }],
 	["models", { scope: "model", home: "models" }],
@@ -55,7 +56,7 @@ export function assertGlobPattern(value: unknown): string | undefined {
 
 /**
  * Decode one public note address into its physical home and virtual path. @self and @model
- * are relative; explicit projects/agents/models addresses always name one canonical slug.
+ * are relative; projects/agents/models name a canonical slug, sessions a directory component.
  */
 export function assertAddress(value: unknown): NoteAddress {
 	if (typeof value !== "string") throw new NoteError("invalid_address", `${shown(value)} isn't a note address. ${ADDRESS_FORMS}`);
@@ -70,7 +71,7 @@ export function assertAddress(value: unknown): NoteAddress {
 		if (head.home === undefined) path = tail.join("/");
 		else {
 			who = tail[0] ?? "";
-			if (!SLUG_PATTERN.test(who)) throw new NoteError("invalid_address", `${shown(value)} isn't a note address. ${ADDRESS_FORMS}`);
+			if (!(scope === "session" ? isSessionId(who) : SLUG_PATTERN.test(who))) throw new NoteError("invalid_address", `${shown(value)} isn't a note address. ${ADDRESS_FORMS}`);
 			path = tail.slice(1).join("/");
 		}
 		if (path === "" && scope !== "agent" && scope !== "model") throw new NoteError("invalid_address", `${shown(value)} isn't a note address. ${ADDRESS_FORMS}`);
@@ -82,8 +83,8 @@ export function assertAddress(value: unknown): NoteAddress {
 
 /** Render a virtual path in its one unambiguous address form, used to match patterns. */
 export function canonicalAddressFor(identity: NotesIdentity, scope: Scope, path: string, who?: string): string {
-	if (scope === "session") return path;
-	if (scope === "project") return who === undefined ? `@project/${path}` : `@projects/${who}/${path}`;
+	if (scope === "session") return `@sessions/${who ?? identity.sessionId}/${path}`;
+	if (scope === "project") return `@projects/${who ?? identity.projectKey}/${path}`;
 	if (scope === "human") return `@human/${path}`;
 	if (scope === "agent") return `@agents/${who ?? identity.agent}/${path}`;
 	return `@models/${who ?? identity.model}/${path}`;
@@ -91,9 +92,12 @@ export function canonicalAddressFor(identity: NotesIdentity, scope: Scope, path:
 
 /**
  * Render the address a caller sees. The current agent and model homes read as @self/ and
- * @model/ so ordinary sessions are not taught explicit ids; only other homes (dream) name one.
+ * @model/. Current session and project homes retain bare paths and @project/; explicitly
+ * named session/project homes keep their read-only addresses, even for the current identity.
  */
 export function addressFor(identity: NotesIdentity, scope: Scope, path: string, who?: string): string {
+	if (scope === "session" && who === undefined) return path;
+	if (scope === "project" && who === undefined) return `@project/${path}`;
 	if (scope === "agent" && (who === undefined || who === identity.agent)) return `@self/${path}`;
 	if (scope === "model" && (who === undefined || who === identity.model)) return `@model/${path}`;
 	return canonicalAddressFor(identity, scope, path, who);
