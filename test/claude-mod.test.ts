@@ -18,8 +18,6 @@ import { context, manager } from "./helpers/extension.js";
 
 const identity = { home: mkdtempSync(join(tmpdir(), "claude-mod-")), sessionId: "session", cwd: process.cwd(), agent: "claude", model: "claude" };
 
-type ToolOutcome = { ok: boolean; error?: { code: string; message: string } };
-
 type HookToolSpec = { name: string; description: string; inputSchema: Record<string, unknown>; isDeferred?: boolean };
 
 /** One engine handler: it receives the engine, the event, and the rest of the chain. */
@@ -129,14 +127,14 @@ test("Claude helper exposes the eight shared notes/history schemas", async () =>
   assert.ok(schemas.every((schema) => schema.description.length > 20 && schema.inputSchema.type === "object"));
 });
 
-test("Claude helper delivers the shared text and the shared outcome it came from", async () => {
+test("Claude helper delivers only shared rendered text and success", async () => {
   const write = await callTool("notes_write", { address: "checkpoint.md", content: "hello" });
-  assert.equal((write.outcome as ToolOutcome).ok, true);
+  assert.equal(write.ok, true);
   assert.match(write.text, /checkpoint\.md/);
   assert.equal(write.text.includes("READ WINDOW"), false, "Claude reads the same presentation as Pi");
   const missing = await callTool("notes_read", { address: "absent.md" });
-  assert.equal((missing.outcome as ToolOutcome).ok, false);
-  assert.equal((missing.outcome as Required<ToolOutcome>).error?.code, "not_found");
+  assert.equal(missing.ok, false);
+  assert.deepEqual(Object.keys(missing).sort(), ["ok", "text"]);
   assert.match(missing.text, /^error: not_found: /, "the refusal renders as the shared error line");
 });
 
@@ -152,7 +150,7 @@ test("Claude helper rejects malformed or unknown requests", async () => {
 test("Claude helper refuses schema-invalid parameters before any operation runs", async () => {
   const address = "boundary.md";
   const written = await callTool("notes_write", { address, content: "boundary body" });
-  assert.equal((written.outcome as ToolOutcome).ok, true, "the fixture note exists before anything is refused");
+  assert.equal(written.ok, true, "the fixture note exists before anything is refused");
 
   const cases: Array<{ name: string; params: Record<string, unknown> }> = [
     { name: "a string offset", params: { address, offset_chars: "0" } },
@@ -170,11 +168,11 @@ test("Claude helper refuses schema-invalid parameters before any operation runs"
   // Refusal happens before execute: a rejected mutation leaves nothing on disk.
   await assert.rejects(callTool("notes_write", { address: "rejected.md", content: 42 }), /invalid notes_write parameters/);
   const absent = await callTool("notes_read", { address: "rejected.md" });
-  assert.equal((absent.outcome as ToolOutcome).ok, false);
-  assert.equal((absent.outcome as Required<ToolOutcome>).error?.code, "not_found", "the refused write never reached the store");
+  assert.equal(absent.ok, false);
+  assert.match(absent.text, /^error: not_found: /, "the refused write never reached the store");
 
   const valid = await callTool("notes_read", { address, offset_chars: 0, max_chars: 8 });
-  assert.equal((valid.outcome as ToolOutcome).ok, true, "a schema-valid window still reads");
+  assert.equal(valid.ok, true, "a schema-valid window still reads");
   assert.match(valid.text, /^boundary\.md/);
 });
 

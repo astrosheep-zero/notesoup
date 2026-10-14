@@ -4,10 +4,10 @@ import { failure, success, type Outcome } from "../tools/result.js";
 import { prefixFit, TOOL_OUTPUT_LIMIT } from "../tools/output.js";
 import { earliestMatchOffsetChars } from "../text-match.js";
 import { InvalidQueryError, searchQueries } from "../tools/schema.js";
-import { allItems, eventDocument, filteredItems, inSelection, visibleItem, HistoryFoldedRowSchema, HistoryPageItemSchema, MAX_FOLD_TOOL_NAMES, MAX_FOLD_TOOL_NAME_CHARS, type HistoryEvent, type HistoryFilter, type HistoryFoldedRow, type HistoryPageItem, type HistoryProjection } from "./history.js";
+import { eventDocument, filteredItems, visibleItem, HistoryFoldedRowSchema, HistoryPageItemSchema, MAX_FOLD_TOOL_NAMES, MAX_FOLD_TOOL_NAME_CHARS, type HistoryEvent, type HistoryFilter, type HistoryFoldedRow, type HistoryPageItem, type HistoryProjection } from "./history.js";
 
-type PageRow = HistoryPageItem | HistoryFoldedRow;
-type Candidate = { event: HistoryEvent; matchOffset?: number; preview?: HistoryPageItem };
+type Candidate = { event: HistoryEvent; matchOffset?: number; preview?: HistoryPageItem; before?: HistoryFoldedRow };
+type PreparedSelection = { candidates: Candidate[]; tail?: HistoryFoldedRow };
 
 /** Which end of one selection `limit` is taken from; page items always come back ascending. */
 export type HistoryOrder = "newest" | "oldest";
@@ -83,21 +83,11 @@ function truncateHistoryItem(item: HistoryPageItem, fits: (candidate: HistoryPag
 	return fits(withoutName) ? withoutName : shrinkContent(withoutName);
 }
 
-function isFoldableEvent(event: HistoryEvent): boolean {
-	return event.role === "tool" || event.role === "context";
-}
-
-/** Only a call without roles or query folds tool/context runs. */
-function foldsRuns(params: HistorySelection): boolean {
-	return !params.roles && params.query === undefined;
-}
-
-/** Folded counts stay exact even when some distinct tool names must be omitted. */
-function foldedRuns(events: HistoryEvent[]): HistoryFoldedRow[] {
-	if (events.length === 0) return [];
-	const sorted = [...events].sort((a, b) => a.seq - b.seq);
+/** Summarize one already ordered gap; omitted tool names never change its exact count. */
+function foldedRun(events: HistoryEvent[]): HistoryFoldedRow | undefined {
+	if (events.length === 0) return undefined;
 	const counts = new Map<string, number>();
-	for (const event of sorted) {
+	for (const event of events) {
 		if (event.role !== "tool") continue;
 		const name = event.execution?.name ?? "unknown";
 		counts.set(name, (counts.get(name) ?? 0) + 1);
@@ -105,64 +95,43 @@ function foldedRuns(events: HistoryEvent[]): HistoryFoldedRow[] {
 	const entries = [...counts].filter(([name]) => name.length <= MAX_FOLD_TOOL_NAME_CHARS).slice(0, MAX_FOLD_TOOL_NAMES);
 	// fromEntries preserves __proto__ as an ordinary key without mutating the prototype.
 	const tools = Object.fromEntries(entries);
-	return [{ folded: true, first_seq: sorted[0]!.seq, last_seq: sorted.at(-1)!.seq, count: sorted.length, tools }];
+	return { folded: true, first_seq: events[0]!.seq, last_seq: events.at(-1)!.seq, count: events.length, tools };
 }
 
-/** A cursor exists only when the same selection still has a visible event past that end. */
-function pageCursors(vis: HistoryEvent[], selected: HistoryEvent[], beforeSeq: number | undefined, afterSeq: number | undefined): Pick<HistoryPage, "page_older" | "page_newer"> {
-	if (selected.length === 0) return { page_older: null, page_newer: null };
-	const lower = afterSeq ?? 0;
-	const upper = beforeSeq ?? Number.POSITIVE_INFINITY;
-	// Selected events are in seq order.
-	const first = selected[0]!.seq;
-	const last = selected.at(-1)!.seq;
+/** Filter and order once. Conversation candidates own the folded gap immediately before them. */
+function prepareSelection(projection: HistoryProjection, params: HistorySelection): PreparedSelection {
+	const folds = !params.roles && params.query === undefined;
+	const candidates: Candidate[] = [];
+	let run: HistoryEvent[] = [];
+	for (const event of filteredItems(projection, params, false)) {
+		if (folds && (event.role === "tool" || event.role === "context")) {
+			run.push(event);
+			continue;
+		}
+		if (folds && eventDocument(event) === "") continue;
+		const matchOffset = params.query === undefined ? undefined : earliestMatchOffsetChars(eventDocument(event), params.query as string[]);
+		if (matchOffset !== undefined && matchOffset < 0) continue;
+		candidates.push({ event, matchOffset, before: foldedRun(run) });
+		run = [];
+	}
+	return { candidates, tail: foldedRun(run) };
+}
+
+/** Assemble only the admitted interval. Edge folds belong only to a page reaching that edge. */
+function pageData(prepared: PreparedSelection, start: number, end: number, maxChars: number, preview?: HistoryPageItem): HistoryPage {
+	const { candidates, tail } = prepared;
+	const items: HistoryPage["items"] = [];
+	for (let index = start; index < end; index++) {
+		const candidate = candidates[index]!;
+		if (candidate.before && (index > start || start === 0)) items.push(candidate.before);
+		items.push(preview ?? (candidate.preview ??= visibleItem(candidate.event, maxChars, candidate.matchOffset)));
+	}
+	if (end === candidates.length && tail) items.push(tail);
 	return {
-		page_older: vis.some((event) => event.seq > lower && event.seq < first) ? { before_seq: first } : null,
-		page_newer: vis.some((event) => event.seq > last && event.seq < upper) ? { after_seq: last, from: "oldest" } : null,
+		items,
+		page_older: start > 0 && start < end ? { before_seq: candidates[start]!.event.seq } : null,
+		page_newer: end < candidates.length && start < end ? { after_seq: candidates[end - 1]!.event.seq, from: "oldest" } : null,
 	};
-}
-
-function foldRows(projection: HistoryProjection, params: HistorySelection, selected: HistoryEvent[], cursors: Pick<HistoryPage, "page_older" | "page_newer">): HistoryFoldedRow[] {
-	if (selected.length === 0) {
-		// Even a range with no conversation can contain tool/context events.
-		return foldedRuns(allItems(projection).filter((event) => inSelection(event, params) && isFoldableEvent(event)));
-	}
-	const windowEvents = allItems(projection).filter((event) => inSelection(event, params)).sort((a, b) => a.seq - b.seq);
-	const folded: HistoryFoldedRow[] = [];
-	const firstSeq = selected[0]!.seq;
-	const lastSeq = selected.at(-1)!.seq;
-	if (cursors.page_older === null) folded.push(...foldedRuns(windowEvents.filter((event) => event.seq < firstSeq && isFoldableEvent(event))));
-	// pageData already ordered selected by seq.
-	for (let i = 0; i + 1 < selected.length; i++) {
-		const left = selected[i]!.seq;
-		const right = selected[i + 1]!.seq;
-		folded.push(...foldedRuns(windowEvents.filter((event) => event.seq > left && event.seq < right && isFoldableEvent(event))));
-	}
-	if (cursors.page_newer === null) folded.push(...foldedRuns(windowEvents.filter((event) => event.seq > lastSeq && isFoldableEvent(event))));
-	return folded;
-}
-
-function pageData(projection: HistoryProjection, params: HistorySelection, vis: HistoryEvent[], selected: Candidate[], maxChars: number, folds: boolean): HistoryPage {
-	const orderedSelected = [...selected].sort((a, b) => a.event.seq - b.event.seq);
-	const selectedEvents = orderedSelected.map((candidate) => candidate.event);
-	const cursors = pageCursors(vis, selectedEvents, params.before_seq, params.after_seq);
-	const visible = orderedSelected.map((candidate) => candidate.preview ?? visibleItem(candidate.event, maxChars, candidate.matchOffset));
-	let rows: PageRow[] = visible;
-	if (folds) {
-		const folded = foldRows(projection, params, selectedEvents, cursors);
-		rows = [...visible, ...folded].sort((a, b) => ("folded" in a ? a.first_seq : a.seq) - ("folded" in b ? b.first_seq : b.seq));
-	}
-	return { items: rows, ...cursors };
-}
-
-/** Filter, then keep only literal matches when a normalized query is present. */
-function selectionCandidates(projection: HistoryProjection, params: HistorySelection): Candidate[] {
-	const events = filteredItems(projection, params, params.query === undefined);
-	if (params.query === undefined) return events.map((event) => ({ event }));
-	const needles = params.query as string[];
-	return events
-		.map((event) => ({ event, matchOffset: earliestMatchOffsetChars(eventDocument(event), needles) }))
-		.filter((candidate) => candidate.matchOffset >= 0);
 }
 
 /**
@@ -180,24 +149,30 @@ export function selectPage(projection: HistoryProjection, params: HistorySelecti
 		throw error;
 	}
 	const scoped = { ...params, ...bounds.data, query: queries.length ? queries : undefined };
-	const vis = selectionCandidates(projection, scoped);
-	// Take the limit from the end `from` names, so a budget for one row keeps the most important one.
-	// At least one: `slice(-0)` would otherwise return the whole selection.
+	const prepared = prepareSelection(projection, scoped);
+	const { candidates } = prepared;
+	// Grow a contiguous interval from the requested end; even a byte-limited newest page stays ascending.
+	const newest = scoped.from !== "oldest";
+	let start = newest ? candidates.length : 0;
+	let end = start;
 	const limit = Math.max(1, scoped.limit ?? 20);
-	const folds = foldsRuns(scoped);
-	const ascending = [...vis].sort((a, b) => a.event.seq - b.event.seq);
-	const ordered = scoped.from === "oldest" ? ascending.slice(0, limit) : ascending.slice(-limit).reverse();
-	const allVisible = vis.map((candidate) => candidate.event).sort((a, b) => a.seq - b.seq);
-	const kept: Candidate[] = [];
-	for (const candidate of ordered) {
-		if (fits(pageData(projection, scoped, allVisible, [...kept, candidate], maxChars, folds))) {
-			kept.push(candidate);
+	for (let count = 0; count < limit && (newest ? start > 0 : end < candidates.length); count++) {
+		const nextStart = newest ? start - 1 : start;
+		const nextEnd = newest ? end : end + 1;
+		if (fits(pageData(prepared, nextStart, nextEnd, maxChars))) {
+			start = nextStart;
+			end = nextEnd;
 			continue;
 		}
-		if (kept.length === 0) kept.push({ ...candidate, preview: truncateHistoryItem(visibleItem(candidate.event, maxChars, candidate.matchOffset), (preview) => fits(pageData(projection, scoped, allVisible, [{ ...candidate, preview }], maxChars, folds))) });
+		if (start === end) {
+			start = nextStart;
+			end = nextEnd;
+			const candidate = candidates[start]!;
+			candidate.preview = truncateHistoryItem(candidate.preview!, (preview) => fits(pageData(prepared, start, end, maxChars, preview)));
+		}
 		break;
 	}
-	const page = pageData(projection, scoped, allVisible, kept, maxChars, folds);
+	const page = pageData(prepared, start, end, maxChars);
 	if (!fits(page)) {
 		return failure("page_too_large", `Even trimmed to their shortest, these ${page.items.length} rows and their folded runs fill the ${TOOL_OUTPUT_LIMIT} a call can carry; narrow with \`before_seq\`/\`after_seq\` or \`since\`/\`until\`, pass \`roles\` to skip folding, or \`history_read\` one seq.`);
 	}

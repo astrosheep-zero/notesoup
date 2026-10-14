@@ -160,10 +160,10 @@ test("Claude helper history tools reuse shared schemas, outcomes and text render
 	for (const operation of operations) {
 		const params = operation.name === "history_read" ? { seq: 3 } : {};
 		const actual = await dispatch({ op: "tool", tool: operation.name, params, identity, history }) as ClaudeToolResult;
-		const expected = operation.name === "history_read" ? await historyRead.execute({ seq: 3 }, projection) : operation.name === "history_list" ? await historyList.execute({}, projection) : await historyWindows.execute({}, projection, sessionId);
-		assert.deepEqual(actual.outcome, expected);
-		// The concrete shared operation renderer, not a Claude-specific lookalike.
-		if (operation.name === "history_read") assert.equal(actual.text, historyRead.render(await historyRead.execute({ seq: 3 }, projection)));
+		const expected = operation.name === "history_read" ? { text: historyRead.render(await historyRead.execute({ seq: 3 }, projection)), ok: true }
+			: operation.name === "history_list" ? { text: historyList.render(await historyList.execute({}, projection)), ok: true }
+			: { text: historyWindows.render(await historyWindows.execute({}, projection, sessionId)), ok: true };
+		assert.deepEqual(actual, expected);
 	}
 	assert.deepEqual(await dispatch({ op: "history_state", identity, history }), { window: 0 });
 	await assert.rejects(dispatch({ op: "tool", tool: "history_windows", params: {}, identity }), /transcript_path is unavailable/);

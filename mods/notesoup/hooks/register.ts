@@ -204,10 +204,8 @@ function errorResult(message: string): ToolCallResult { return { result: `noteso
 /** The helper's tool result: the shared text the model reads, plus whether that outcome refused. */
 function toolResultOf(value: unknown): { text: string; ok: boolean } | undefined {
 	if (typeof value !== "object" || value === null) return undefined
-	const { text, outcome } = value as { text?: unknown; outcome?: unknown }
-	if (typeof text !== "string" || typeof outcome !== "object" || outcome === null) return undefined
-	const ok = (outcome as { ok?: unknown }).ok
-	if (typeof ok !== "boolean") return undefined
+	const { text, ok } = value as { text?: unknown; ok?: unknown }
+	if (typeof text !== "string" || typeof ok !== "boolean") return undefined
 	return { text, ok }
 }
 function decode(result: ProcessRunResult): { ok: true; result: unknown } | { ok: false; error: string } {

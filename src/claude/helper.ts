@@ -12,13 +12,13 @@ import { CLAUDE_WIPE_SENTENCE, CLAUDE_HISTORY_UNAVAILABLE_SENTENCE, type BootToo
 import { CLAUDE_WARNING_PROMPT, CONTINUATION } from "../budget/text.js";
 import { resolveClaudeLimits } from "./thresholds.js";
 import { projectKey, snapshotNotesIdentity, type NotesIdentity } from "../notes/index.js";
-import type { Operation, Outcome } from "../tools/result.js";
+import type { Operation } from "../tools/result.js";
 
 const MAX_REQUEST_BYTES = 512 * 1024;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 export type ClaudeIdentityInput = Readonly<{ home: string; sessionId: string; cwd: string; agent: string; model: string }>;
-/** One tool call as the hook receives it: the shared text the model reads, and the shared outcome it came from. */
-export type ClaudeToolResult = { text: string; outcome: Outcome<unknown> };
+/** Only rendered text and success cross the helper boundary; business data stays inside. */
+export type ClaudeToolResult = { text: string; ok: boolean };
 type BoundOperation<TContext extends readonly unknown[]> = {
 	readonly description: string;
 	readonly parameters: TSchema;
@@ -52,7 +52,7 @@ function boundOperation<TParams extends TSchema, TData, TContext extends readonl
 			if (!Check(operation.parameters, params)) throw new Error(`invalid ${operation.name} parameters: ${paramProblem(operation.parameters, params)}`);
 			// The same business outcome and the same renderer as the Pi tool; only the envelope differs.
 			const outcome = await operation.execute(params as Static<TParams>, ...context);
-			return { text: operation.render(outcome), outcome };
+			return { text: operation.render(outcome), ok: outcome.ok };
 		},
 	};
 }

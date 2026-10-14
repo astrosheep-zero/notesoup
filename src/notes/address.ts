@@ -6,6 +6,17 @@ export type NoteAddress = { scope: Scope; path: string; who?: string };
 
 export const ADDRESS_FORMS = "Use <path> for this session, or @project/, @human/, @self/, or @model/ followed by a path; @projects/<name>/<path> reads a named project home.";
 
+/** The one home-head vocabulary: the scope each public `@head` names, and the home directory family a head with `home` lists. */
+export const HOME_HEADS: ReadonlyMap<string, { readonly scope: Scope; readonly home?: "project" | "agents" | "models" }> = new Map([
+	["project", { scope: "project" }],
+	["human", { scope: "human" }],
+	["self", { scope: "agent" }],
+	["model", { scope: "model" }],
+	["projects", { scope: "project", home: "project" }],
+	["agents", { scope: "agent", home: "agents" }],
+	["models", { scope: "model", home: "models" }],
+]);
+
 /**
  * Minimal glob over virtual note paths: `*` matches any run within a segment (never
  * `/`), `**` matches any run across segments (a leading double-star followed by a
@@ -52,23 +63,15 @@ export function assertAddress(value: unknown): NoteAddress {
 	let path = value;
 	let who: string | undefined;
 	if (value.startsWith("@")) {
-		const rest = value.slice(1);
-		const headEnd = rest.indexOf("/");
-		const head = headEnd === -1 ? rest : rest.slice(0, headEnd);
-		const tail = headEnd === -1 ? "" : rest.slice(headEnd + 1);
-		path = tail;
-		if (head === "project") scope = "project";
-		else if (head === "human") scope = "human";
-		else if (head === "self") scope = "agent";
-		else if (head === "model") scope = "model";
-		else if (head === "projects" || head === "agents" || head === "models") {
-			const nameEnd = tail.indexOf("/");
-			who = nameEnd === -1 ? tail : tail.slice(0, nameEnd);
+		const [rawHead, ...tail] = value.slice(1).split("/");
+		const head = HOME_HEADS.get(rawHead!);
+		if (head === undefined) throw new NoteError("invalid_address", `${shown(value)} isn't a note address. ${ADDRESS_FORMS}`);
+		scope = head.scope;
+		if (head.home === undefined) path = tail.join("/");
+		else {
+			who = tail[0] ?? "";
 			if (!SLUG_PATTERN.test(who)) throw new NoteError("invalid_address", `${shown(value)} isn't a note address. ${ADDRESS_FORMS}`);
-			scope = head === "projects" ? "project" : head === "agents" ? "agent" : "model";
-			path = nameEnd === -1 ? "" : tail.slice(nameEnd + 1);
-		} else {
-			throw new NoteError("invalid_address", `${shown(value)} isn't a note address. ${ADDRESS_FORMS}`);
+			path = tail.slice(1).join("/");
 		}
 		if (path === "" && scope !== "agent" && scope !== "model") throw new NoteError("invalid_address", `${shown(value)} isn't a note address. ${ADDRESS_FORMS}`);
 		if (path === "" && who === undefined) throw new NoteError("invalid_address", `${shown(value)} isn't a note address. ${ADDRESS_FORMS}`);

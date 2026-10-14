@@ -209,6 +209,71 @@ test("a one-row page budget admits the newest candidate first", () => {
 	assert.deepEqual(keptSeqs(1, "oldest"), [1], "from oldest keeps the other end when the budget is short");
 });
 
+test("conversation paging prepares ordered folds once, including during first-row shortening", () => {
+	const windowId = "w1";
+	const items: DecodedHistoryItem[] = [
+		{ seq: 1, windowId, role: "system", text: "leading context" },
+		{ seq: 2, windowId, role: "user", text: "first" },
+		{ seq: 3, windowId, role: "tool", toolName: "read", text: "output" },
+		{ seq: 4, windowId, role: "assistant", text: "" },
+		{ seq: 5, windowId, role: "system", text: "interior context" },
+		{ seq: 6, windowId, role: "assistant", text: "middle" },
+		{ seq: 7, windowId, role: "tool", toolName: "bash", text: "output" },
+		{ seq: 8, windowId, role: "user", text: "last ".repeat(100) },
+		{ seq: 9, windowId, role: "system", text: "trailing context" },
+	];
+	const projection = projectHistory([{ windowId, items: [...items].reverse() }], 9, new Set(items.map((item) => item.seq)));
+	const events = projection.windows[0]!.items;
+	let traversals = 0;
+	Object.defineProperty(projection.windows[0]!, "items", { get() { traversals++; return events; } });
+	const full = selectPage(projection, { limit: 3 }, () => true, 1000);
+	assert.equal(full.ok, true);
+	if (!full.ok) return;
+	assert.deepEqual(full.data.items.map((item) => "folded" in item ? [item.first_seq, item.last_seq, item.count, item.tools] : item.seq), [
+		[1, 1, 1, {}], 2, [3, 5, 2, { read: 1 }], 6, [7, 7, 1, { bash: 1 }], 8, [9, 9, 1, {}],
+	]);
+	assert.equal(traversals, 1, "growing the page never re-traverses the source windows");
+	traversals = 0;
+	let attempts = 0;
+	const trimmed = selectPage(projection, { limit: 3 }, (candidate) => {
+		attempts++;
+		return candidate.items.length <= 2 && candidate.items.every((item) => "folded" in item || item.content.length <= 10);
+	}, 1000);
+	assert.equal(trimmed.ok, true);
+	if (!trimmed.ok) return;
+	assert.deepEqual(trimmed.data.items.map((item) => "folded" in item ? item.first_seq : item.seq), [8, 9], "a short newest page keeps its tail fold, not the preceding gap");
+	assert.deepEqual(trimmed.data.page_older, { before_seq: 8 });
+	assert.equal(trimmed.data.page_newer, null);
+	assert.ok(attempts > 3, "the first preview exercised repeated budget probes");
+	assert.equal(traversals, 1, "shortening also reuses the same prepared folds");
+});
+
+test("list shortening charges folded rows against both text and JSON budgets", async () => {
+	const windowId = "w1";
+	const items: DecodedHistoryItem[] = [
+		{ seq: 1, windowId, role: "user", text: "older" },
+		{ seq: 2, windowId, role: "user", text: "\n".repeat(40_000) },
+		{ seq: 3, windowId, role: "tool", toolName: "read", text: "output" },
+	];
+	const projection = projectHistory([{ windowId, items }], 3, new Set([1, 2, 3]));
+	const folded = await historyList.execute({ limit: 1, max_chars_per_item: 50_000 }, projection);
+	const expanded = await historyList.execute({ limit: 1, max_chars_per_item: 50_000, roles: ["user"] }, projection);
+	assert.equal(folded.ok, true);
+	assert.equal(expanded.ok, true);
+	if (!folded.ok || !expanded.ok) return;
+	const row = folded.data.items[0]!;
+	const withoutFold = expanded.data.items[0]!;
+	assert.ok(!("folded" in row) && !("folded" in withoutFold));
+	assert.equal(row.seq, 2);
+	assert.equal(row.truncated, true);
+	assert.ok(row.content.length < withoutFold.content.length, "the fold consumes bytes but not the one-event limit");
+	assert.deepEqual(folded.data.items[1], { folded: true, first_seq: 3, last_seq: 3, count: 1, tools: { read: 1 } });
+	assert.deepEqual(folded.data.page_older, { before_seq: 2 });
+	assert.equal(folded.data.page_newer, null);
+	assert.ok(Buffer.byteLength(JSON.stringify(folded.data), "utf8") <= TOOL_OUTPUT_MAX_BYTES);
+	assert.ok(Buffer.byteLength(historyList.render(folded), "utf8") <= TOOL_OUTPUT_MAX_BYTES);
+});
+
 test("since and until select a half-open time range, compose with query and paging, and refuse bad bounds", async () => {
 	const items: DecodedHistoryItem[] = [
 		{ seq: 1, windowId: "w1", role: "user", text: "first needle", createdAt: "2026-10-10T00:00:00.000Z" },

@@ -3,7 +3,7 @@ import type { Dirent } from "node:fs";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { earliestMatchOffsetChars } from "../text-match.js";
-import { assertAddress, assertGlobPattern, addressFor, canonicalAddressFor, globToRegExp } from "./address.js";
+import { assertAddress, assertGlobPattern, addressFor, canonicalAddressFor, globToRegExp, HOME_HEADS } from "./address.js";
 import { isFilesystemError } from "./fs-error.js";
 import { snapshotNotesIdentity, type NotesIdentity } from "./identity.js";
 import { NoteError } from "./errors.js";
@@ -121,19 +121,14 @@ type HomeRef = { scope: Scope; who?: string };
 
 async function homesForPattern(pattern: string | undefined, identity: NotesIdentity): Promise<HomeRef[] | undefined> {
 	if (!pattern || !pattern.startsWith("@")) return undefined;
-	const head = /^@([^/]+)\//.exec(pattern)?.[1];
-	if (head === "project") return [{ scope: "project" }];
-	if (head === "human") return [{ scope: "human" }];
-	if (head === "self") return [{ scope: "agent" }];
-	if (head === "model") return [{ scope: "model" }];
-	if (head === "projects" || head === "agents" || head === "models") {
-		const scope: Scope = head === "projects" ? "project" : head === "agents" ? "agent" : "model";
-		const name = pattern.slice(head.length + 2).split("/")[0] ?? "";
-		if (name.length > 0 && !/[*?]/.test(name)) return [{ scope, who: assertWho(name) }];
-		const names = head === "projects" ? projectHomes(identity.home).map(home => home.name) : await namespaceSlugs(head, identity.home);
-		return names.map((who) => ({ scope, who }));
-	}
-	return [];
+	const [rawHead, ...tail] = pattern.split("/");
+	const head = tail.length === 0 ? undefined : HOME_HEADS.get(rawHead!.slice(1)); // a bare "@projects" names no homes
+	if (head === undefined) return [];
+	if (head.home === undefined) return [{ scope: head.scope }];
+	const name = tail[0];
+	if (name !== undefined && name.length > 0 && !/[*?]/.test(name)) return [{ scope: head.scope, who: assertWho(name) }];
+	const names = head.home === "project" ? projectHomes(identity.home).map(home => home.name) : await namespaceSlugs(head.home, identity.home);
+	return names.map((who) => ({ scope: head.scope, who }));
 }
 
 /** Relative pattern heads resolve to canonical names, so they match canonical addresses. */
