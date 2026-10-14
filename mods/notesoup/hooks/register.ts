@@ -192,6 +192,11 @@ async function loadTexts($: Engine, state: ResetState): Promise<SharedTexts | un
 function log($: Engine, text: string) {
   try { $.ui.log(`🥣 ${text}`) } catch { /* UI must not break a turn or reset. */ }
 }
+/** A rejected call's reason, one line, bounded: the caller reads it, not a stack. */
+function describeFailure(error: unknown): string {
+  const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+  return text.replace(/[\r\n]+/g, " ").slice(0, 200) || "unknown failure"
+}
 
 function errorResult(message: string): ToolCallResult { return { result: `notesoup: ${message}`, isError: true } }
 /** The helper's tool result: the shared text the model reads, plus whether that outcome refused. */
@@ -214,7 +219,9 @@ function decode(result: ProcessRunResult): { ok: true; result: unknown } | { ok:
 }
 async function run($: { process: { run: (argv: readonly string[], init?: { cwd?: string; stdin?: string; timeoutMs?: number }) => Promise<ProcessRunResult> } }, request: unknown, cwd: string) {
   try { return decode(await $.process.run(["node", HELPER], { cwd, stdin: `${JSON.stringify(request)}\n`, timeoutMs: TIMEOUT_MS })) }
-  catch { return { ok: false as const, error: "helper execution failed" } }
+  // The host's rejection is the only diagnosis there is: it carries the spawn failure's own
+  // reason (`timed out after …`), which a bare phrase would throw away.
+  catch (error) { return { ok: false as const, error: `helper execution failed: ${describeFailure(error)}` } }
 }
 /** Session start does not fire on /clear, /resume or /branch. Forget the old window on end. */
 function forgetSession(state: ResetState) {

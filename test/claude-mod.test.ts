@@ -409,6 +409,14 @@ test("Claude Mod hook delivers the helper's shared text, and marks only a refusa
   // A tool this plugin never registered is somebody else's answer, not a notesoup refusal.
   const foreign = await call("other_tool", {});
   assert.equal("result" in foreign, false, "an unregistered tool falls through to the engine's own handling");
+
+  // A rejected host call is the only diagnosis there is, so its reason must reach the model.
+  const ran = host.process.run;
+  host.process.run = async () => { throw new Error("spawn timed out after 10000ms") };
+  const crashed = await call("notes_write", { address: "hook.md", content: "again" });
+  host.process.run = ran;
+  assert.equal(crashed.isError, true);
+  assert.match(String(crashed.result), /^notesoup: helper execution failed: Error: spawn timed out after 10000ms$/, "the host's own reason survives the catch");
 });
 
 
