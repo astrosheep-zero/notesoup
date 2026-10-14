@@ -8,7 +8,7 @@ import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { historyFromSession } from "../src/pi/history.js";
 import { BOOT_TYPE, GUIDANCE_TYPE, RESET_MARKER_TYPE } from "../src/pi/entries.js";
-import { CONTEXT_WINDOW_OPEN_TAG, CONTEXT_WINDOW_PROTOCOL_OPEN_TAG } from "../src/boot/text.js";
+import { NOTES_PROTOCOL_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG } from "../src/boot/text.js";
 import { CONTINUATION } from "../src/budget/text.js";
 import { listNotes, physicalPath } from "./helpers/notes.js";
 import { CONTINUATION_TYPE, MANUAL_WIPE_TYPE } from "../src/pi/entries.js";
@@ -59,7 +59,7 @@ test("custom reset marker removes old provider context while history remains sea
 	const projected = await runContextWithSystemHook(captured, ctx, sessionManager.buildSessionContext().messages);
 	const providerText = JSON.stringify(projected?.messages ?? []);
 	assert.equal(providerText.includes("OLD-UNIQUE-TRANSCRIPT"), false);
-	assert.equal(providerText.includes(CONTEXT_WINDOW_OPEN_TAG), true);
+	assert.equal(providerText.includes(WINDOW_IDENTITY_OPEN_TAG), true);
 	assert.equal(providerText.includes(RESET_MARKER_TYPE), false, "plain reset state never reaches the provider");
 
 	const projection = historyFromSession(ctx);
@@ -96,14 +96,14 @@ test("the root boot and reset boot carry durable window identity", async () => {
 	assert.equal(noticesOf(ctx).length, 0, "reload is silent");
 	assert.deepEqual(rootBoot?.message.details, { windowId: `pcw:${sessionManager.getSessionId().slice(0, 8)}:root` });
 	const rootText = typeof rootBoot?.message.content === "string" ? rootBoot.message.content : "";
-	assert.ok(rootText.startsWith(CONTEXT_WINDOW_OPEN_TAG), "root block omits the reset line");
+	assert.ok(rootText.startsWith(WINDOW_IDENTITY_OPEN_TAG), "root block omits the reset line");
 	assert.equal(rootText.includes(CONTINUATION), false, "root startup carries no reset message");
 	assertBootHistory(rootText, historyFromSession(ctx));
 	assert.ok(rootText.includes("decisions.md"));
 	const decisionsMeta = (await listNotes(ctx, { scope: "session" })).find((row) => row.path === "decisions.md")?.meta;
 	assert.ok(decisionsMeta);
 	assert.match(rootText, /decisions\.md · (?:just now|\d+s ago)/, "boot note metadata carries a relative update time");
-	assert.ok(rootText.includes(CONTEXT_WINDOW_PROTOCOL_OPEN_TAG));
+	assert.ok(rootText.includes(NOTES_PROTOCOL_OPEN_TAG));
 
 	// Reset: the marker and boot are committed together at the turn boundary.
 	await call(captured, "empty_brain", {}, ctx);
@@ -184,7 +184,7 @@ test("a boot beyond three windows shows only root, the previous window, and the 
 	assert.equal(projection.windows.length, 5);
 	const boot = sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === BOOT_TYPE).at(-1);
 	assert.ok(boot?.type === "custom_message");
-	const identity = String(boot.content).split("</context_window>")[0]!;
+	const identity = String(boot.content).split(WINDOW_IDENTITY_CLOSE_TAG)[0]!;
 	assertBootHistory(String(boot.content), projection);
 	// The block is rewritten once per window, so naming every old window would repeat the whole
 	// history every time. The omitted middle windows stay reachable through history_*.
@@ -237,7 +237,7 @@ test("a marker tail with only metadata repairs its missing boot and continuation
 	assert.ok(branch.findIndex((entry) => entry.id === continuationEntries[0]?.id) > branch.findIndex((entry) => entry.id === bootEntries[0]?.id), "the continuation follows its boot");
 	assert.equal(captured.sent.length, 2, "repair emits only the missing boot and continuation, without a model turn");
 	assert.equal(captured.sent[0]?.message.customType, BOOT_TYPE);
-	const repairedIdentity = String(captured.sent[0]?.message.content).split("</context_window>")[0]!;
+	const repairedIdentity = String(captured.sent[0]?.message.content).split(WINDOW_IDENTITY_CLOSE_TAG)[0]!;
 	const branches = [...repairedIdentity.matchAll(/^[├└]─ (\S+)(.*)$/gm)];
 	assert.deepEqual(branches.map((line) => line[1]), ["root", "metadata-tail"]);
 	assert.equal(branches.some((line) => /\d+–/.test(line[2]!)), false, "repair must not invent seq ranges");

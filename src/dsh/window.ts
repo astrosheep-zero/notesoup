@@ -65,8 +65,12 @@ function systemSnapshot(event: SessionEvent): WindowSnapshot | undefined {
 	return snapshotFromBoot(text.slice(start, end + BOOT_CLOSE.length), event.time);
 }
 
+/**
+ * Read the window identity out of a persisted boot. The `context_window` spelling is what boots
+ * written before the rename carry, so both spellings still yield their ordinal and window id.
+ */
 function snapshotFromBoot(boot: string, openedAt: number): WindowSnapshot | undefined {
-	const identity = /<context_window>\n[\s\S]*?\n(dsh:[^\n]+)\n[\s\S]*?└─ (\d+)(?: +[^\n]*)?\n<\/context_window>/.exec(boot);
+	const identity = /<(?:context_window|notesoup:window_identity)>\n[\s\S]*?\n(dsh:[^\n]+)\n[\s\S]*?└─ (\d+)(?: +[^\n]*)?\n<\/(?:context_window|notesoup:window_identity)>/.exec(boot);
 	const legacy = /^Current context window id: (dsh:.*:(\d+))$/m.exec(boot);
 	const shortName = identity?.[2] ?? legacy?.[2];
 	const id = identity ? `${identity[1]}:${shortName}` : legacy?.[1];

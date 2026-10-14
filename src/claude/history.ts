@@ -94,11 +94,19 @@ function decode(row: Row, seq: number): DecodedHistoryItem[] {
 	return items;
 }
 
+/**
+ * The protocol tags a complete boot carries; `context_window` is the pre-rename spelling that
+ * sessions and Claude transcripts already on disk still use, so both stay readable.
+ */
+const BOOT_IDENTITY = /^<(?:notesoup:window_identity|context_window)>\nAgent name: claude \(/;
+const BOOT_PROTOCOL_OPEN = /\n<(?:notesoup:notes_protocol|context_window_protocol)>\n/;
+const BOOT_PROTOCOL_CLOSE = /\n<\/(?:notesoup:notes_protocol|context_window_protocol)>/;
+
 /** Match the complete retained notesoup boot, not a casually quoted window-id line. */
 function bootOrdinal(row: Row, sessionId: string, retained: boolean): number | undefined {
 	if (!retained || row.type !== "user" || !object(row.message)) return undefined;
 	const text = contentText(row.message.content);
-	if (!text.startsWith("<context_window>\nAgent name: claude (") || !text.includes("\n<context_window_protocol>\n") || !text.includes("\n</context_window_protocol>")) return undefined;
+	if (!BOOT_IDENTITY.test(text) || !BOOT_PROTOCOL_OPEN.test(text) || !BOOT_PROTOCOL_CLOSE.test(text)) return undefined;
 	const prefix = `Current context window id: claude:${sessionId}:`;
 	const suffix = text.split("\n").find((line) => line.startsWith(prefix))?.slice(prefix.length);
 	if (suffix === undefined || !/^\d+$/.test(suffix)) return undefined;

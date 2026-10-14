@@ -17,10 +17,10 @@ import {
 	type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import notesoup, { createNotesoup } from "../src/pi/extension.js";
-import { BOOT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, MANUAL_WIPE_TYPE, RESET_MARKER_TYPE, RESET_PROMPT_TYPE, WARNING_TYPE } from "../src/pi/entries.js";
+import { BOOT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, MANUAL_WIPE_TYPE, RESET_MARKER_TYPE, WARNING_TYPE } from "../src/pi/entries.js";
 import { historyFromSession } from "../src/pi/history.js";
 import { assertBootHistory } from "./helpers/extension.js";
-import { CONTEXT_WINDOW_OPEN_TAG } from "../src/boot/text.js";
+import { NOTES_PROTOCOL_OPEN_TAG, WINDOW_IDENTITY_OPEN_TAG } from "../src/boot/text.js";
 import { CONTINUATION, GUIDANCE_OPEN_TAG, warningContent, warningPrompt } from "../src/budget/text.js";
 
 type StreamScript = (request: number, context: AgentContext) => AssistantMessage | Promise<AssistantMessage>;
@@ -267,7 +267,7 @@ function contextRemainingResults(fixture: Fixture): Array<number | null> {
 function assertFreshRequest(fixture: Fixture, requestIndex: number, oldSentinel: string): void {
 	const body = text(fixture.requests[requestIndex]);
 	assert.equal(body.includes(oldSentinel), false, "the new provider request excludes the old window transcript");
-	assert.ok(body.includes(CONTEXT_WINDOW_OPEN_TAG), "the new provider request includes the fresh context-window boot");
+	assert.ok(body.includes(WINDOW_IDENTITY_OPEN_TAG), "the new provider request includes the fresh context-window boot");
 	assert.equal(body.split(CONTINUATION_JSON).length - 1, 1, "the fresh window carries exactly one reset message");
 }
 
@@ -541,16 +541,18 @@ test("real AgentSession: manual command spans its tool batch and stops at settle
 	}
 });
 
-test("real AgentSession: clear commands append a prompt after continuation and resume once", { timeout: 25000 }, async () => {
+test("real AgentSession: a clear command keeps its prompt out of the fresh window and resumes once", { timeout: 25000 }, async () => {
 	for (const mode of ["empty-brain", "fresh-window", "hard-reserve", "overflow"] as const) {
 		let fixture!: Fixture;
-		const prompt = 'AFTER_CLEAR_PROMPT /cm "literal text"';
+		const prompt = 'AFTER_CLEAR_PROMPT_SENTINEL /cm "literal text"';
+		// `text()` serializes to JSON, so a quoted argument reaches the provider in its escaped form.
+		const promptJson = JSON.stringify(prompt).slice(1, -1);
 		fixture = await openFixture({
 			compactionEnabled: mode === "hard-reserve",
 			script: (request, context) => {
 				if (request === 1) return assistant(fixture, [{ type: "text", text: "initial work" }]);
 				if (request === 2) {
-					assert.equal(text(context).includes(prompt), false, "the old window never sees the trailing prompt");
+					assert.ok(text(context).includes(promptJson), "the closing window sees the human's command line verbatim");
 					if (mode === "overflow") return assistant(fixture, [], "error", { errorMessage: "Prompt too long: context exceeds maximum context length" });
 					return mode === "hard-reserve"
 						? assistant(fixture, [{ type: "toolCall", id: "prompt-note", name: "notes_write", arguments: { address: "prompt-note.md", content: "saved" } }], "toolUse", { usage: usage(80_000) })
@@ -558,8 +560,9 @@ test("real AgentSession: clear commands append a prompt after continuation and r
 				}
 				assert.equal(request, 3, "exactly one fresh-window request");
 				assert.equal(text(context).includes("PROMPT_RESET_OLD_SENTINEL"), false);
-				assert.equal(text(context).split(prompt).length - 1, 1);
-				assert.ok(text(context).indexOf(CONTINUATION_JSON) < text(context).indexOf(prompt), "wake-up prose precedes the appended prompt");
+				assert.equal(text(context).includes("AFTER_CLEAR_PROMPT_SENTINEL"), false, "the fresh window is not handed the prompt");
+				assert.equal(text(context).includes("literal text"), false, "not even the quoted argument survives the reset");
+				assert.ok(text(context).includes(CONTINUATION_JSON), "wake-up prose opens the fresh window");
 				return assistant(fixture, [{ type: "text", text: "prompt handled" }]);
 			},
 		});
@@ -571,11 +574,7 @@ test("real AgentSession: clear commands append a prompt after continuation and r
 			assert.equal(resetMarkers(fixture).length, 1);
 			const branch = fixture.sessionManager.getBranch();
 			const continuationIndex = branch.findIndex((entry) => entry.type === "custom_message" && entry.customType === CONTINUATION_TYPE);
-			const appended = branch[continuationIndex + 1];
-			assert.ok(appended?.type === "custom_message");
-			assert.equal(appended.customType, "notesoup/reset-prompt");
-			assert.equal(appended.content, prompt);
-			assert.equal(appended.display, true);
+			assert.equal(branch.slice(continuationIndex + 1).filter((entry) => entry.type === "custom_message").length, 0, "nothing is injected after the continuation");
 			assert.ok(fixture.notices.some((notice) => notice.includes("Brain emptied")));
 		} finally {
 			fixture.close();
@@ -842,7 +841,7 @@ test("real AgentSession: user abort, synthetic aborted response, and generic err
 			const branch = fixture.sessionManager.getBranch();
 			const wipe = branch.find((entry) => entry.type === "custom_message" && entry.customType === MANUAL_WIPE_TYPE);
 			assert.ok(wipe && JSON.stringify(wipe).includes("SHOULD_NOT_RUN_AFTER_FAILURE"), `${mode} keeps the human's command line in the close-out it armed`);
-			assert.equal(JSON.stringify(branch).includes(RESET_PROMPT_TYPE), false, `${mode} never publishes a prompt for a window that opened`);
+			assert.equal(JSON.stringify(branch).includes("notesoup/reset-prompt"), false, `${mode} never publishes a prompt for a window that opened`);
 		} finally {
 			fixture.close();
 		}
@@ -910,9 +909,9 @@ test("real AgentSession: a reset survives all notes-home read failures with an i
 		const boot = fixture.sessionManager.getBranch().find((entry) => entry.type === "custom_message" && entry.customType === BOOT_TYPE && entry.details && typeof entry.details === "object" && (entry.details as { windowId?: unknown }).windowId === windowId);
 		assert.ok(boot && boot.type === "custom_message");
 		const bootText = typeof boot.content === "string" ? boot.content : JSON.stringify(boot.content);
-		assert.ok(bootText.includes("THE HUMAN · @human"));
+		assert.equal(bootText.includes("@human — the human"), true);
 		assert.equal(bootText.match(/This drawer wouldn't open/g)?.length, 5, "each failed section gets one recovery line");
-		assert.ok(bootText.includes("<context_window_protocol>"));
+		assert.ok(bootText.includes(NOTES_PROTOCOL_OPEN_TAG));
 	} finally {
 		fixture.close();
 	}
@@ -1171,7 +1170,7 @@ test("real AgentSession: the complete system message and a changed tool loadout 
 				return assistant(fixture, [{ type: "toolCall", id: "wipe-system", name: "empty_brain", arguments: {} }], "toolUse");
 			}
 			assert.deepEqual(effectiveToolNames, ["empty_brain", "get_context_remaining"]);
-			assert.ok(JSON.stringify(context.messages).includes(CONTEXT_WINDOW_OPEN_TAG));
+			assert.ok(JSON.stringify(context.messages).includes(WINDOW_IDENTITY_OPEN_TAG));
 			return assistant(fixture, [{ type: "text", text: "all system sections survived" }]);
 		},
 	});

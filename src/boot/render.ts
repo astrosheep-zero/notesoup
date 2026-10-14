@@ -1,5 +1,5 @@
 import type { NotesHome, NotesSnapshot } from "./snapshot.js";
-import { CONTEXT_WINDOW_OPEN_TAG, CONTEXT_WINDOW_CLOSE_TAG, MAP_BOOT_MAX_CHARS, SHELF_FRESH_LIMIT, renderProtocolBlock, type BootToolNames } from "./text.js";
+import { WINDOW_IDENTITY_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG, MAPS_BLOCK, MAP_BOOT_MAX_CHARS, SHELF_FRESH_LIMIT, renderProtocolBlock, type BootToolNames } from "./text.js";
 
 function relativeTime(timestamp: number, now: number): string {
 	const seconds = Math.trunc((timestamp - now) / 1000);
@@ -32,14 +32,17 @@ function section(label: string, body: string): string {
 	return `${label}\n${"─".repeat(Array.from(label).length)}\n\n${body}`;
 }
 
+/** Pi's default agent slug: an unnamed agent shares its `@self` shelf with every other nameless one. */
+const NAMELESS_AGENT = "anonymous";
+
 /** One closed boot snapshot: five tabbed shelves, current hands first, durable last; each shelf keeps its map and its own freshest pages. */
-function notesIndex(snapshot: NotesSnapshot, tools: BootToolNames): string {
+function notesIndex(snapshot: NotesSnapshot, tools: BootToolNames, agentName: string, modelName: string): string {
 	const homes: ReadonlyArray<{ scope: NotesHome["scope"]; label: string }> = [
-		{ scope: "session", label: "THIS SESSION · no @" },
-		{ scope: "project", label: "THIS PROJECT · @project" },
-		{ scope: "agent", label: "YOU · @self" },
-		{ scope: "model", label: "YOUR MODEL · @model" },
-		{ scope: "human", label: "THE HUMAN · @human" },
+		{ scope: "session", label: "no @ — this session" },
+		{ scope: "project", label: "@project — this project" },
+		{ scope: "agent", label: agentName === NAMELESS_AGENT ? "@self — every nameless agent shares this" : `@self — ${agentName} only` },
+		{ scope: "model", label: `@model — ${modelName} only` },
+		{ scope: "human", label: "@human — the human" },
 	];
 
 	const shelves: string[] = [];
@@ -60,8 +63,8 @@ function notesIndex(snapshot: NotesSnapshot, tools: BootToolNames): string {
 			});
 		if (!map?.body && fresh.length === 0) continue;
 		const parts: string[] = [];
-		if (map?.body) parts.push(`MAP — ${map.address}\n\n${indent(mapBodyForBoot(map.address, map.body))}`);
-		if (fresh.length > 0) parts.push(`New pages\n\n${fresh.join("\n\n")}`);
+		if (map?.body) parts.push(`map\n\n${indent(mapBodyForBoot(map.address, map.body))}`);
+		if (fresh.length > 0) parts.push(`recent\n\n${fresh.join("\n\n")}`);
 		shelves.push(section(home.label, parts.join("\n\n")));
 	}
 
@@ -115,6 +118,6 @@ export function renderBootBlock(data: BootRenderData): string {
 			return `${window.isCurrent ? "└─" : "├─"} ${name}${range}${window.isCurrent ? "    ← you are here" : ""}`;
 		}),
 	];
-	const identity = `${CONTEXT_WINDOW_OPEN_TAG}\n${lines.join("\n")}\n${CONTEXT_WINDOW_CLOSE_TAG}`;
-	return [identity, renderProtocolBlock(data.tools), notesIndex(data.notes, data.tools)].join("\n\n");
+	const identity = `${WINDOW_IDENTITY_OPEN_TAG}\n${lines.join("\n")}\n${WINDOW_IDENTITY_CLOSE_TAG}`;
+	return [identity, renderProtocolBlock(data.tools), MAPS_BLOCK, notesIndex(data.notes, data.tools, data.agentName, data.modelName)].join("\n\n");
 }

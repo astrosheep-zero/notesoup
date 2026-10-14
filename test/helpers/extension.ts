@@ -1,5 +1,5 @@
 import { notesIdentityFromPi } from "../../src/pi/notes/adapter.js";
-import { DEFAULT_BOOT_TOOL_NAMES } from "../../src/boot/text.js";
+import { DEFAULT_BOOT_TOOL_NAMES, WINDOW_IDENTITY_CLOSE_TAG } from "../../src/boot/text.js";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -189,7 +189,7 @@ export function makeExtension(sessionManager: SessionManager, settingsManager?: 
 
 /** Compare boot addresses to the host projection, without freezing its prose. */
 export function assertBootHistory(body: string, projection: HistoryProjection): void {
-	const identity = body.split("</context_window>")[0]!;
+	const identity = body.split(WINDOW_IDENTITY_CLOSE_TAG)[0]!;
 	const lines = [...identity.matchAll(/^([├└]─) (\S+)(?: +(\d+)–(\d*))?/gm)];
 	// Only root, the previous window and the current one are shown, however many have existed.
 	const shown = new Set([0, projection.windows.length - 2, projection.windows.length - 1]);

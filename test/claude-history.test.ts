@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { claudeHistoryFromJsonl, readClaudeHistory } from "../src/claude/history.js";
+import { renderBootBlock } from "../src/boot/render.js";
+import { unavailableNotesSnapshot } from "../src/boot/snapshot.js";
+import { DEFAULT_BOOT_TOOL_NAMES } from "../src/boot/text.js";
 import { allItems, eventDocument } from "../src/history/history.js";
 import { historyList, historyRead, historyWindows } from "../src/tools/history.js";
 import { dispatch, type ClaudeToolResult } from "../src/claude/helper.js";
@@ -21,8 +24,11 @@ const result = (id: string, text: unknown, error = false) => ({ type: "tool_resu
 const jsonl = (rows: Row[]) => `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`;
 const project = (rows: Row[], headUuid: string) => claudeHistoryFromJsonl(jsonl(rows), { sessionId, headUuid });
 
-// Complete boot shape, not a real/private transcript fixture.
-const bootText = (ordinal: number) => `<context_window>\nAgent name: claude (brain: claude)\n\nclaude:${sessionId}\n</context_window>\n\n<context_window_protocol>\nSynthetic reset protocol\n</context_window_protocol>\nCurrent context window id: claude:${sessionId}:${ordinal}`;
+// Complete boot shape, not a real/private transcript fixture. `context_window` is the pre-rename
+// spelling that transcripts already on disk carry; both spellings must yield the same ordinal.
+const bootText = (ordinal: number, spelling: "legacy" | "current" = "legacy") => spelling === "legacy"
+	? `<context_window>\nAgent name: claude (brain: claude)\n\nclaude:${sessionId}\n</context_window>\n\n<context_window_protocol>\nSynthetic reset protocol\n</context_window_protocol>\nCurrent context window id: claude:${sessionId}:${ordinal}`
+	: `<notesoup:window_identity>\nAgent name: claude (brain: claude)\n\nclaude:${sessionId}\n</notesoup:window_identity>\n\n<notesoup:notes_protocol>\nSynthetic reset protocol\n</notesoup:notes_protocol>\nCurrent context window id: claude:${sessionId}:${ordinal}`;
 function compact(uuid: string, logical: string, metadata: Row = {}): Row {
 	return row(uuid, null, "system", "Conversation compacted", { subtype: "compact_boundary", logicalParentUuid: logical, compactMetadata: metadata });
 }
@@ -73,6 +79,26 @@ test("Claude branch selection is bound to committed head, not append order or la
 	assert.equal(offBranch.error.code, "not_on_branch");
 	assert.throws(() => claudeHistoryFromJsonl(jsonl(rows), { sessionId }), /no confirmed active head/);
 	assert.throws(() => project(rows, "not-written-yet"), /not persisted yet/);
+});
+
+test("a persisted boot yields its ordinal under both tag spellings", () => {
+	// Three boundaries but one boot: only a recognised boot explains the ordinal.
+	const rowsFor = (boot: string) => [user("u", null, "old request"), assistant("a", "u", [{ type: "text", text: "answered" }]), compact("boundary", "a"), row("boot", "boundary", "user", boot), user("after", "boot", "after reset")];
+	const legacy = project(rowsFor(bootText(3)), "after");
+	const current = project(rowsFor(bootText(3, "current")), "after");
+	assert.equal(allItems(legacy).find((event) => event.text === "after reset")?.windowId, `claude:${sessionId}:3`, "an old-spelling boot numbers the window it opens");
+	assert.deepEqual(current.windows.map((window) => window.windowId), legacy.windows.map((window) => window.windowId));
+	const rendered = renderBootBlock({
+		agentName: "claude",
+		modelName: "claude",
+		tree: { trunk: `claude:${sessionId}`, windows: [{ shortName: "3", isCurrent: true }] },
+		notes: unavailableNotesSnapshot(Date.now()),
+		tools: DEFAULT_BOOT_TOOL_NAMES,
+	});
+	const real = project(rowsFor(`${rendered}\nCurrent context window id: claude:${sessionId}:3`), "after");
+	assert.deepEqual(real.windows.map((window) => window.windowId), current.windows.map((window) => window.windowId));
+	const partial = `<notesoup:window_identity>\nAgent name: claude (brain: claude)\n\nclaude:${sessionId}\n</notesoup:window_identity>\nCurrent context window id: claude:${sessionId}:3`;
+	assert.equal(allItems(project(rowsFor(partial), "after")).find((event) => event.text === "after reset")?.windowId, `claude:${sessionId}:1`, "an identity line without the protocol block is not a trusted boot");
 });
 
 test("Claude native compaction and reset keep pre-reset history, preserved rewrites and matching boot windows", async () => {

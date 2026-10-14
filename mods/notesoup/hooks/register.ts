@@ -466,11 +466,18 @@ async function warningBlock($: Engine, state: ResetState): Promise<{ name: strin
   return { name: "notesoup:warning", text: texts.warning }
 }
 
+/** The boot's identity line; `context_window` is the pre-rename tag still in old transcripts. */
+const BOOT_IDENTITY = /<(?:notesoup:window_identity|context_window)>\nAgent name: claude /
+
+/**
+ * A retained boot carries the window ordinal in a trailing id line. Old and new tag spellings
+ * both count: a transcript written before the rename must not lose its window numbering.
+ */
 function restoreWindow(state: ResetState, messages: readonly { role: string; text: string }[]) {
   if (!state.identity) return
   const prefix = `Current context window id: claude:${state.identity.sessionId}:`
   for (const message of messages) {
-    if (message.role !== "user" || !message.text.includes("<context_window>\nAgent name: claude ")) continue
+    if (message.role !== "user" || !BOOT_IDENTITY.test(message.text)) continue
     const line = message.text.split("\n").find((value) => value.startsWith(prefix))
     if (!line) continue
     const suffix = line.slice(prefix.length)

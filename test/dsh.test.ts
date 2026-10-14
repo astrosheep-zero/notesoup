@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { resolveProjectHome } from "../src/notes/project-home.js";
 import { renderBootBlock } from "../src/boot/render.js";
 import { loadNotesSnapshot } from "../src/boot/snapshot.js";
+import { NOTES_PROTOCOL_CLOSE_TAG, WINDOW_IDENTITY_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG } from "../src/boot/text.js";
 import { notesRead } from "../src/tools/notes.js";
 import { success } from "../src/tools/result.js";
 import { createNotesStore } from "../src/notes/index.js";
@@ -87,6 +88,41 @@ test("dsh reload adopts persisted bytes before first assembly; missing records r
 	assert.equal(engine.windows.get(rootReloaded.session).snapshot.boot, rootBoot);
 	assert.equal(engine.windows.get(rootReloaded.session).snapshot.window, 0);
 });
+
+test("dsh reload keeps its window ordinal from a boot written before the tag rename", async (t) => {
+	const { engine, create, mock } = await dshFixture(t);
+	const agent = await create();
+	mock.script.push({ tool: "empty_brain", input: {} }, { text: "after" });
+	await run(agent, "before");
+	const snapshot = engine.windows.get(agent.session).snapshot;
+	assert.ok(snapshot.boot.includes(WINDOW_IDENTITY_OPEN_TAG), "the current boot carries the renamed tag");
+	const legacy = withLegacyIdentityTags(withoutRecords(agent.session.snapshotEvents()));
+	assert.ok(JSON.stringify(legacy).includes("<context_window>\\nAgent name: dsh"), "the seed reproduces an old-spelling boot");
+	const resumed = await create(legacy, "session-legacy-tags");
+	await run(resumed, "continue");
+	assert.equal(engine.windows.get(resumed.session).snapshot.window, 1, "an old-tag boot still yields its window ordinal");
+	assert.equal(engine.windows.get(resumed.session).snapshot.windowId, snapshot.windowId, "and its window id");
+});
+
+/**
+ * The same seed with the pre-rename identity spelling: boots already on disk carry `context_window`,
+ * so a reader that only knows the new tag would silently lose their window numbering.
+ */
+function withLegacyIdentityTags(events: readonly SessionEvent[]): SessionEvent[] {
+	const legacy = (text: string) => text
+		.replaceAll(WINDOW_IDENTITY_OPEN_TAG, "<context_window>")
+		.replaceAll(WINDOW_IDENTITY_CLOSE_TAG, "</context_window>");
+	return events.map((event) => {
+		const copy = structuredClone(event) as SessionEvent;
+		if (copy.type !== "user/message") return copy;
+		const data = copy.data as { content?: unknown };
+		if (typeof data.content === "string") data.content = legacy(data.content);
+		else if (Array.isArray(data.content)) for (const block of data.content as Array<{ text?: unknown }>) {
+			if (typeof block.text === "string") block.text = legacy(block.text);
+		}
+		return copy;
+	});
+}
 
 /** Removal models migration loss: native references and contiguous seqs are remapped. */
 function withoutRecords(events: readonly SessionEvent[]): SessionEvent[] {

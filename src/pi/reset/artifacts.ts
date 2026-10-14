@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext, SessionBoundaryDraft, SessionEntry } from "@earendil-works/pi-coding-agent";
-import { BOOT_TYPE, CONTINUATION_TYPE, RESET_LAST_WORD_TYPE, RESET_MARKER_TYPE, RESET_PROMPT_TYPE } from "../entries.js";
+import { BOOT_TYPE, CONTINUATION_TYPE, RESET_LAST_WORD_TYPE, RESET_MARKER_TYPE } from "../entries.js";
 import { CONTINUATION } from "../../budget/text.js";
 import { isForeignResetTailEntry, isWindowBootEntry, isWindowMarker, type WindowMarker } from "../window.js";
 import { buildBootMessage, sendBoot, type IncompleteNotesNotifier } from "../boot.js";
@@ -33,7 +33,9 @@ function sendContinuation(pi: ExtensionAPI): void {
 
 /**
  * The closed, ordered reset shape: retain-none native checkpoint, marker, matching boot,
- * continuation, then an optional parting line and command prompt. The boot snapshot is acquired asynchronously after capturing this identity.
+ * continuation, then an optional parting line. The prompt is not persisted here — it reached the
+ * closing window inside the warning. The boot snapshot is acquired asynchronously after capturing
+ * this identity.
  */
 export async function buildResetDrafts(
 	ctx: ExtensionContext,
@@ -59,7 +61,6 @@ export async function buildResetDrafts(
 		{ type: "custom_message", customType: BOOT_TYPE, content: boot.content, display: false, details: { windowId } },
 		{ type: "custom_message", customType: CONTINUATION_TYPE, content: CONTINUATION, display: false },
 		...(lastWord ? [{ type: "custom_message" as const, customType: RESET_LAST_WORD_TYPE, content: `${LAST_WORD_PREFIX}${lastWord}`, display: true }] : []),
-		...(prompt ? [{ type: "custom_message" as const, customType: RESET_PROMPT_TYPE, content: prompt, display: true }] : []),
 	];
 }
 

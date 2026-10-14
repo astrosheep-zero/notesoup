@@ -10,7 +10,7 @@ import { dispatch, handleLine, type ClaudeToolResult } from "../src/claude/helpe
 import { DEFAULT_CLAUDE_RESET_MARGIN_TOKENS, resolveClaudeLimits } from "../src/claude/thresholds.js";
 import { WARNING_RUNWAY_TOKENS } from "../src/budget/constants.js";
 import { PROTOCOL_WIPE_SENTENCE, CLAUDE_WIPE_SENTENCE, renderProtocolBlock } from "../src/boot/text.js";
-import { CLAUDE_WARNING_PROMPT, CONTINUATION } from "../src/budget/text.js";
+import { CLAUDE_WARNING_PROMPT, CONTINUATION, COUNTDOWN_LINE } from "../src/budget/text.js";
 import { createNotesStore } from "../src/notes/index.js";
 import { resolveProjectHome } from "../src/notes/project-home.js";
 import { notesIdentityFromPi } from "../src/pi/notes/adapter.js";
@@ -192,7 +192,8 @@ test("Claude helper serves the shared reset prose and the host's wipe sentence",
   assert.equal(texts.warning, CLAUDE_WARNING_PROMPT, "the helper owns the one warning text the mod shows");
   assert.equal(texts.continuation, CONTINUATION, "the reset message is Pi's, verbatim");
   assert.equal(texts.wipeSentence, CLAUDE_WIPE_SENTENCE);
-  assert.match(texts.warning, /end your turn; the reset runs after it\.$/);
+  assert.match(texts.warning, /end your turn; the reset runs after it\./);
+  assert.equal(texts.warning.endsWith(COUNTDOWN_LINE), true, "the Claude notice also ends with the countdown");
 });
 
 /** The point values the resolver produced, without the margin bookkeeping. */
@@ -531,6 +532,26 @@ test("Claude Mod headless detection skips compaction and logs once", async (t) =
   assert.equal(notifications.length, 1);
   const boot = await handlers.get("prompt.context")!(host, {}, async () => ({ blocks: [] })) as { blocks: Array<{ text: string }> };
   assert.match(boot.blocks[0]!.text, /Current context window id: claude:hook-session:0/);
+});
+
+test("Claude Mod keeps its window numbering from a boot written before the tag rename", async (t) => {
+  const home = mkdtempSync(join(tmpdir(), "claude-legacy-boot-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const { host } = fakeEngine(home);
+  const handlers = new Map<string, HookHandler>();
+  (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
+  const invoke = (name: string, event: Record<string, unknown> = {}, next: () => Promise<unknown> = async () => ({ sentinel: name })) => handlers.get(name)!(host, event, next);
+  const boot = (spelling: "notesoup:window_identity" | "context_window") => `<${spelling}>\nAgent name: claude (brain: claude)\n\nhook-session\n</${spelling}>\n\nCurrent context window id: claude:hook-session:3`;
+  for (const spelling of ["context_window", "notesoup:window_identity"] as const) {
+    const text = boot(spelling);
+    host.session.messages = async () => [{ role: "user", text }];
+    await invoke("session.start", { cwd: home, isInteractive: true });
+    // A recognised retained boot is not injected a second time into prompt context.
+    const context = await invoke("prompt.context", {}, async () => ({ blocks: [] })) as { blocks: Array<{ name: string }> };
+    assert.deepEqual(context.blocks, [], `${spelling} is recognised as this session's retained boot`);
+    const compacted = await invoke("session.compact", { trigger: "auto", instructions: "", messages: [] }) as { messages: Array<{ text: string }> };
+    assert.match(compacted.messages[0]!.text, /Current context window id: claude:hook-session:4/, `${spelling} keeps its window ordinal`);
+  }
 });
 
 test("Claude Mod refuses to wipe on boot failure and can retry without advancing the window", async (t) => {

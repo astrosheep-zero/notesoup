@@ -15,10 +15,10 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { SessionManager as Manager } from "@earendil-works/pi-coding-agent";
 import notesoup from "../src/pi/extension.js";
-import { BOOT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, RESET_LAST_WORD_TYPE, RESET_MARKER_TYPE, RESET_PROMPT_TYPE } from "../src/pi/entries.js";
+import { BOOT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, RESET_LAST_WORD_TYPE, RESET_MARKER_TYPE } from "../src/pi/entries.js";
 import { MANUAL_WIPE_TYPE } from "../src/pi/entries.js";
 import { assertBootHistory, toolContext } from "./helpers/extension.js";
-import { WARNING_CALL_PROMPTED, warningContent } from "../src/budget/text.js";
+import { COUNTDOWN_LINE, LAST_WORD_HINT, WARNING_CALL_PROMPTED, warningContent } from "../src/budget/text.js";
 import { historyFromSession, nextHistorySeq } from "../src/pi/history.js";
 import { buildResetDrafts, LAST_WORD_PREFIX, MAX_LAST_WORD_CHARS, sanitizeLastWord } from "../src/pi/reset/artifacts.js";
 import {
@@ -263,7 +263,22 @@ test("manual /empty-brain with a prompt shows the human's command line in the cl
 	assert.ok(promptIndex >= 0, "the human's raw command line reaches the closing model");
 	const closingIndex = content.indexOf(WARNING_CALL_PROMPTED);
 	assert.ok(closingIndex > promptIndex, "the closing instruction follows the prompt, so the order stays prompt then act");
-	assert.equal(h.sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === RESET_PROMPT_TYPE).length, 0, "the prompt itself still waits for the new window");
+	assert.ok(content.indexOf(COUNTDOWN_LINE) > content.indexOf(LAST_WORD_HINT), "the countdown follows the Pi-only last-word hint");
+	assert.equal(content.split(COUNTDOWN_LINE).length - 1, 1, "the notice carries the countdown once");
+	// The prompt was a note-to-self for the closing window: it never becomes the next window's task.
+	const settle = resultEntries(await h.emit("agent_before_settle", {
+		type: "agent_before_settle",
+		entries: [],
+		outcome: "completed",
+		context: { contextEntries: [], contextMessages: [], llmMessages: [], pendingMessages: [], canContinue: true },
+	}));
+	assert.equal(settle.continue, true, "a prompted close-out continues in the fresh window");
+	assert.deepEqual(settle.entries.map((entry) => entry.type === "compaction" ? "native-compaction" : (entry as { customType?: string }).customType), [
+		"native-compaction",
+		RESET_MARKER_TYPE,
+		BOOT_TYPE,
+		CONTINUATION_TYPE,
+	], "the reset tail is one boot, one continuation, and no persisted prompt");
 });
 
 test("reset construction failure preserves incoming and budget drafts without continuation", async () => {

@@ -8,7 +8,7 @@ import test from "node:test";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { loadNotesSnapshot } from "../src/boot/snapshot.js";
 import { renderBootBlock } from "../src/boot/render.js";
-import { MAP_BOOT_MAX_CHARS } from "../src/boot/text.js";
+import { MAP_BOOT_MAX_CHARS, MAPS_BLOCK, NOTES_PROTOCOL_CLOSE_TAG, NOTES_PROTOCOL_OPEN_TAG } from "../src/boot/text.js";
 import { localIso } from "../src/notes/frontmatter.js";
 import type { NoteRow, Scope } from "../src/notes/index.js";
 import { listNotes, physicalPath, scopeDir } from "./helpers/notes.js";
@@ -261,11 +261,13 @@ test("boot note acquisition is one closed snapshot and isolates one or all faile
 	assert.equal(rendered.includes("- MAP.md"), false, "a pinned session map does not take a feed seat");
 	assert.match(rendered, / {2}Session note\n {2}session\.md · (?:just now|\d+s ago)/, "a feed entry is the note's own title over its locator");
 	assert.equal(rendered.includes("UTF-8 bytes"), false, "fresh rows omit implementation-oriented byte counts");
-	assert.ok(rendered.indexOf("<context_window_protocol>") < rendered.indexOf("YOUR NOTES"), "the protocol explains the notes before presenting them");
-	assert.match(rendered, /THIS PROJECT · @project\n─+/, "shelves carry underlined headers");
-	assert.ok(rendered.includes("New pages"), "shelves label their fresh pages");
-	assert.ok(rendered.indexOf("THIS SESSION") < rendered.indexOf("New pages"), "the first shelf opens the index");
-	const headings = ["THIS SESSION · no @", "THIS PROJECT · @project", "YOU · @self", "THE HUMAN · @human"];
+	assert.ok(rendered.indexOf(NOTES_PROTOCOL_OPEN_TAG) < rendered.indexOf("YOUR NOTES"), "the protocol explains the notes before presenting them");
+	assert.ok(rendered.indexOf(MAPS_BLOCK) < rendered.indexOf("YOUR NOTES"), "the MAP block sits between the protocol and the notes index");
+	assert.ok(rendered.indexOf(NOTES_PROTOCOL_CLOSE_TAG) < rendered.indexOf(MAPS_BLOCK), "the MAP block follows the protocol block");
+	assert.match(rendered, /@project — this project\n─+/, "shelves carry underlined headers");
+	assert.ok(rendered.includes("recent"), "shelves label their fresh pages");
+	assert.ok(rendered.indexOf("no @ — this session") < rendered.indexOf("recent"), "the first shelf opens the index");
+	const headings = ["no @ — this session", "@project — this project", "@self — root only", "@model — default only", "@human — the human"];
 	for (let i = 1; i < headings.length; i++) assert.ok(rendered.indexOf(headings[i - 1]!) < rendered.indexOf(headings[i]!), "shelves proceed from current hands to durable");
 
 	const expanded = await loadNotesSnapshot(notesIdentityFromPi(ctx), Date.now(), (scope) => {
@@ -292,10 +294,10 @@ test("boot note acquisition is one closed snapshot and isolates one or all faile
 	] : []);
 	const mapAndUnicodeText = renderBootBlock({ ...renderData, notes: mapAndUnicode });
 	assert.match(mapAndUnicodeText, / {2}🐑字\n {2}unicode\.md · (?:just now|\d+s ago)/, "a headingless note is announced by its first line");
-	assert.ok(mapAndUnicodeText.includes("THIS SESSION · no @\n───────────────────\n\nMAP — MAP.md\n\n  SESSION_MAP_BODY\n\nNew pages\n\n  🐑字\n  unicode.md · just now"), "the session shelf keeps its typography");
+	assert.ok(mapAndUnicodeText.includes("no @ — this session\n───────────────────\n\nmap\n\n  SESSION_MAP_BODY\n\nrecent\n\n  🐑字\n  unicode.md · just now"), "the session shelf keeps its typography");
 	assert.equal(mapAndUnicodeText.includes("crumpled.md"), false);
 	assert.equal(/MAP\.md ·/.test(mapAndUnicodeText), false, "maps never take feed seats");
-	assert.equal(mapAndUnicodeText.includes("THE HUMAN"), false, "empty shelves are omitted");
+	assert.equal(mapAndUnicodeText.includes("@human — the human"), false, "empty shelves are omitted");
 
 	const readFailure = (code: string): NodeJS.ErrnoException => Object.assign(new Error("scripted read failure"), { code });
 	const oneFailed = await loadNotesSnapshot(notesIdentityFromPi(ctx), Date.now(), (scope) => {
@@ -310,7 +312,7 @@ test("boot note acquisition is one closed snapshot and isolates one or all faile
 		tree: renderData.tree,
 		notes: oneFailed,
 	});
-	assert.ok(oneFailedText.includes("PROJECT_MAP_BODY") && oneFailedText.includes("THE HUMAN · @human\n──────────────────\n\n  This drawer wouldn't open. Try `notes_list` again."), "healthy homes and a per-section recovery notice survive one failure");
+	assert.ok(oneFailedText.includes("PROJECT_MAP_BODY") && oneFailedText.includes("@human — the human\n──────────────────\n\n  This drawer wouldn't open. Try `notes_list` again."), "healthy homes and a per-section recovery notice survive one failure");
 	assert.equal(oneFailedText.includes("HUMAN_POCKET_BODY"), false, "the failed home's index is omitted");
 	assert.equal(oneFailedText.includes("Human note"), false, "the failed home takes no feed seats");
 
