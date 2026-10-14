@@ -23,9 +23,6 @@ export function registerBudget(
 ) {
 	let cachedPolicy: { thresholds: ResolvedThresholds; automatic: boolean } | undefined;
 	const notifiedWarnings = new Set<string>();
-	// The reset owner is wired after both sides exist, so no handler can observe a
-	// half-constructed pair (a close-out request cannot arrive before registration ends).
-	let onCloseOut: (windowId: string) => void = () => {};
 	const resolvePolicy = (ctx: ExtensionContext): ThresholdSettingsResolution => {
 		if (!settingsManager && cachedPolicy) return { ...cachedPolicy, warnings: [] };
 		const resolution = readThresholdSettings(ctx, settingsManager);
@@ -98,9 +95,6 @@ export function registerBudget(
 		const windowId = currentWindowId(ctx);
 		const { reminder, warning } = thresholdsFor(ctx);
 		if (remaining <= warning) {
-			// Re-arm close-out on each eligible request. A prior request may have aborted
-			// after persisting the warning, so warning deduplication must not own this state.
-			onCloseOut(windowId);
 			if (hasWindowMessage(ctx, WARNING_TYPE)) return result();
 			// The critical close-out starts at reserve + runway, not at the hard reserve.
 			// Another request in the same turn re-sends the staged text instead of re-measuring.
@@ -140,8 +134,6 @@ export function registerBudget(
 		automaticResetEnabled,
 		hardReserveDue,
 		consumeTurnEnd,
-		/** The reset owner wires its close-out here once the lifecycle reducer exists. */
-		setCloseOut: (handler: (windowId: string) => void) => { onCloseOut = handler; },
 		/** The same close-out countdown the model sees, for user-facing status; null when usage is unknown. */
 		statusFor: (ctx: ExtensionContext): { remaining: number | null } => ({ remaining: remainingBudget(remainingTokens(ctx), thresholdsFor(ctx).warning) }),
 		clear: () => { clearStaged(); notifiedWindows.clear(); },

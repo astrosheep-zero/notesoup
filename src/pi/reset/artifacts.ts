@@ -43,7 +43,6 @@ export async function buildResetDrafts(
 	ctx: ExtensionContext,
 	notifyIncompleteNotes?: IncompleteNotesNotifier,
 	isCurrent: () => boolean = () => true,
-	prompt?: string,
 	lastWord?: string,
 	firstSeq?: number,
 	origin: ResetOrigin = "normal",

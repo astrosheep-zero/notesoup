@@ -183,7 +183,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 			// steered into the running turn when busy — so the agent closes out promptly
 			// instead of the reset waiting for the whole run.
 			const prompt = args.trim() || undefined;
-			const armed = resets.closeOut(requestedWindowId, "manual", prompt);
+			const armed = resets.command(requestedWindowId, prompt !== undefined);
 			if (armed === "already-pending") {
 				cmdCtx.ui.notify("🥣 Brain already being emptied", "info");
 				return;
@@ -216,7 +216,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 
 	const resets = registerResetLifecycle(pi, {
 		isEnabled: () => enabled,
-		buildReset: (ctx, isCurrent, prompt, lastWord, firstSeq, origin) => buildResetDrafts(ctx, notifyIncompleteNotes, isCurrent, prompt, lastWord, firstSeq, origin),
+		buildReset: (ctx, isCurrent, lastWord, firstSeq, origin) => buildResetDrafts(ctx, notifyIncompleteNotes, isCurrent, lastWord, firstSeq, origin),
 		getLifecycleGeneration: () => lifecycleGeneration,
 		onResetReady: (_ctx, drafts) => {
 			const boot = drafts.find((draft) => draft.type === "custom_message" && draft.customType === BOOT_TYPE);
@@ -227,5 +227,4 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 		},
 		budget,
 	});
-	budget.setCloseOut((windowId) => resets.closeOut(windowId, "automatic"));
 }
