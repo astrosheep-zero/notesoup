@@ -537,7 +537,7 @@ test("Claude Mod headless detection skips compaction and logs once", async (t) =
   await invoke("turn.complete");
   assert.equal(attempts, 0, "headless sessions skip the unsupported capability from startup");
   assert.deepEqual(notifications, ["🥣 No brain when headless"]);
-  const manual = await invoke("command.run", { command: "empty-brain" }) as { text: string };
+  const manual = await invoke("command.run", { command: "empty" }) as { text: string };
   assert.match(manual.text, /No brain when headless/);
   assert.equal(notifications.length, 1);
   const boot = await handlers.get("prompt.context")!(host, {}, async () => ({ blocks: [] })) as { blocks: Array<{ text: string }> };
@@ -598,6 +598,8 @@ test("Claude Mod manual reset uses one hidden close-out turn, then recovers its 
   const home = mkdtempSync(join(tmpdir(), "claude-manual-home-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const { host } = fakeEngine(home);
+  const commands: string[] = [];
+  host.command.register = async (spec) => { commands.push(spec.name); return { command: spec.name }; };
   let handlers = new Map<string, HookHandler>();
   const invoke = (name: string, e: Record<string, unknown> = {}) => handlers.get(name)!(host, e, async () => ({}));
   const timers: Array<() => void | Promise<void>> = [];
@@ -618,7 +620,10 @@ test("Claude Mod manual reset uses one hidden close-out turn, then recovers its 
   };
   (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
   await invoke("session.start", { cwd: home, isInteractive: true });
-  const command = await invoke("command.run", { command: "empty-brain" }) as { text: string };
+  assert.deepEqual(commands.sort(), ["empty", "fresh-window"], "only the new short name and the retained alias are registered");
+  assert.deepEqual(await invoke("command.run", { command: "empty-brain" }), {}, "the retired spelling passes through instead of resetting");
+  assert.equal(timers.length, 0);
+  const command = await invoke("command.run", { command: "empty" }) as { text: string };
   assert.match(command.text, /Brain being emptied/);
   await Promise.resolve();
   assert.equal(compactions, 0, "command.run must not call compact under its held turn");
@@ -636,7 +641,7 @@ test("Claude Mod manual reset uses one hidden close-out turn, then recovers its 
   await invoke("session.start", { cwd: home, isInteractive: true });
   assert.deepEqual(await handlers.get("prompt.context")!(host, {}, async () => ({ blocks: [] })), { blocks: [] }, "reload does not duplicate the already-retained boot");
   await invoke("turn.start");
-  await invoke("command.run", { command: "empty-brain" });
+  await invoke("command.run", { command: "empty" });
   await invoke("turn.complete");
   assert.equal(prompts.length, 1, "a busy manual request reuses the current turn instead of submitting another");
   assert.match(kept[0]!.text, /Current context window id: claude:hook-session:2/);
@@ -711,7 +716,7 @@ test("Claude Mod stops the automatic reset and the manual command under DISABLE_
   await invoke("session.start", { cwd: home, isInteractive: true });
   assert.equal(notifications.length, 1, "one startup line");
   assert.match(notifications[0]!, /DISABLE_COMPACT/);
-  const manual = await invoke("command.run", { command: "empty-brain" }) as { text: string };
+  const manual = await invoke("command.run", { command: "empty" }) as { text: string };
   assert.match(manual.text, /DISABLE_COMPACT/);
   assert.equal(timers.length, 0, "no close-out turn is queued");
   await invoke("turn.start");
@@ -891,7 +896,7 @@ test("Claude session.end gives /clear, /resume and /branch a fresh boot and iden
       host.session.usage = async () => ({ context: { tokens: 142_424, window: 200_000 } });
       assert.equal((await context()).blocks[0]?.name, "notesoup:warning", "the old window has already warned");
       await invoke("turn.start");
-      await invoke("command.run", { command: "empty-brain" });
+      await invoke("command.run", { command: "empty" });
       const ended = { sentinel: action };
       assert.equal(await invoke("session.end", { reason: action === "clear" ? "clear" : "resume", sessionId: "hook-session" }, ended), ended);
       host.session.id = async () => `after-${action}`;

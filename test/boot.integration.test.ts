@@ -363,10 +363,10 @@ test("empty_brain uses one turn boundary and never calls ctx.compact", async () 
 	assert.equal(sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === BOOT_TYPE && entry.details && typeof entry.details === "object" && "windowId" in entry.details).length, 1);
 });
 
-test("/empty-brain waits out non-agent busy work before starting its single-turn request", async () => {
+test("/empty waits out non-agent busy work before starting its single-turn request", async () => {
 	const sessionManager = manager();
 	const captured = makeExtension(sessionManager);
-	const cmd = captured.commands.get("empty-brain");
+	const cmd = captured.commands.get("empty");
 	assert.ok(cmd);
 	let waits = 0;
 	const notices: string[] = [];
@@ -382,7 +382,7 @@ test("/empty-brain waits out non-agent busy work before starting its single-turn
 	assert.equal(notices.filter((message) => message.includes("Brain being emptied")).length, 1);
 });
 
-test("notesoup command toggles future work, /empty-brain schedules a turn-end reset, and /compact remains disabled", async () => {
+test("notesoup command toggles future work, /empty schedules a turn-end reset, and /compact remains disabled", async () => {
 	const sessionManager = manager();
 	appendText(sessionManager, "user", "hello");
 	const captured = makeExtension(sessionManager);
@@ -404,7 +404,7 @@ test("notesoup command toggles future work, /empty-brain schedules a turn-end re
 
 	notices = await runCommand(captured, "notesoup", "on", low);
 	assert.match(notices[0]?.message ?? "", /on/);
-	notices = await runCommand(captured, "empty-brain", "", low);
+	notices = await runCommand(captured, "empty", "", low);
 	assert.equal(notices.length, 1, "the command acknowledges the reset request");
 	assert.match(notices[0]?.message ?? "", /Brain being emptied/);
 	assert.equal(captured.sent.length, 2, "the command persists one hidden warning after the startup boot");

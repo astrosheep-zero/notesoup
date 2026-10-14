@@ -118,8 +118,8 @@ test("the countdown closes the second-tier notice only, in both hosts", () => {
 	assert.ok(pi.endsWith(`\n${GUIDANCE_CLOSE_TAG}`));
 	assert.ok(pi.includes(`\n${LAST_WORD_HINT}\n${COUNTDOWN_LINE}\n`), "the countdown comes after the Pi-only last-word hint");
 	assert.equal(pi.split(COUNTDOWN_LINE).length - 1, 1, "the second tier carries the countdown exactly once");
-	const prompted = warningContent("/empty-brain keep going");
-	assert.ok(prompted.includes("<notesoup:next_window_prompt>\n/empty-brain keep going\n</notesoup:next_window_prompt>"));
+	const prompted = warningContent("/empty keep going");
+	assert.ok(prompted.includes("<notesoup:next_window_prompt>\n/empty keep going\n</notesoup:next_window_prompt>"));
 	assert.ok(prompted.endsWith(`\n${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}`), "the prompt block does not displace the countdown");
 	assert.equal(CLAUDE_WARNING_PROMPT.endsWith(`\n${COUNTDOWN_LINE}`), true, "Claude's variant ends the same way");
 	assert.equal(tokenBudgetGuidance(100, "empty_brain").includes(COUNTDOWN_LINE), false, "the first tier never counts down");

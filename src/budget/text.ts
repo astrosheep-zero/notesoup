@@ -46,7 +46,7 @@ export const WARNING_CALL = "When the notes are ready, call `empty_brain` to res
 export const WARNING_CALL_PROMPTED = "Organize the notes first, then call `empty_brain` right away — do not wait to be cut off.";
 
 /**
- * The human typed `/empty-brain <prompt>`: the raw command line leads the close-out so the
+ * The human typed `/empty <prompt>`: the raw command line leads the close-out so the
  * closing model sees what the next window was asked to do, verbatim. The tag names it as the
  * next window's prompt, so no prose has to explain that.
  */

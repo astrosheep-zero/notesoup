@@ -202,9 +202,9 @@ test("public reset boundary drafts one marker, one boot, and one continuation af
 	assert.equal(branch.filter((entry) => entry.type === "custom_message" && entry.customType === BOOT_TYPE).length, 1);
 });
 
-test("manual /empty-brain spans tool turns and commits the stop at settlement", async () => {
+test("manual /empty spans tool turns and commits the stop at settlement", async () => {
 	const h = harness();
-	await h.runCommand("empty-brain");
+	await h.runCommand("empty");
 	assert.ok(h.sent.some((message) => message.customType === MANUAL_WIPE_TYPE && message.triggerTurn === true), "the idle close-out warning starts a turn");
 	const toolCallMessage = {
 		role: "assistant",
@@ -245,8 +245,8 @@ test("off stops future automatic/manual reset requests while an existing marker 
 	const afterOff = resultEntries(await h.emit("turn_end", fakeBoundaryEvent()));
 	assert.equal(afterOff.entries.length, 0, "off does not create another reset");
 	await h.runCommand("notesoup", "on");
-	await h.runCommand("empty-brain");
-	assert.equal(h.sent.length, 1, "/empty-brain sends one hidden close-out warning and starts a normal turn");
+	await h.runCommand("empty");
+	assert.equal(h.sent.length, 1, "/empty sends one hidden close-out warning and starts a normal turn");
 	assert.equal(h.sent[0]?.triggerTurn, true);
 	assert.equal(h.sent[0]?.customType, MANUAL_WIPE_TYPE);
 	const warning = h.sessionManager.getBranch().find((entry) => entry.type === "custom_message" && entry.customType === MANUAL_WIPE_TYPE);
@@ -256,15 +256,15 @@ test("off stops future automatic/manual reset requests while an existing marker 
 	assert.equal(markers.length, 1, "manual command waits for an agent boundary; it does not persist an immediate reset");
 });
 
-test("manual /empty-brain with a prompt shows the human's command line in the close-out", async () => {
+test("manual /empty with a prompt shows the human's command line in the close-out", async () => {
 	const h = harness();
 	// Assert on values, not on the warning's wording: the command line must survive verbatim
 	// and must precede the closing instruction, so the prompt cannot read as this window's task.
-	await h.runCommand("empty-brain", "Continue reviewing the implementation");
+	await h.runCommand("empty", "Continue reviewing the implementation");
 	const warning = h.sessionManager.getBranch().find((entry) => entry.type === "custom_message" && entry.customType === MANUAL_WIPE_TYPE);
 	assert.ok(warning?.type === "custom_message", "the close-out warning is persisted");
 	const content = String(warning.content);
-	const promptLine = "/empty-brain Continue reviewing the implementation";
+	const promptLine = "/empty Continue reviewing the implementation";
 	const promptIndex = content.indexOf(promptLine);
 	assert.ok(promptIndex >= 0, "the human's raw command line reaches the closing model");
 	const closingIndex = content.indexOf(WARNING_CALL_PROMPTED);
@@ -855,7 +855,7 @@ test("a committed reset records its origin and draws that pool exactly once", as
 		assert.equal(askedLine.content, NORMAL_CONTINUATIONS[0]);
 
 		const commanded = harness();
-		await commanded.runCommand("empty-brain");
+		await commanded.runCommand("empty");
 		const commandedBoundary = resultEntries(await commanded.emit("agent_before_settle", {
 			type: "agent_before_settle",
 			entries: [],

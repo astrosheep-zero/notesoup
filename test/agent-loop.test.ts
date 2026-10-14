@@ -508,7 +508,7 @@ test("real AgentSession: manual command spans its tool batch and stops at settle
 		script: (request, context) => {
 			if (request === 1) return assistant(fixture, [{ type: "text", text: "before manual reset" }]);
 			if (request === 2) {
-				assert.ok(text(context).includes(WARNING_JSON), "idle /empty-brain sends the shared checkpoint prompt");
+				assert.ok(text(context).includes(WARNING_JSON), "idle /empty sends the shared checkpoint prompt");
 				return assistant(fixture, [{ type: "toolCall", id: "manual-note", name: "notes_write", arguments: { address: "manual-a.md", content: "MANUAL_NOTE_ALPHA" } }], "toolUse");
 			}
 			assert.equal(request, 3, "the close-out turn finishes in the old window");
@@ -519,7 +519,7 @@ test("real AgentSession: manual command spans its tool batch and stops at settle
 	try {
 		await fixture.session.prompt("MANUAL_CLOSEOUT_OLD_SENTINEL");
 		await fixture.session.waitForIdle();
-		await fixture.session.prompt("/empty-brain");
+		await fixture.session.prompt("/empty");
 		await fixture.session.waitForIdle();
 		assert.equal(fixture.requests.length, 3, "the run stops at settlement instead of continuing in the fresh window");
 		assert.equal(resetMarkers(fixture).length, 1);
@@ -548,7 +548,7 @@ test("real AgentSession: manual command spans its tool batch and stops at settle
 });
 
 test("real AgentSession: a clear command keeps its prompt out of the fresh window and resumes once", { timeout: 25000 }, async () => {
-	for (const mode of ["empty-brain", "fresh-window", "hard-reserve", "overflow"] as const) {
+	for (const mode of ["empty", "fresh-window", "hard-reserve", "overflow"] as const) {
 		let fixture!: Fixture;
 		const prompt = 'AFTER_CLEAR_PROMPT_SENTINEL /cm "literal text"';
 		// `text()` serializes to JSON, so a quoted argument reaches the provider in its escaped form.
@@ -574,7 +574,7 @@ test("real AgentSession: a clear command keeps its prompt out of the fresh windo
 		});
 		try {
 			await fixture.session.prompt("PROMPT_RESET_OLD_SENTINEL");
-			await fixture.session.prompt(`/${mode === "empty-brain" ? "empty-brain" : "fresh-window"}   ${prompt}  `);
+			await fixture.session.prompt(`/${mode === "empty" ? "empty" : "fresh-window"}   ${prompt}  `);
 			await fixture.session.waitForIdle();
 			assert.equal(fixture.requests.length, 3);
 			assert.equal(resetMarkers(fixture).length, 1);
@@ -634,7 +634,7 @@ test("real AgentSession: streaming clear prompt keeps the first request", { time
 		const running = fixture.session.prompt("streaming old work");
 		await ready;
 		await fixture.session.prompt("/fresh-window FIRST_RESET_PROMPT", { streamingBehavior: "steer" });
-		await fixture.session.prompt("/empty-brain IGNORED_RESET_PROMPT", { streamingBehavior: "steer" });
+		await fixture.session.prompt("/empty IGNORED_RESET_PROMPT", { streamingBehavior: "steer" });
 		release();
 		await running;
 		await fixture.session.waitForIdle();
@@ -661,7 +661,7 @@ test("real AgentSession: manual hard-reserve reset stops clean and mixed-tool tu
 		});
 		try {
 			await fixture.session.prompt("HARD_RESERVE_OLD_SENTINEL");
-			await fixture.session.prompt("/empty-brain");
+			await fixture.session.prompt("/empty");
 			await fixture.session.waitForIdle();
 			assert.equal(fixture.requests.length, 2);
 			assert.equal(resetMarkers(fixture).length, 1, "the safety wipe is not repeated at settlement");
@@ -706,7 +706,7 @@ test("real AgentSession: manual safety reset answers queued user input once befo
 	});
 	try {
 		await fixture.session.prompt("QUEUED_SAFETY_OLD_SENTINEL");
-		await fixture.session.prompt("/empty-brain");
+		await fixture.session.prompt("/empty");
 		await fixture.session.waitForIdle();
 		assert.equal(fixture.requests.length, 4, "queued input is answered once after Pi's tool follow-up, then the stop lands");
 		assert.equal(resetMarkers(fixture).length, 1);
@@ -728,7 +728,7 @@ test("real AgentSession: manual overflow wipes and stops even with automatic res
 	});
 	try {
 		await fixture.session.prompt("MANUAL_OVERFLOW_OLD_SENTINEL");
-		await fixture.session.prompt("/empty-brain");
+		await fixture.session.prompt("/empty");
 		await fixture.session.waitForIdle();
 		assert.equal(fixture.requests.length, 2);
 		assert.equal(resetMarkers(fixture).length, 1);
@@ -739,7 +739,7 @@ test("real AgentSession: manual overflow wipes and stops even with automatic res
 	}
 });
 
-test("real AgentSession: streaming /empty-brain steers a close-out and stops at settlement", { timeout: 20000 }, async () => {
+test("real AgentSession: streaming /empty steers a close-out and stops at settlement", { timeout: 20000 }, async () => {
 	let fixture!: Fixture;
 	let announceStarted!: () => void;
 	let releaseResponse!: () => void;
@@ -761,8 +761,8 @@ test("real AgentSession: streaming /empty-brain steers a close-out and stops at 
 	try {
 		const running = fixture.session.prompt("STREAMING_WIPE_OLD_SENTINEL");
 		await started;
-		await fixture.session.prompt("/empty-brain", { streamingBehavior: "steer" });
-		await fixture.session.prompt("/empty-brain", { streamingBehavior: "followUp" });
+		await fixture.session.prompt("/empty", { streamingBehavior: "steer" });
+		await fixture.session.prompt("/empty", { streamingBehavior: "followUp" });
 		assert.equal(fixture.notices.filter((notice) => notice.includes("Brain being emptied")).length, 1, "the user is notified once while output is ongoing");
 		assert.equal(resetMarkers(fixture).length, 0, "the ongoing turn is not interrupted");
 		releaseResponse();
@@ -796,9 +796,9 @@ test("real AgentSession: repeated manual commands share one pending window", { t
 		},
 	});
 	try {
-		const first = fixture.session.prompt("/empty-brain");
+		const first = fixture.session.prompt("/empty");
 		await started;
-		const second = fixture.session.prompt("/empty-brain");
+		const second = fixture.session.prompt("/empty");
 		releaseResponse();
 		await Promise.all([first, second]);
 		await fixture.session.waitForIdle();
@@ -877,7 +877,7 @@ test("real AgentSession: steering and follow-up queued during a manual reset are
 			},
 		});
 		try {
-			const command = fixture.session.prompt("/empty-brain");
+			const command = fixture.session.prompt("/empty");
 			await started;
 			if (delivery === "steer") fixture.session.steer("QUEUED_DURING_FALLBACK");
 			else fixture.session.followUp("QUEUED_DURING_FALLBACK");
@@ -1105,7 +1105,7 @@ test("real AgentSession: hidden or missing reset boots refuse to move the bounda
 	try {
 		await fixture.session.prompt("ROOT_BEFORE_HIDDEN_BOOT");
 		await fixture.session.waitForIdle();
-		await fixture.session.prompt("/empty-brain");
+		await fixture.session.prompt("/empty");
 		await fixture.session.waitForIdle();
 		await fixture.session.prompt("VALID_POST_MARKER_WORK");
 		await fixture.session.waitForIdle();

@@ -9,7 +9,7 @@ Boot acquisition/rendering is shared: `src/boot/snapshot.ts` receives explicit i
 | Trigger | Behavior |
 | --- | --- |
 | `empty_brain` tool | Record an actual tool request for the current window, including any last word. Without command policy it commits at `turn_end` after the complete tool batch and continues. Under command policy the request remains recorded but waits for settlement. |
-| `/fresh-window` or `/empty-brain` | Store command policy and send a hidden warning (start a turn when idle, steer when running). Wait for successful settlement after queued messages drain, then reset and stop for a bare command or continue for a command with text. Model tool calls remain actual requests; they do not change settlement policy. The text reaches the closing model only, never the new window directly. |
+| `/fresh-window` or `/empty` | Store command policy and send a hidden warning (start a turn when idle, steer when running). Wait for successful settlement after queued messages drain, then reset and stop for a bare command or continue for a command with text. Model tool calls remain actual requests; they do not change settlement policy. The text reaches the closing model only, never the new window directly. |
 | Budget warning | Inject a warning at reserve plus runway when automatic reset is enabled. This creates no lifecycle state. A warning alone never authorizes a reset; a tool call or the independent hard-reserve check does. |
 | Hard reserve | Independent safety path: if automatic resets are enabled and completed-turn usage reaches Pi's reserve, commit a boundary at `turn_end`. A pending manual stop survives in a run-scoped `stop-pending` phase; empty automatic follow-up is cancelled before provider work, while real queued user input is answered before stopping. |
 | Abort or error | Never count as successful close-out. Abort clears lifecycle state. An ordinary close-out error is dropped without reset. Manual overflow clears and stops without retry, even with automatic reset disabled; automatic provider-overflow recovery remains separately bounded. |
@@ -31,7 +31,7 @@ The origin comes directly from the recorded tool request: with a call it is `nor
 
 Each host draws once per artifact and shares that value across every representation of it: Pi persists one entry, dsh writes the same paragraph into its checkpoint text and its steered continuation, and Claude — which has no model-facing reset tool, so every Claude reset is forced — caches one line per window so a retried compaction cannot redraw it. A generic read-only text endpoint never draws.
 
-A manual `/empty-brain <prompt>` command line is not persisted after the reset: it reaches the closing window inside the warning, and the closing model records what the next window needs in notes.
+A manual `/empty <prompt>` command line is not persisted after the reset: it reaches the closing window inside the warning, and the closing model records what the next window needs in notes.
 
 The raw session branch is preserved for history. New checkpoint-backed branches use Pi's canonical retain-none projection, which preserves the empty summary wrapper and system/tool state while excluding earlier conversational context. Older marker-only sessions use marker slicing as a narrow compatibility fallback. A marker is trusted as checkpoint-backed only when it directly follows an empty native compaction whose `firstKeptEntryId` is the compaction's own ID; a generic preceding compaction is not enough.
 

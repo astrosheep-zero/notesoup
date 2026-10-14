@@ -54,7 +54,7 @@ The reminder and close-out warning go through `agent.steer`. Close-out remains a
 | Storage | Raw log remains available while the host keeps it. Notesoup does not back up session files or guarantee that an unflushed append survives a crash. |
 | Plugin records | Best-effort across dsh migrations. Missing records recover from native checkpoints/root system text; unknown future record or checkpoint formats are not migrated by notesoup. |
 | Tools and errors | Full shared TypeBox validation runs in the adapter because dsh supports a smaller schema subset. Expected operation errors become dsh failures with the shared code; successes use the shared bounded value and renderer. |
-| Notifications and commands | No custom UI notifications, settings card, runtime toggle or `/fresh-window`/`/empty-brain` command is installed. Configure engine rows in the profile/home patch; call `empty_brain` or the host's `/compact`. |
+| Notifications and commands | No custom UI notifications, settings card, runtime toggle or `/fresh-window`/`/empty` command is installed. Configure engine rows in the profile/home patch; call `empty_brain` or the host's `/compact`. |
 | Untested host features | Real providers, reasoning/image wire behavior, cache metrics, actual context-overflow retry, HMR, migrations, ACP/Web/SDK profiles and large histories are not established by the scripted tests. |
 | Dream | **No dsh dream backend or dream skill registration.** Use the existing supported host workflow. |
 

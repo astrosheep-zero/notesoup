@@ -191,14 +191,14 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 			}
 			cmdCtx.ui.notify("🥣 Brain being emptied", "info");
 			try {
-				pi.sendMessage({ customType: MANUAL_WIPE_TYPE, content: warningContent(prompt ? `/empty-brain ${prompt}` : undefined), display: false }, { triggerTurn: true, deliverAs: "steer" });
+				pi.sendMessage({ customType: MANUAL_WIPE_TYPE, content: warningContent(prompt ? `/empty ${prompt}` : undefined), display: false }, { triggerTurn: true, deliverAs: "steer" });
 			} catch (error) {
 				resets.clear();
 				cmdCtx.ui.notify(`🥣 Brain refused to empty: ${errorMessage(error)}`, "error");
 			}
 		},
 	};
-	pi.registerCommand("empty-brain", emptyBrainCommand);
+	pi.registerCommand("empty", emptyBrainCommand);
 	pi.registerCommand("fresh-window", emptyBrainCommand);
 
 	pi.registerTool(defineTool({

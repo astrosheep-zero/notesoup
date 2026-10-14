@@ -339,7 +339,7 @@ export function register(on: On) {
     registered.clear()
     await loadTexts($, state)
     armManual($, state, manualSignal)
-    await $.command.register({ name: "empty-brain", description: "Reset context to a fresh notes-only window", immediate: true })
+    await $.command.register({ name: "empty", description: "Reset context to a fresh notes-only window", immediate: true })
     await $.command.register({ name: "fresh-window", description: "Reset context to a fresh notes-only window", immediate: true })
     const schemas = await run($, { op: "schemas" })
     if (!schemas.ok || !Array.isArray(schemas.result)) return next(e)
@@ -390,7 +390,7 @@ export function register(on: On) {
     return result
   })
   on("command.run", async ($, e, next) => {
-    if (e.command !== "empty-brain" && e.command !== "fresh-window") return next(e)
+    if (e.command !== "empty" && e.command !== "fresh-window") return next(e)
     if (!await refreshIdentity($, state)) return { text: "🥣 Different brain now · try /fresh-window again" }
     if (state.headless) return { text: `🥣 ${HEADLESS}` }
     if (state.compactDisabled) return { text: `🥣 ${COMPACT_DISABLED}` }
