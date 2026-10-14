@@ -5,7 +5,7 @@ import { defineTool, type ExtensionAPI, type ExtensionContext, type SessionBound
 import { GUIDANCE_TYPE, WARNING_TYPE } from "./entries.js";
 import { warningContent } from "../budget/text.js";
 import { readThresholdSettings, type ThresholdSettingsResolution } from "./thresholds.js";
-import { currentWindowId, hasWindowMessage, isWindowMarker, rootWindowId, windowUsage } from "./window.js";
+import { currentWindowId, hasWindowMessage, windowUsage } from "./window.js";
 import { tokenBudgetGuidance } from "../budget/text.js";
 import { arrangeAnchoredReminders, type AnchorDetails } from "./anchored.js";
 import { output } from "./tool-result.js";
@@ -46,31 +46,7 @@ export function registerBudget(
 	};
 	let pendingGuidance: { windowId: string; content: string } | undefined;
 	let pendingWarning: { windowId: string; content: string } | undefined;
-	let pendingNotices = new Map<string, { sessionId: string; windowId: string }>();
-	const noticeKey = (sessionId: string, windowId: string) => `${sessionId}:${windowId}`;
-	const warningCommittedInWindow = (ctx: ExtensionContext, notice: { sessionId: string; windowId: string }): boolean => {
-		if (ctx.sessionManager.getSessionId() !== notice.sessionId) return false;
-		let windowId = rootWindowId(notice.sessionId);
-		for (const entry of ctx.sessionManager.getBranch()) {
-			if (isWindowMarker(entry)) {
-				windowId = entry.data.windowId;
-				continue;
-			}
-			if (windowId === notice.windowId && entry.type === "custom_message" && entry.customType === WARNING_TYPE) return true;
-		}
-		return false;
-	};
-	const notifyCommittedWarnings = (ctx: ExtensionContext, settled = false) => {
-		for (const [key, notice] of pendingNotices) {
-			if (warningCommittedInWindow(ctx, notice)) {
-				pendingNotices.delete(key);
-				ctx.ui.notify("🥣 Brain almost full · taking notes", "warning");
-			} else if (settled) {
-				// An uncommitted draft must not be matched to a later manual warning.
-				pendingNotices.delete(key);
-			}
-		}
-	};
+	const notifiedWindows = new Set<string>();
 
 	const clearStaged = () => {
 		pendingGuidance = undefined;
@@ -78,7 +54,7 @@ export function registerBudget(
 	};
 	const resetForTransition = () => {
 		clearStaged();
-		pendingNotices.clear();
+		notifiedWindows.clear();
 		cachedPolicy = undefined;
 		notifiedWarnings.clear();
 	};
@@ -91,10 +67,6 @@ export function registerBudget(
 		clearStaged();
 		const windowId = currentWindowId(ctx);
 		const drafts = staged.filter((draft): draft is NonNullable<typeof draft> => draft !== undefined && draft.windowId === windowId);
-		if (drafts.some((draft) => draft.customType === WARNING_TYPE)) {
-			const sessionId = ctx.sessionManager.getSessionId();
-			pendingNotices.set(noticeKey(sessionId, windowId), { sessionId, windowId });
-		}
 		return drafts.map((draft) => ({
 			type: "custom_message" as const,
 			customType: draft.customType,
@@ -108,14 +80,7 @@ export function registerBudget(
 	pi.on("session_tree", resetForTransition);
 	pi.on("model_select", resetForTransition);
 	pi.on("session_shutdown", resetForTransition);
-	// A warning can be committed at turn_end, before a tool turn or a reset changes the
-	// active window. Observe the active branch at public lifecycle boundaries and match
-	// the candidate against its originating window segment, not only the current window.
-	pi.on("turn_start", (_event, ctx) => notifyCommittedWarnings(ctx));
-	pi.on("agent_settled", (_event, ctx) => {
-		notifyCommittedWarnings(ctx, true);
-		clearStaged();
-	});
+	pi.on("agent_settled", clearStaged);
 	pi.on("context", (event, ctx) => {
 		if (!isEnabled()) return undefined;
 		// Durable reminders return to the slot where the model first read them.
@@ -141,6 +106,12 @@ export function registerBudget(
 			// Another request in the same turn re-sends the staged text instead of re-measuring.
 			pendingGuidance = undefined;
 			if (pendingWarning?.windowId !== windowId) pendingWarning = { windowId, content: warningContent() };
+			// Notify when injected, not after tools finish or a reset has already committed.
+			// An aborted request does not undo the low-budget condition or repeat the toast.
+			if (!notifiedWindows.has(windowId)) {
+				notifiedWindows.add(windowId);
+				ctx.ui.notify("🥣 Brain almost full · taking notes", "warning");
+			}
 			return result({ customType: WARNING_TYPE, content: pendingWarning.content });
 		}
 		if (hasWindowMessage(ctx, WARNING_TYPE) || pendingWarning?.windowId === windowId) return result();
@@ -173,6 +144,6 @@ export function registerBudget(
 		setCloseOut: (handler: (windowId: string) => void) => { onCloseOut = handler; },
 		/** The same close-out countdown the model sees, for user-facing status; null when usage is unknown. */
 		statusFor: (ctx: ExtensionContext): { remaining: number | null } => ({ remaining: remainingBudget(remainingTokens(ctx), thresholdsFor(ctx).warning) }),
-		clear: () => { clearStaged(); pendingNotices.clear(); },
+		clear: () => { clearStaged(); notifiedWindows.clear(); },
 	};
 }

@@ -46,7 +46,7 @@ test("low-budget guidance and warning persist at turn_end, once per active windo
 	assert.equal(sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === WARNING_TYPE).length, 1);
 });
 
-test("early guidance stays silent and the committed final warning notifies once", async () => {
+test("early guidance stays silent and the final warning notifies immediately once", async () => {
 	const sm = manager();
 	const captured = makeExtension(sm);
 	const early = context(sm, undefined, { tokens: 165_000, percent: 82.5, contextWindow: 200_000 });
@@ -59,10 +59,12 @@ test("early guidance stays silent and the committed final warning notifies once"
 	const final = context(sm, undefined, { tokens: 181_000, percent: 90.5, contextWindow: 200_000 });
 	const warning = await runContextHook(captured, final);
 	assert.equal((warning?.messages[0] as { customType?: string } | undefined)?.customType, WARNING_TYPE);
+	assert.equal(noticesOf(final).filter((notice) => notice.message === "🥣 Brain almost full · taking notes").length, 1, "notify at injection, before any turn_end");
+	await runContextHook(captured, final);
 	await commitTurnEndBoundary(captured, sm, final);
 	await runHandlers(captured, "turn_start", {}, final);
 	await runHandlers(captured, "agent_settled", {}, final);
-	assert.equal(noticesOf(final).filter((notice) => notice.message === "🥣 Brain almost full · taking notes").length, 1, "only the committed final warning notifies, exactly once");
+	assert.equal(noticesOf(final).filter((notice) => notice.message === "🥣 Brain almost full · taking notes").length, 1, "repeated injection and commit do not notify again");
 });
 
 test("the visible countdown ends at the warning line, clamps at zero, and preserves unknown usage", async () => {

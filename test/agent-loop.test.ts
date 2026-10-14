@@ -392,7 +392,7 @@ test("real AgentSession: early guidance reaches its crossing request and later r
 	}
 });
 
-test("real AgentSession: an aborted final warning stays silent until a successful retry commits it", async () => {
+test("real AgentSession: a final warning notifies before the response, even if aborted, without repeating on retry", async () => {
 	let fixture!: Fixture;
 	fixture = await openFixture({
 		compactionEnabled: true,
@@ -400,6 +400,7 @@ test("real AgentSession: an aborted final warning stays silent until a successfu
 			if (request === 1) return assistant(fixture, [{ type: "toolCall", id: "abort-budget-probe-1", name: "get_context_remaining", arguments: {} }], "toolUse", { usage: usage(50_000) });
 			if (request === 2) return assistant(fixture, [{ type: "toolCall", id: "abort-budget-probe-2", name: "get_context_remaining", arguments: {} }], "toolUse", { usage: usage(60_000) });
 			assert.ok(text(context).includes(WARNING_JSON), "the final warning reaches the model on both attempts");
+			assert.equal(fixture.budgetNotices(), 1, "the UI is notified before the model responds, once across retries");
 			return assistant(fixture, [{ type: "text", text: `response ${request}` }], request === 3 ? "aborted" : "stop", { usage: usage(60_000) });
 		},
 	});
@@ -410,13 +411,13 @@ test("real AgentSession: an aborted final warning stays silent until a successfu
 		await fixture.session.waitForIdle();
 		assert.equal(fixture.requests.length, 3, "budget probes reach one final-warning attempt");
 		assert.equal(warnings().length, 0, "the aborted attempt leaves no durable warning");
-		assert.equal(notices(), 0, "an uncommitted warning never notifies");
+		assert.equal(notices(), 1, "the aborted request already notified at injection");
 		await fixture.session.prompt("Retry successfully.");
 		await fixture.session.waitForIdle();
 		assert.equal(warnings().length, 1, "the successful retry commits one hidden warning");
 		assert.equal(resetMarkers(fixture).length, 0, "committing the warning does not authorize a reset at normal stop");
 		assert.equal(fixture.requests.length, 4, "the retry settles without a fresh-window continuation");
-		assert.equal(notices(), 1, "the committed warning notifies once");
+		assert.equal(notices(), 1, "committing the retry does not repeat the notification");
 		assert.equal(fixture.notices.some((notice) => notice.includes("Context running low")), false, "early guidance remains UI-silent");
 	} finally {
 		fixture.close();
@@ -432,6 +433,7 @@ test("real AgentSession: final warning survives its reset boundary and notifies 
 			if (request === 2) return assistant(fixture, [{ type: "toolCall", id: "final-budget-probe-2", name: "get_context_remaining", arguments: {} }], "toolUse", { usage: usage(60_000) });
 			if (request === 3) {
 				assert.ok(text(context).includes(WARNING_JSON), "the final warning reaches the model");
+				assert.equal(fixture.budgetNotices(), 1, "warning notifies before the wipe tool runs");
 				return assistant(fixture, [{ type: "toolCall", id: "final-budget-wipe", name: "empty_brain", arguments: {} }], "toolUse", { usage: usage(60_000) });
 			}
 			return assistant(fixture, [{ type: "text", text: "fresh window ready" }]);
