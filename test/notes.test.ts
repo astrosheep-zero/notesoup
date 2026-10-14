@@ -181,7 +181,7 @@ test("session-note project ownership is per note, persistent across sessions, an
 	assert.equal(parseNote(readFileSync(physicalPath("session", "new-from-project-b.md", movedContext), "utf8")).meta.project, projectB, "only a newly-created session note uses the current project key");
 	await call(firstCaptured, "notes_write", { address: "@project/project-note.md", content: "project home note" }, movedContext);
 	assert.equal(parseNote(readFileSync(physicalPath("project", "project-note.md", movedContext), "utf8")).meta.project, undefined, "project-home notes do not receive session ownership metadata");
-	assert.equal((await listNotes(movedContext, { scope: "session" })).length, 2, "project ownership remains frontmatter, not a separate note");
+	assert.equal((await listNotes(movedContext)).filter(row => row.scope === "session").length, 2, "project ownership remains frontmatter, not a separate note");
 });
 
 test("linked git worktrees share the main checkout's project key", () => {
@@ -224,7 +224,7 @@ legacy body`);
 	const parsed = parseNote(readFileSync(legacyFile, "utf8"), Date.parse("2026-02-01T00:00:00Z"));
 	assert.equal(parsed.meta.createdAt, Date.parse("2026-02-01T00:00:00Z"), "missing canonical timestamp takes the normal default");
 	assert.equal(parsed.meta.created_at, "2026-01-01T00:00:00.000+00:00", "unrecognized fields remain ordinary extras");
-	assert.equal((await listNotes(ctx, { scope: "session" }))[0]?.address, "legacy.md");
+	assert.equal((await listNotes(ctx))[0]?.address, "legacy.md");
 	assert.match(resultRead(await call(captured, "notes_read", { address: "legacy.md" }, ctx)).content, /legacy body$/);
 	await call(captured, "notes_update", { address: "legacy.md", edits: [{ oldText: "legacy body", newText: "edited body" }] }, ctx);
 	await call(captured, "notes_write", { address: "legacy.md", content: "overwritten body" }, ctx);
@@ -313,21 +313,21 @@ test("nothing-to-do, not-found, atomic batches, and replace_all zero-match are n
 	assert.match(zero.message, /edits\[0\]/, "replace_all with zero matches is the same zero-match error, not a silent no-op");
 });
 
-test("notes_update rename_to moves a note and refuses combinations and live targets", async () => {
+test("notes_update combines rename_to with edits and metadata but protects live targets", async () => {
 	freshRoot();
 	const session = manager();
 	const captured = makeExtension(session);
 	const ctx = context(session);
 
 	await call(captured, "notes_write", { address: "move-me.md", content: "body" }, ctx);
-	const combined = resultError(await call(captured, "notes_update", { address: "move-me.md", rename_to: "moved.md", edits: [{ oldText: "body", newText: "x" }] }, ctx));
-	assert.match(combined.message, /rename_to is used alone/, "rename_to rejects being combined with edits");
+	const failed = resultError(await call(captured, "notes_update", { address: "move-me.md", rename_to: "moved.md", edits: [{ oldText: "absent", newText: "x" }] }, ctx));
+	assert.equal(failed.code, "no_match", "a failed edit does not move the note");
 
 	await call(captured, "notes_write", { address: "occupied.md", content: "live target" }, ctx);
 	const conflict = resultError(await call(captured, "notes_update", { address: "move-me.md", rename_to: "occupied.md" }, ctx));
 	assert.match(conflict.message, /occupied\.md/, "a live target refuses the move");
 
-	const renamed = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "move-me.md", rename_to: "moved.md" }, ctx));
+	const renamed = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "move-me.md", rename_to: "moved.md", edits: [{ oldText: "body", newText: "x" }], origin: "external", crumpled: true }, ctx));
 	assertReceiptIdentity(renamed, "moved.md", "session", ctx);
 	assert.equal(renamed.rename_from, "move-me.md");
 	assert.equal(renamed.change_kind, "moved");
@@ -335,7 +335,10 @@ test("notes_update rename_to moves a note and refuses combinations and live targ
 
 	const gone = resultError(await call(captured, "notes_read", { address: "move-me.md" }, ctx));
 	assert.equal(gone.code, "not_found", "the old address is gone");
-	assert.equal(resultRead(await call(captured, "notes_read", { address: "moved.md" }, ctx)).content, "body");
+	assert.equal(resultRead(await call(captured, "notes_read", { address: "moved.md" }, ctx)).content, "x");
+	const movedMeta = (await listNotes(ctx, { crumpled: true }))[0]!.meta;
+	assert.equal(movedMeta.origin, "external");
+	assert.ok(movedMeta.crumpledAt);
 
 	// Empty filler values are not a combination: a model passing every parameter still gets its crumple.
 	const crumpled = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "moved.md", crumpled: true, edits: [], origin: "self", rename_to: "", replace_all: false }, ctx));
@@ -346,8 +349,8 @@ test("notes_update rename_to moves a note and refuses combinations and live targ
 	const fillerRename = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "moved.md", rename_to: "moved-again.md", edits: [], replace_all: false }, ctx));
 	assert.equal(fillerRename.address, "moved-again.md", "empty edits and replace_all: false ride along with a rename");
 
-	const realCombo = resultError(await call(captured, "notes_update", { address: "moved-again.md", rename_to: "nope.md", replace_all: true }, ctx));
-	assert.match(realCombo.message, /rename_to is used alone/, "replace_all: true is a real combination and refuses");
+	const realCombo = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "moved-again.md", rename_to: "final.md", replace_all: true, crumpled: false }, ctx));
+	assert.equal(realCombo.address, "final.md", "replace_all is harmless without edits, and restoration can accompany the move");
 });
 
 test("write and update receipts distinguish outcomes and no-op edits", async () => {

@@ -237,6 +237,18 @@ test("shared note operations return canonical outcomes with a body-only read win
 	assert.equal(updated.diff, "caller-rendered-diff");
 	const defaultReceipt = data(await notesUpdate.execute({ address: "@project/test.md", edits: [{ oldText: "gamma", newText: "delta" }] }, notesIdentity));
 	assert.equal(defaultReceipt.diff, "note body");
+	await notesWrite.execute({ address: "owned.md", content: "first", origin: "user" }, notesIdentity);
+	await notesWrite.execute({ address: "owned.md", content: "rewritten" }, notesIdentity);
+	assert.equal(data(await notesRead.execute({ address: "owned.md" }, notesIdentity)).metadata.origin, "user", "tool overwrites preserve an omitted origin");
+	const invalid = refusal(await notesUpdate.execute({ address: "owned.md", edits: [{ oldText: "", newText: "x" }] }, notesIdentity));
+	assert.equal(invalid.code, "invalid_edit");
+	const moved = data(await notesUpdate.execute({ address: "owned.md", rename_to: "@project/renamed.md", edits: [{ oldText: "rewritten", newText: "final" }], origin: "external" }, notesIdentity));
+	assert.equal(moved.change_kind, "moved");
+	assert.equal(moved.rename_from, "owned.md");
+	assert.match(moved.diff, /rename owned\.md -> @project\/renamed\.md/);
+	const renamed = data(await notesRead.execute({ address: moved.address }, notesIdentity));
+	assert.equal(renamed.text, "final");
+	assert.equal(renamed.metadata.origin, "external");
 	const unchanged = data(await notesUpdate.execute({ address: "@project/test.md", edits: [{ oldText: "delta", newText: "delta" }] }, notesIdentity));
 	assert.equal(unchanged.change_kind, "none");
 	assert.equal(unchanged.diff, "");

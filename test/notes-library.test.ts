@@ -83,7 +83,7 @@ test("same-file read/modify/write operations serialize across stores and markdow
 	const before = (await notes.read("shared"))!.meta.accessCount;
 	const [readA, readB] = await Promise.all([notes.read("shared.md"), other.read("shared")]);
 	assert.ok(readA && readB);
-	assert.equal((await notes.list({ scope: "session" }))[0]?.meta.accessCount, before + 2, "parallel reads do not lose access-counter updates");
+	assert.equal((await notes.list())[0]?.meta.accessCount, before + 2, "parallel reads do not lose access-counter updates");
 
 	const file = join(home, "pi/session/session-a/shared.md");
 	const stableEdits = [{ oldText: "A", newText: "first" }];
@@ -143,7 +143,7 @@ test("search offsets address the body and never move when access metadata grows"
 	// Walk the access counter across a digit boundary; an offset into the serialized file
 	// would shift by one character here, because the rewrite adds a digit to the frontmatter.
 	for (let read = 0; read < 12; read++) await notes.read("counted.md");
-	assert.equal((await notes.list({ scope: "session" })).find((row) => row.address === "counted.md")!.meta.accessCount, 12);
+	assert.equal((await notes.list()).find((row) => row.address === "counted.md")!.meta.accessCount, 12);
 	assert.equal(await offsetOf(), 0, "reads that rewrite access metadata do not move the match");
 
 	await notes.write("front.md", `---\nbig: ${"x".repeat(200)}\n---\n\nneedle later`);
@@ -159,15 +159,15 @@ test("invalid addressing and failed edits leave stored bytes untouched without p
 	const { home, context, notes } = fixture(t);
 	assert.throws(() => createNotesStore({ ...context, sessionId: "../escape" }));
 	await assert.rejects(() => notes.write("@project/../escape", "bad"), (error: unknown) => error instanceof NoteError && error.code === "invalid_address");
-	await assert.rejects(() => notes.list({ scope: "agent", who: "../escape" }));
-	// The typed API disallows this; JavaScript callers must still receive a refusal.
-	// @ts-expect-error who cannot accompany project scope
-	await assert.rejects(() => notes.list({ scope: "project", who: "root" }), (error: unknown) => error instanceof NoteError && error.code === "invalid_scope");
+	await assert.rejects(() => notes.list({ glob: "@agents/../escape/**" }));
 	await notes.write("edit", "alpha\nbeta\nbeta");
 	const path = join(home, "pi/session/session-a/edit.md");
 	const before = readFileSync(path, "utf8");
 	await assert.rejects(() => notes.update("edit", [{ oldText: "beta", newText: "B" }]), (error: unknown) => error instanceof NoteError && error.code === "ambiguous_edit" && error.lineNumbers?.join(",") === "2,3");
 	await assert.rejects(() => notes.update("edit", [{ oldText: "alpha", newText: "A" }, { oldText: "absent", newText: "X" }]), (error: unknown) => error instanceof NoteError && error.code === "no_match" && error.editIndex === 1);
+	await assert.rejects(() => notes.update("edit", [{ oldText: "", newText: "X" }]), (error: unknown) => error instanceof NoteError && error.code === "invalid_edit");
+	// @ts-expect-error malformed JavaScript callers receive a parameter error, not no_match
+	await assert.rejects(() => notes.update("edit", [{ oldText: "alpha", newText: 5 }]), (error: unknown) => error instanceof NoteError && error.code === "invalid_edit");
 	assert.equal(readFileSync(path, "utf8"), before);
 	await assert.rejects(() => notes.update("absent", undefined, { crumpled: true }), (error: unknown) => error instanceof NoteError && error.code === "not_found");
 	await notes.update("edit", [{ oldText: "alpha", newText: "A" }]);
@@ -202,10 +202,49 @@ test("rename moves a note with metadata intact across scopes and refuses live ta
 	assert.equal(replaced.replacedCrumpledTarget, true, "a crumpled target is replaced");
 	assert.equal((await notes.read("occupied.md"))?.meta.createdAt, written.meta.createdAt, "the moved note keeps its identity, not the target's");
 
-	await assert.rejects(() => notes.rename("occupied", "occupied.md"), (error: unknown) => error instanceof NoteError && error.code === "nothing_to_do");
+	const beforeAlias = (await notes.read("occupied"))!.meta.updatedAt;
+	assert.equal((await notes.rename("occupied", "occupied.md")).meta.updatedAt, beforeAlias, "a same-file move is a successful no-op");
 	await assert.rejects(() => notes.rename("occupied.md", "@models/other-model/stolen.md"), (error: unknown) => error instanceof NoteError && error.code === "invalid_scope");
 	await assert.rejects(() => notes.rename("@agents/someone-else/private.md", "mine.md"), (error: unknown) => error instanceof NoteError && error.code === "invalid_scope");
 	await assert.rejects(() => notes.rename("absent.md", "anywhere.md"), (error: unknown) => error instanceof NoteError && error.code === "not_found");
+});
+
+test("combined moves validate everything before saving either endpoint", async (t) => {
+	const { home, notes } = fixture(t);
+	await notes.write("source", "alpha alpha", { origin: "user" });
+	await notes.write("target", "keep me");
+	const sourcePath = join(home, "pi/session/session-a/source.md");
+	const targetPath = join(home, "pi/session/session-a/target.md");
+	const sourceBefore = readFileSync(sourcePath, "utf8");
+	const targetBefore = readFileSync(targetPath, "utf8");
+	await assert.rejects(() => notes.update("source", [{ oldText: "alpha", newText: "A" }], { replaceAll: true, renameTo: "target" }), (error: unknown) => error instanceof NoteError && error.code === "already_exists");
+	await notes.update("target", undefined, { crumpled: true });
+	const crumpledBefore = readFileSync(targetPath, "utf8");
+	await assert.rejects(() => notes.update("source", [{ oldText: "missing", newText: "A" }], { renameTo: "target", origin: "external", crumpled: false }), (error: unknown) => error instanceof NoteError && error.code === "no_match");
+	assert.equal(readFileSync(sourcePath, "utf8"), sourceBefore);
+	assert.notEqual(crumpledBefore, targetBefore);
+	assert.equal(readFileSync(targetPath, "utf8"), crumpledBefore, "a failed edit does not consume a crumpled destination");
+	const result = await notes.update("source", [{ oldText: "alpha", newText: "A" }], { renameTo: "@project/moved", replaceAll: true, origin: "external", crumpled: true });
+	assert.equal(result.moved, true);
+	assert.equal(result.meta.origin, "external");
+	assert.ok(result.meta.crumpledAt);
+	assert.equal(result.meta.project, undefined);
+	assert.equal(existsSync(sourcePath), false);
+	assert.equal((await notes.read("@project/moved"))!.body, "A A");
+	const same = await notes.update("@project/moved", [{ oldText: "A A", newText: "B" }], { renameTo: "@project/moved.md", crumpled: false });
+	assert.equal(same.moved, false);
+	assert.equal(same.change.kind, "body");
+	assert.equal(same.meta.crumpledAt, undefined);
+});
+
+test("glob is the single query selector for a named project home", async (t) => {
+	const { home, notes } = fixture(t);
+	mkdirSync(join(home, "project/other"), { recursive: true });
+	writeFileSync(join(home, "project/other/decision.md"), "needle");
+	const rows = await notes.list({ glob: "@projects/other/**" });
+	assert.deepEqual(rows.map(row => row.address), ["@projects/other/decision.md"]);
+	assert.equal((await notes.search(["needle"], { glob: "@projects/other/**" }))[0]?.matches[0]?.text, "needle");
+	await assert.rejects(() => notes.write(rows[0]!.address, "overwrite"), (error: unknown) => error instanceof NoteError && error.code === "invalid_scope", "named project queries do not grant writes");
 });
 
 test("ambiguous multiline anchors report each starting line", async (t) => {
@@ -243,10 +282,10 @@ test("one unreadable note is named without hiding its readable siblings", async 
 	await notes.write("@project/bad.md", "bad body");
 	await notes.write("@project/good.md", "good body");
 	chmodSync(join(home, "project", "project-12345678", "bad.md"), 0o000);
-	const result = await notes.listWithStatus({ scope: "project" });
+	const result = await notes.listWithStatus({ glob: "@project/**" });
 	assert.deepEqual(result.rows.map((row) => row.address), ["@project/good.md"], "the readable sibling still lists");
 	assert.deepEqual(result.status.homesUnavailable, ["@project/bad.md"], "the unreadable note is named on its own");
-	await assert.rejects(() => notes.list({ scope: "project" }), (error: unknown) => (error as NodeJS.ErrnoException).code === "EACCES", "a caller that asked for no status still sees the failure");
+	await assert.rejects(() => notes.list({ glob: "@project/**" }), (error: unknown) => (error as NodeJS.ErrnoException).code === "EACCES", "a caller that asked for no status still sees the failure");
 });
 
 test("a hand-written quoted numeric extra survives a rewrite as a string", async (t) => {

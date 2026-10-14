@@ -172,29 +172,29 @@ test("crumple lifecycle: metadata-only edits close and smooth a note without tou
 	const ctx = context(sm);
 
 	await call(captured, "notes_write", { address: "journal.md", content: "log line" }, ctx);
-	const updatedBefore = (await listNotes(ctx, { scope: "session" }))[0]!.meta.updatedAt;
+	const updatedBefore = (await listNotes(ctx))[0]!.meta.updatedAt;
 
 	// metadata-only: content unchanged, and the recorded time is the original one
 	const markOnly = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "journal.md", crumpled: true }, ctx));
 	assert.equal(markOnly.change_kind, "metadata");
 	assert.match(markOnly.diff, /^\+\s*\d+\s+crumpledAt: \d{4}-\d{2}-\d{2}T/m);
-	assert.deepEqual(await listNotes(ctx, { scope: "session" }), [], "a crumpled note leaves the live list");
-	const basket = (await listNotes(ctx, { scope: "session", crumpled: true }))[0]!;
+	assert.deepEqual(await listNotes(ctx), [], "a crumpled note leaves the live list");
+	const basket = (await listNotes(ctx, { crumpled: true }))[0]!;
 	assert.ok(basket.meta.crumpledAt);
 	assert.equal(basket.meta.updatedAt, updatedBefore, "crumpling does not change updatedAt");
 	assert.equal(resultRead(await call(captured, "notes_read", { address: "journal.md" }, ctx)).content.endsWith("log line"), true, "read still reaches a crumpled note");
 
 	// re-crumpling keeps the first time; smoothing empties the basket
 	await call(captured, "notes_update", { address: "journal.md", crumpled: true }, ctx);
-	assert.equal((await listNotes(ctx, { scope: "session", crumpled: true }))[0]?.meta.crumpledAt, basket.meta.crumpledAt);
+	assert.equal((await listNotes(ctx, { crumpled: true }))[0]?.meta.crumpledAt, basket.meta.crumpledAt);
 	await call(captured, "notes_update", { address: "journal.md", crumpled: false }, ctx);
-	assert.deepEqual(await listNotes(ctx, { scope: "session", crumpled: true }), []);
-	assert.equal((await listNotes(ctx, { scope: "session" }))[0]?.meta.crumpledAt, undefined);
+	assert.deepEqual(await listNotes(ctx, { crumpled: true }), []);
+	assert.equal((await listNotes(ctx))[0]?.meta.crumpledAt, undefined);
 
 	// writing to a crumpled address always produces an uncrumpled note
 	await call(captured, "notes_update", { address: "journal.md", crumpled: true }, ctx);
 	await call(captured, "notes_write", { address: "journal.md", content: "reopened" }, ctx);
-	assert.equal((await listNotes(ctx, { scope: "session" }))[0]?.meta.crumpledAt, undefined, "writing always produces an uncrumpled note");
+	assert.equal((await listNotes(ctx))[0]?.meta.crumpledAt, undefined, "writing always produces an uncrumpled note");
 
 	// metadata-only on a missing path is the typed not-found arm
 	const missing = resultError(await call(captured, "notes_update", { address: "missing.md", crumpled: true }, ctx));
@@ -204,11 +204,11 @@ test("crumple lifecycle: metadata-only edits close and smooth a note without tou
 test("the filesystem notes loader treats an absent home as empty but surfaces a real directory read failure", async () => {
 	const sm = manager();
 	const ctx = context(sm);
-	assert.deepEqual(await listNotes(ctx, { scope: "human" }), [], "a home that has not been created is empty");
+	assert.deepEqual(await listNotes(ctx, { glob: "@human/**" }), [], "a home that has not been created is empty");
 	const blockedHome = scopeDir("human", ctx);
 	writeFileSync(blockedHome, "not a directory");
 	await assert.rejects(
-		() => listNotes(ctx, { scope: "human" }),
+		() => listNotes(ctx, { glob: "@human/**" }),
 		(error: unknown) => (error as NodeJS.ErrnoException).code === "ENOTDIR",
 		"a non-ENOENT directory failure is not swallowed as an empty home",
 	);

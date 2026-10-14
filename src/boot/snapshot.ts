@@ -29,13 +29,19 @@ export function unavailableNotesSnapshot(openedAt: number): NotesSnapshot {
  * malformed note data and unrelated construction errors remain visible to the caller.
  */
 export async function loadNotesSnapshot(identity: NotesIdentity, openedAt: number, loadHome?: NotesLoader): Promise<NotesSnapshot> {
-	const store = createNotesStore(identity);
-	const load = loadHome ?? ((scope: Scope) => store.list({ scope }));
 	const homes = new Map<Scope, readonly NoteRow[]>();
 	const unavailable: NotesHome[] = [];
+	if (!loadHome) {
+		const { rows, status } = await createNotesStore(identity).listWithStatus();
+		for (const home of NOTES_HOMES) {
+			homes.set(home.scope, rows.filter(row => row.scope === home.scope));
+			if (status.homesUnavailable.some(address => home.scope === "session" ? !address.startsWith("@") : address === home.label || address.startsWith(`${home.label}/`))) unavailable.push(home);
+		}
+		return { openedAt, homes, unavailable };
+	}
 	for (const home of NOTES_HOMES) {
 		try {
-			homes.set(home.scope, await load(home.scope));
+			homes.set(home.scope, await loadHome(home.scope));
 		} catch (error) {
 			if (!isFilesystemError(error)) throw error;
 			homes.set(home.scope, []);

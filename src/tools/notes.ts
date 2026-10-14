@@ -9,7 +9,7 @@ import { nullableString, InvalidQueryError, searchQueries, searchQuery } from ".
 
 const ORIGIN_VALUES = [Type.Literal("user"), Type.Literal("self"), Type.Literal("external")] as const;
 const ORIGIN = Type.Optional(Type.Union([...ORIGIN_VALUES], {
-	description: "(optional, default self) Who wrote it: user, self, or external.",
+	description: "(optional) Who wrote it: user, self, or external. Omit to keep the existing origin; new notes default to self.",
 }));
 const CRUMPLED_PARAMETER = Type.Optional(Type.Boolean({ description: "(optional) true = crumple (hide from list and search, still readable); false = restore." }));
 const CRUMPLED_LIST_PARAMETER = Type.Optional(Type.Boolean({ description: "(optional) true = list only crumpled notes." }));
@@ -211,7 +211,7 @@ export const notesWrite = {
 	parameters: notesWriteParameters, outputSchema: resultSchema(NotesWriteDataSchema), executionMode: "sequential",
 	async execute(params: Static<typeof notesWriteParameters>, identity: NotesIdentity): Promise<Outcome<NotesWriteData>> {
 		try {
-			const { outcome } = await createNotesStore(identity).write(params.address, params.content, { origin: params.origin ?? "self" });
+			const { outcome } = await createNotesStore(identity).write(params.address, params.content, { origin: params.origin });
 			return success({ ...noteIdentity(identity, params.address), outcome });
 		} catch (error) { return failureOf(error); }
 	},
@@ -224,7 +224,7 @@ export const notesUpdateParameters = Type.Object({
 	origin: ORIGIN,
 	crumpled: CRUMPLED_PARAMETER,
 	replace_all: Type.Optional(Type.Boolean({ description: "(optional) true = replace every match of `oldText`." })),
-	rename_to: Type.Optional(Type.String({ description: "(optional) Move to this address, keeping metadata. Use alone. Won't overwrite a live note; references aren't updated." })),
+	rename_to: Type.Optional(Type.String({ description: "(optional) Move to this address, optionally with edits or metadata changes. Won't overwrite a live note; references aren't updated." })),
 }, { additionalProperties: false });
 
 function renderUpdateData(data: NotesUpdateData): string {
@@ -263,17 +263,11 @@ export const notesUpdate = {
 			const store = createNotesStore(identity);
 			// Empty filler is not a request: models that pass every parameter get the edit path.
 			const renameTo = params.rename_to === "" ? undefined : params.rename_to;
-			if (renameTo !== undefined) {
-				if ((params.edits?.length ?? 0) > 0 || params.origin !== undefined || params.crumpled !== undefined || params.replace_all === true) {
-					return failureOf(new NoteError("invalid_scope", "rename_to is used alone: do not combine it with edits, origin, crumpled, or replace_all"));
-				}
-				await store.rename(params.address, renameTo);
-				const from = noteIdentity(identity, params.address).address;
-				const to = noteIdentity(identity, renameTo);
-				return boundedUpdate({ ...to, rename_from: from, change_kind: "moved", diff: `rename ${from} -> ${to.address}` });
-			}
-			const { change } = await store.update(params.address, params.edits, { origin: params.origin, crumpled: params.crumpled, replaceAll: params.replace_all });
-			return boundedUpdate({ ...noteIdentity(identity, params.address), change_kind: change.kind, diff: renderDiff(change) });
+			const { change, moved } = await store.update(params.address, params.edits, { origin: params.origin, crumpled: params.crumpled, replaceAll: params.replace_all, renameTo });
+			const from = noteIdentity(identity, params.address).address;
+			const to = noteIdentity(identity, renameTo ?? params.address);
+			const diff = renderDiff(change);
+			return boundedUpdate({ ...to, ...(moved ? { rename_from: from } : {}), change_kind: moved ? "moved" : change.kind, diff: moved ? [`rename ${from} -> ${to.address}`, diff].filter(Boolean).join("\n") : diff });
 		} catch (error) { return failureOf(error); }
 	},
 	render: renderUpdate,

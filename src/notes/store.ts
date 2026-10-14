@@ -8,7 +8,7 @@ import { isFilesystemError } from "./fs-error.js";
 import { snapshotNotesIdentity, type NotesIdentity } from "./identity.js";
 import { NoteError } from "./errors.js";
 import { MAX_NOTE_BYTES, MAX_NOTE_PATH_BYTES } from "./constants.js";
-import { isOrigin, isScope, localIso, parseNote, serializeNote, stripLeadingFrontmatter, type NoteMeta, type Origin } from "./frontmatter.js";
+import { isOrigin, localIso, parseNote, serializeNote, stripLeadingFrontmatter, type NoteMeta, type Origin } from "./frontmatter.js";
 import { namespaceSlugs, noteFileName, physicalPath, scopeDir, SLUG_PATTERN, type Scope } from "./paths.js";
 import { projectHomes, projectReceipt, type ProjectReceipt } from "./project-home.js";
 
@@ -27,19 +27,15 @@ export type NoteMatch = { line: number; text: string; /** Code-point offset into
 export type NoteSearchRow = { address: string; scope: Scope; path: string; meta: NoteMeta; matches: NoteMatch[] };
 export type EditOperation = { oldText: string; newText: string };
 export type WriteOptions = { origin?: Origin };
-export type EditOptions = { origin?: Origin; crumpled?: boolean; replaceAll?: boolean };
-export type NotesQuery = (
-	| { scope?: undefined; who?: never }
-	| { scope: "session" | "project" | "human"; who?: never }
-	| { scope: "agent" | "model"; who?: string }
-) & { glob?: string; crumpled?: boolean };
+export type EditOptions = { origin?: Origin; crumpled?: boolean; replaceAll?: boolean; renameTo?: string };
+export type NotesQuery = { glob?: string; crumpled?: boolean };
 /** A read exposes metadata and the pure body; the serialized frontmatter is never part of the body. */
 export type NoteReadResult = { meta: NoteMeta; body: string; resolvedScope: Scope };
 export type NoteWriteResult = { meta: NoteMeta; outcome: "created" | "overwrote" | "uncrumpled" };
 export type NoteChange =
 	| { kind: "none"; before: ""; after: "" }
 	| { kind: "body" | "metadata"; before: string; after: string };
-export type NoteEditResult = { meta: NoteMeta; applied: number; resolvedScope: Scope; change: NoteChange };
+export type NoteEditResult = { meta: NoteMeta; applied: number; resolvedScope: Scope; change: NoteChange; moved: boolean; replacedCrumpledTarget: boolean };
 export type NoteRenameResult = { meta: NoteMeta; replacedCrumpledTarget: boolean };
 /** A home, or one unreadable note inside it, that a status-reporting query could not read. */
 export type NoteQueryStatus = { homesUnavailable: string[] };
@@ -149,21 +145,6 @@ function assertWho(value: unknown): string {
 		throw new NoteError("invalid_scope", "who must be a canonical lowercase slug");
 	}
 	return value;
-}
-
-async function homesFor(identity: NotesIdentity, opts: NotesQuery): Promise<HomeRef[]> {
-	if (opts.scope !== undefined) {
-		if (!isScope(opts.scope)) throw new NoteError("invalid_scope", `scope must be one of session, project, human, agent, model (got ${JSON.stringify(opts.scope)})`);
-		const scope = opts.scope;
-		if (opts.who !== undefined) {
-			const who = assertWho(opts.who);
-			if (scope !== "agent" && scope !== "model") throw new NoteError("invalid_scope", "who is only valid with agent or model scope");
-			return [{ scope, who }];
-		}
-		return [{ scope }];
-	}
-	if (opts.who !== undefined) throw new NoteError("invalid_scope", "who requires agent or model scope");
-	return await homesForPattern(normalizePattern(opts.glob, identity), identity) ?? SCOPE_ORDER.map((scope) => ({ scope }));
 }
 
 /**
@@ -305,27 +286,37 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 	async function update(address: string, edits?: EditOperation[], options: EditOptions = {}): Promise<NoteEditResult> {
 		const operations = edits === undefined ? [] : edits.map((operation) => ({ ...operation }));
 		const stableOptions = { ...options };
-		const destination = assertAddress(address);
+		const from = assertAddress(address);
+		const destination = stableOptions.renameTo === undefined ? from : assertAddress(stableOptions.renameTo);
 		assertWritablePath(destination.path);
 		const scope = destination.scope;
+		assertWritableHome(from.scope, from.who, identity);
 		assertWritableHome(scope, destination.who, identity);
-		if (operations.length === 0 && stableOptions.origin === undefined && stableOptions.crumpled === undefined) {
-			throw new NoteError("nothing_to_do", "Nothing to change: pass edits, origin, crumpled, or rename_to.");
+		if (operations.length === 0 && stableOptions.origin === undefined && stableOptions.crumpled === undefined && stableOptions.renameTo === undefined) {
+			throw new NoteError("nothing_to_do", "Nothing to change: pass edits, origin, crumpled, or renameTo.");
 		}
+		const fromPath = physicalPath(from.scope, from.path, identity, from.who);
 		const path = physicalPath(scope, destination.path, identity, destination.who);
-		return withPathQueue(path, async () => {
-			const raw = await readFileIfExists(path);
+		const moved = resolve(fromPath) !== resolve(path);
+		const mutate = async (): Promise<NoteEditResult> => {
+			const raw = await readFileIfExists(fromPath);
 			if (raw === undefined) throw new NoteError("not_found", `No note at ${noteIdentity(identity, address).address}.`);
+			const targetRaw = moved ? await readFileIfExists(path) : undefined;
+			if (targetRaw !== undefined && parseNote(targetRaw).meta.crumpledAt === undefined) {
+				throw new NoteError("already_exists", `${noteIdentity(identity, stableOptions.renameTo!).address} already holds a note; crumple it first or pick another address.`);
+			}
 			const { meta, body } = parseNote(raw);
-			meta.scope = scope;
 			const beforeMeta: NoteMeta = { ...meta };
+			meta.scope = scope;
+			if (from.scope !== "session" && scope === "session") meta.project = identity.projectKey;
+			if (from.scope === "session" && scope !== "session") delete meta.project;
 			let next = body;
 			let applied = 0;
 			operations.forEach((operation, index) => {
 				const oldText = operation?.oldText;
 				const newText = operation?.newText;
-				if (typeof oldText !== "string" || oldText.length === 0) throw new NoteError("no_match", `edits[${index}].oldText is empty.`, { editIndex: index });
-				if (typeof newText !== "string") throw new NoteError("no_match", `edits[${index}].newText must be a string.`, { editIndex: index });
+				if (typeof oldText !== "string" || oldText.length === 0) throw new NoteError("invalid_edit", `edits[${index}].oldText must be a non-empty string.`, { editIndex: index });
+				if (typeof newText !== "string") throw new NoteError("invalid_edit", `edits[${index}].newText must be a string.`, { editIndex: index });
 				const lines = matchLineNumbers(next, oldText);
 				if (lines.length === 0) throw new NoteError("no_match", `edits[${index}].oldText isn't in the note${index > 0 ? " (after the earlier edits)" : ""}. Nothing was saved.`, { editIndex: index });
 				if (lines.length > 1 && !stableOptions.replaceAll) {
@@ -344,58 +335,31 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 			if (stableOptions.crumpled === false) delete meta.crumpledAt;
 			const bodyChanged = body !== next;
 			const originChanged = beforeMeta.origin !== meta.origin;
-			if (bodyChanged || originChanged) meta.updatedAt = writeStamp();
+			if (bodyChanged || originChanged || moved) meta.updatedAt = writeStamp();
 			const serialized = serializeNote(meta, next);
 			assertSerializedSize(serialized);
 			const metadataChanged = originChanged || beforeMeta.crumpledAt !== meta.crumpledAt;
 			let change: NoteChange;
 			// A body edit that also rewrites frontmatter is still a body change; its diff inputs span the
 			// whole serialized file, so the frontmatter part stays visible in the diff.
-			if (bodyChanged && metadataChanged) change = { kind: "body", before: raw, after: serialized };
+			if (bodyChanged && (metadataChanged || moved)) change = { kind: "body", before: raw, after: serialized };
 			else if (bodyChanged) change = { kind: "body", before: body, after: next };
 			else if (metadataChanged) change = { kind: "metadata", before: frontmatterOf(beforeMeta), after: frontmatterOf(meta) };
 			else change = { kind: "none", before: "", after: "" };
 			await atomicWrite(path, serialized);
-			return { meta, applied, resolvedScope: scope, change };
-		});
+			if (moved) await rm(fromPath, { force: true });
+			return { meta, applied, resolvedScope: scope, change, moved, replacedCrumpledTarget: targetRaw !== undefined };
+		};
+		// One lock for aliases of the same file; otherwise take both in stable order.
+		if (!moved) return withPathQueue(path, mutate);
+		const [first, second] = [fromPath, path].sort();
+		return withPathQueue(first!, () => withPathQueue(second!, mutate));
 	}
 
-	/**
-	 * Move one note to a new address with every metadata key preserved. Both ends must be
-	 * writable; a live target refuses, a crumpled target is replaced. Locks both paths in
-	 * sorted order so crossed renames cannot deadlock.
-	 */
+	/** Moving alone shares validation and persistence with a combined edit-and-move. */
 	async function rename(fromAddress: string, toAddress: string): Promise<NoteRenameResult> {
-		const from = assertAddress(fromAddress);
-		const to = assertAddress(toAddress);
-		const fromScope = from.scope;
-		const toScope = to.scope;
-		assertWritablePath(to.path);
-		assertWritableHome(fromScope, from.who, identity);
-		assertWritableHome(toScope, to.who, identity);
-		const fromPath = physicalPath(fromScope, from.path, identity, from.who);
-		const toPath = physicalPath(toScope, to.path, identity, to.who);
-		if (resolve(fromPath) === resolve(toPath)) throw new NoteError("nothing_to_do", "rename_to points at the note itself.");
-		const [first, second] = [fromPath, toPath].sort();
-		return withPathQueue(first!, () => withPathQueue(second!, async () => {
-			const raw = await readFileIfExists(fromPath);
-			if (raw === undefined) throw new NoteError("not_found", `No note at ${noteIdentity(identity, fromAddress).address}.`);
-			const targetRaw = await readFileIfExists(toPath);
-			if (targetRaw !== undefined && parseNote(targetRaw).meta.crumpledAt === undefined) {
-				throw new NoteError("already_exists", `${noteIdentity(identity, toAddress).address} already holds a note; crumple it first or pick another address.`);
-			}
-			const { meta, body } = parseNote(raw);
-			meta.scope = toScope;
-			// Project ownership only changes when the move crosses the session boundary.
-			if (fromScope !== "session" && toScope === "session") meta.project = identity.projectKey;
-			if (fromScope === "session" && toScope !== "session") delete meta.project;
-			meta.updatedAt = writeStamp();
-			const serialized = serializeNote(meta, body);
-			assertSerializedSize(serialized);
-			await atomicWrite(toPath, serialized);
-			await rm(fromPath, { force: true });
-			return { meta, replacedCrumpledTarget: targetRaw !== undefined };
-		}));
+		const { meta, replacedCrumpledTarget } = await update(fromAddress, undefined, { renameTo: toAddress });
+		return { meta, replacedCrumpledTarget };
 	}
 
 	async function* scan(options: NotesQuery, status?: NoteQueryStatus): AsyncGenerator<Omit<NoteRow, "sizeBytes">> {
@@ -404,7 +368,7 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 		const matcher = normalized === undefined ? undefined : globToRegExp(normalized);
 		let homes: HomeRef[];
 		try {
-			homes = await homesFor(identity, options);
+			homes = await homesForPattern(normalized, identity) ?? SCOPE_ORDER.map((scope) => ({ scope }));
 		} catch (error) {
 			if (!status || !isFilesystemError(error) || !/^@(projects|agents|models)\//.test(options.glob ?? "")) throw error;
 			status.homesUnavailable.push(options.glob!.split("/")[0]!);

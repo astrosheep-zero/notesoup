@@ -101,7 +101,7 @@ test("the root boot and reset boot carry durable window identity", async () => {
 	assert.equal(rootText.includes(NORMAL_CONTINUATIONS[0]!), false, "root startup carries no reset handoff");
 	assertBootHistory(rootText, historyFromSession(ctx));
 	assert.ok(rootText.includes("decisions.md"));
-	const decisionsMeta = (await listNotes(ctx, { scope: "session" })).find((row) => row.path === "decisions.md")?.meta;
+	const decisionsMeta = (await listNotes(ctx)).find((row) => row.path === "decisions.md")?.meta;
 	assert.ok(decisionsMeta);
 	assert.match(rootText, /decisions\.md · (?:just now|\d+s ago)/, "boot note metadata carries a relative update time");
 	assert.ok(rootText.includes(NOTES_PROTOCOL_OPEN_TAG));
