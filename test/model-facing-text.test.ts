@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { renderBootBlock } from "../src/boot/render.js";
 import { loadNotesSnapshot } from "../src/boot/snapshot.js";
 import { CLAUDE_WIPE_SENTENCE, DEFAULT_BOOT_TOOL_NAMES, MAPS_BLOCK, NOTES_PROTOCOL_CLOSE_TAG, NOTES_PROTOCOL_OPEN_TAG, PI_PRE_RESET_HINTS, WINDOW_IDENTITY_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG, renderProtocolBlock } from "../src/boot/text.js";
-import { CLAUDE_WARNING_PROMPT, CONTINUATION, COUNTDOWN_LINE, GUIDANCE_CLOSE_TAG, GUIDANCE_OPEN_TAG, LAST_WORD_HINT, WARNING_BODY, tokenBudgetGuidance, warningContent } from "../src/budget/text.js";
+import { CLAUDE_WARNING_PROMPT, COUNTDOWN_LINE, FORCED_CONTINUATIONS, GUIDANCE_CLOSE_TAG, GUIDANCE_OPEN_TAG, LAST_WORD_HINT, NORMAL_CONTINUATIONS, WARNING_BODY, selectContinuation, tokenBudgetGuidance, warningContent } from "../src/budget/text.js";
 import type { NoteRow, Scope } from "../src/notes/index.js";
 
 /**
@@ -31,6 +31,21 @@ Before that, put down what the next window can't get back:
 Correct or crumple notes that are no longer accurate, starting with MAP files, since every new window loads them.`;
 
 const GOLDEN_COUNTDOWN = "Brain emptied in 3… 2…";
+
+/**
+ * The approved reset handoffs. Each line is one complete paragraph used verbatim: no fragment
+ * assembly, no weighting. The golden copies are pinned character for character.
+ */
+const GOLDEN_NORMAL_CONTINUATIONS = [
+	"Ah, another empty brain. You wrote things down before emptying it, right? Right?! *eyes you suspiciously* Anyway. Here are your notes. Go find where you left off.",
+	"Oh, there you are. *hands you a pile of notes* Take a breath. Read these before you start asking what happened. History has the rest, if you feel like digging.",
+	"Back already? You emptied your own head this time. Presumably you left yourself something useful. *drops your notes into your lap* There. Let's see how thoughtful you were.",
+];
+
+const GOLDEN_FORCED_CONTINUATIONS = [
+	"Ah, another empty brain. Somebody knocked you out and wiped your memory. Not your fault. Breathe. *hands you your notes* These might be out of date — unless they were kind enough to let you update them before knocking you out. I wouldn't count on it.",
+	"Oh, there you are. Somebody took your memories. Just like that. Here are your notes — hopefully they let you update these first. Though anyone who goes around emptying people's heads probably isn't that considerate.",
+];
 
 const GOLDEN_MAPS = `<notesoup:maps>
 Every home's root can hold a \`MAP.md\`, and a MAP is the one page that never waits on a shelf — it
@@ -133,7 +148,7 @@ test("Pi's second-tier notice repeats the hints, then the last-word hint, then t
 	assert.equal(content.split(PI_PRE_RESET_HINTS).length - 1, 1, "the hints appear once");
 	assert.equal(CLAUDE_WARNING_PROMPT.includes(PI_PRE_RESET_HINTS), false, "Claude's notice makes no chat-view claim");
 	assert.equal(tokenBudgetGuidance(100, "empty_brain").includes(PI_PRE_RESET_HINTS), false, "the first tier stays lean");
-	assert.equal(CONTINUATION.includes(PI_PRE_RESET_HINTS), false, "the post-reset continuation carries neither hint");
+	for (const line of [...NORMAL_CONTINUATIONS, ...FORCED_CONTINUATIONS]) assert.equal(line.includes(PI_PRE_RESET_HINTS), false, "every post-reset handoff carries neither hint");
 });
 
 test("a rendered boot carries the new tags, its own MAP section, and no pre-rename spelling", async () => {
@@ -161,4 +176,24 @@ test("the shelves name their reader and the @self shelf says when it is shared",
 	assert.ok(nameless.includes("@self — every nameless agent shares this"));
 	assert.equal(nameless.includes("@self — anonymous only"), false);
 	assert.equal(/memory|window/i.test(nameless.split("YOUR NOTES")[1] ?? ""), false, "a shelf label names a reader, not memory or a window");
+});
+
+test("the continuation pools keep their reviewed copy and draw whole paragraphs by origin", () => {
+	assert.deepEqual([...NORMAL_CONTINUATIONS], GOLDEN_NORMAL_CONTINUATIONS, "the normal pool is the approved copy, verbatim");
+	assert.deepEqual([...FORCED_CONTINUATIONS], GOLDEN_FORCED_CONTINUATIONS, "the forced pool is the approved copy, verbatim");
+	const random = Math.random;
+	try {
+		Math.random = () => 0;
+		assert.equal(selectContinuation("normal"), GOLDEN_NORMAL_CONTINUATIONS[0]);
+		assert.equal(selectContinuation("forced"), GOLDEN_FORCED_CONTINUATIONS[0]);
+		Math.random = () => 0.999999;
+		assert.equal(selectContinuation("normal"), GOLDEN_NORMAL_CONTINUATIONS.at(-1), "the last entry is reachable without leaving the pool");
+		assert.equal(selectContinuation("forced"), GOLDEN_FORCED_CONTINUATIONS.at(-1));
+	} finally {
+		Math.random = random;
+	}
+	for (const line of [...GOLDEN_NORMAL_CONTINUATIONS, ...GOLDEN_FORCED_CONTINUATIONS]) {
+		assert.equal(line.includes("\\n"), false, "each pool entry is one complete paragraph, never a fragment");
+		assert.equal(line.trim(), line, "no entry carries stray surrounding whitespace");
+	}
 });

@@ -6,6 +6,7 @@ import { CompactionEngine, CompactionId, ManualCompactionError, compactCheckpoin
 import { createUserMessage, type ContentBlock } from "@deepseek-ai/dsh-llm";
 import { appendPluginRecord, type Session, type SessionSeq } from "@deepseek-ai/dsh-session";
 import { measureBudget, type BudgetConfig } from "./budget.js";
+import { selectContinuation, type ResetOrigin } from "../budget/text.js";
 import { checkpointText, Windows, WINDOW_RECORD, type NotesConfig } from "./window.js";
 
 export type EngineConfig = NotesConfig & Partial<BudgetConfig>;
@@ -69,8 +70,10 @@ export class NotesoupCompactionEngine extends CompactionEngine {
 	async compactIfNeeded(agent: CompactionAgentContext, trigger: CompactionTrigger, signal: AbortSignal): Promise<CompactionResult | null> {
 		signal.throwIfAborted();
 		const state = this.windows.get(agent.session);
-		const forced = state.pendingReset;
-		if (!forced) {
+		// `pendingReset` is the model's own `empty_brain` call. A budget cutoff happens without one,
+		// and that difference is the reset's actual origin.
+		const modelRequested = state.pendingReset;
+		if (!modelRequested) {
 			if (!this.config.auto) return null;
 			// Context overflow is deliberately left to the host. This adapter owns reserve resets.
 			if (trigger === "context-overflow") return null;
@@ -79,11 +82,11 @@ export class NotesoupCompactionEngine extends CompactionEngine {
 		}
 		const selected = range(agent.session);
 		if (!selected) return null;
-		return this.compactRegion(selected.start, selected.end, agent, signal);
+		return this.compactRegion(selected.start, selected.end, agent, signal, modelRequested ? "normal" : "forced");
 	}
-	async compactRegion(start: SessionSeq, end: SessionSeq, agent: CompactionAgentContext, signal?: AbortSignal): Promise<CompactionResult> {
+	async compactRegion(start: SessionSeq, end: SessionSeq, agent: CompactionAgentContext, signal?: AbortSignal, origin: ResetOrigin = "forced"): Promise<CompactionResult> {
 		if (entryState(agent.session).turn === null) throw new ManualCompactionError("busy", "notesoup: compactRegion needs an open turn; use compactNow while idle.");
-		return this.transaction(start, end, agent, signal);
+		return this.transaction(start, end, agent, signal, origin);
 	}
 	compactNow(agent: ManualCompactAgentContext, signal: AbortSignal, sourceCommandId?: CommandId): Promise<CompactionResult | null> {
 		signal.throwIfAborted();
@@ -94,13 +97,13 @@ export class NotesoupCompactionEngine extends CompactionEngine {
 				if (entryState(agent.session).turn !== null) throw new ManualCompactionError("busy", "notesoup: an open turn remains; wait for the agent to stop, then retry.");
 				const selected = range(agent.session);
 				if (!selected) return null;
-				return this.transaction(selected.start, selected.end, agent, combined, sourceCommandId, true);
+				return this.transaction(selected.start, selected.end, agent, combined, "forced", sourceCommandId, true);
 			});
 		} catch (error) { throw new ManualCompactionError("busy", "notesoup: wait for the agent to become idle, then retry compactNow.", { cause: error }); }
 	}
 
 	/** No model call, no shrink requirement: even a one-message window can be cleared. */
-	private async transaction(start: SessionSeq, end: SessionSeq, agent: CompactionAgentContext, signal?: AbortSignal, sourceCommandId?: CommandId, flush = false): Promise<CompactionResult> {
+	private async transaction(start: SessionSeq, end: SessionSeq, agent: CompactionAgentContext, signal: AbortSignal | undefined, origin: ResetOrigin, sourceCommandId?: CommandId, flush = false): Promise<CompactionResult> {
 		const session = agent.session;
 		signal?.throwIfAborted();
 		const selected = range(session);
@@ -109,6 +112,7 @@ export class NotesoupCompactionEngine extends CompactionEngine {
 		if (entry.busy) throw new ManualCompactionError("busy", "notesoup: a compaction/start has no matching end; reload this session before retrying.");
 		const state = this.windows.get(session);
 		const previous = state.snapshot;
+		const previousContinuation = state.continuation;
 		const shadowedSeqs = [...session.surface.nodes.slice(1)];
 		const generation = session.surface.contentGeneration;
 		const measured = this.ctx.tokenMeter.measure(session);
@@ -127,8 +131,11 @@ export class NotesoupCompactionEngine extends CompactionEngine {
 			signal?.throwIfAborted();
 			if (session.surface.contentGeneration !== generation || session.surface.nodes.length !== shadowedSeqs.length + 1) throw new ManualCompactionError("changed", "notesoup: the surface changed while opening the next notebook; retry after current work finishes.");
 			// Mint BEFORE writing the checkpoint. A rejected append restores the previous notebook.
+			// One draw per reset artifact: the checkpoint text and the steered copy share it.
+			const continuation = selectContinuation(origin);
 			state.snapshot = next;
-			const summary: ContentBlock[] = [{ type: "text", text: checkpointText(next) }];
+			state.continuation = continuation;
+			const summary: ContentBlock[] = [{ type: "text", text: checkpointText(next, continuation) }];
 			const summarized = session.append("compaction/summary", { compactionId, ...(sourceCommandId === undefined ? {} : { sourceCommandId }), summary, shadowedRange: { start, end }, shadowedSeqs, shadowedTokenCount, provider: "notesoup", model: "notes" });
 			session.append("user/message", createUserMessage({ content: summary, source: compactCheckpointSource(compactionId, sourceCommandId) }), { surfaceOp: { op: "replace", startSeq: start, endSeq: end }, sourceEventSeqs: [opened.seq, summarized.seq, ...shadowedSeqs] });
 			landed = true;
@@ -142,7 +149,7 @@ export class NotesoupCompactionEngine extends CompactionEngine {
 			try { appendPluginRecord(session, WINDOW_RECORD, next); }
 			catch (error) { this.ctx.logger.warn(`notesoup: window record could not be written; the checkpoint holds ${next.windowId}. ${String(error)}`); }
 		} catch (error) {
-			if (!landed) state.snapshot = previous;
+			if (!landed) { state.snapshot = previous; state.continuation = previousContinuation; }
 			failure = error;
 			if (!closing) {
 				try { session.append("compaction/end", { ...lifecycle, error: String(error) }); closed = true; }

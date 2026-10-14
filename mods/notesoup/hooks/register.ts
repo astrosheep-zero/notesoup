@@ -12,7 +12,7 @@ type Engine = Pick<EngineInterface, "process" | "session" | "ui" | "clock" | "pr
 /** The measured context, as much of it as the engine reported. */
 type ContextUsage = { tokens?: number; window?: number; percent?: number }
 /** Shared reset prose, fetched once per session so Pi and Claude cannot drift apart. */
-type SharedTexts = { warning?: string; continuation?: string; wipeSentence?: string; historyUnavailableSentence?: string }
+type SharedTexts = { warning?: string; wipeSentence?: string; historyUnavailableSentence?: string }
 type ClaudeLimits = {
   source: string; autoCompact: boolean; unit: "tokens" | "percent"
   native: number; reset: number; warn: number; resetMargin: number; warningRunway: number
@@ -20,6 +20,7 @@ type ClaudeLimits = {
 type ResetState = {
   identity?: Identity; history?: HistorySource; historyWindowHead?: string; generation: number; window: number; turnRunning: boolean; resetting: boolean
   manualPending: boolean; headless: boolean; usageFailureLogged: boolean; preparedBoot?: string; retainedBoot?: string
+  continuation?: string; continuationWindow?: number
   compactDisabled: boolean; limitsFailureLogged: boolean; limitsAttempts: number; limitsWindow: number
   limits?: ClaudeLimits; warnedWindow?: number; texts?: SharedTexts; settingsFailureLogged: boolean
 }
@@ -47,15 +48,18 @@ type ResetMessages = { boot: string; messages: Array<{ role: "user"; text: strin
 async function resetMessages($: Engine, state: ResetState, identity: Identity): Promise<ResetMessages | { skip: string }> {
   const generation = state.generation
   const texts = await loadTexts($, state)
-  if (texts?.continuation === undefined) return { skip: "reset text didn't load" }
+  if (texts === undefined) return { skip: "reset text didn't load" }
   const boot = await buildBoot($, identity, state.window + 1, texts, state.history)
   if (generation !== state.generation) return { skip: "session changed while building the notes boot" }
   if (!boot.ok) return { skip: `notes didn't load: ${boot.error}` }
+  const continuation = await continuationFor($, state)
+  if (generation !== state.generation) return { skip: "session changed while building the notes boot" }
+  if (continuation === undefined) return { skip: "reset text didn't load" }
   // The same closed reset shape as Pi: notes boot first, then the one reset message.
   const text = String(boot.result)
   return { boot: text, messages: [
     { role: "user", text, toolUses: [] },
-    { role: "user", text: texts.continuation, toolUses: [] },
+    { role: "user", text: continuation, toolUses: [] },
   ] }
 }
 function numberOf(value: unknown): number | undefined {
@@ -66,7 +70,6 @@ function sharedTextsOf(value: unknown): SharedTexts | undefined {
   const row = value as Record<string, unknown>
   const texts: SharedTexts = {}
   if (typeof row.warning === "string" && row.warning.length > 0) texts.warning = row.warning
-  if (typeof row.continuation === "string" && row.continuation.length > 0) texts.continuation = row.continuation
   if (typeof row.wipeSentence === "string" && row.wipeSentence.length > 0) texts.wipeSentence = row.wipeSentence
   if (typeof row.historyUnavailableSentence === "string" && row.historyUnavailableSentence.length > 0) texts.historyUnavailableSentence = row.historyUnavailableSentence
   return Object.keys(texts).length > 0 ? texts : undefined
@@ -191,6 +194,23 @@ async function loadTexts($: Engine, state: ResetState): Promise<SharedTexts | un
   if (texts) state.texts = texts
   return texts
 }
+/**
+ * The one fresh-window line for the artifact being created. Claude has no model reset tool, so
+ * every reset here is system-triggered; one draw per window keeps a retried compaction from
+ * redrawing a line the same reset already carries.
+ */
+async function continuationFor($: Engine, state: ResetState): Promise<string | undefined> {
+  if (state.continuation !== undefined && state.continuationWindow === state.window) return state.continuation
+  const generation = state.generation
+  const response = await run($, { op: "continuation", origin: "forced" })
+  if (generation !== state.generation) return undefined
+  const result = response.ok ? response.result : undefined
+  const text = typeof result === "object" && result !== null ? (result as { text?: unknown }).text : undefined
+  if (typeof text !== "string" || text.length === 0) return undefined
+  state.continuation = text
+  state.continuationWindow = state.window
+  return text
+}
 function log($: Engine, text: string) {
   try { $.ui.log(`🥣 ${text}`) } catch { /* UI must not break a turn or reset. */ }
 }
@@ -234,6 +254,8 @@ function forgetSession(state: ResetState) {
   state.turnRunning = state.resetting = state.manualPending = state.usageFailureLogged = false
   state.preparedBoot = state.retainedBoot = undefined
   state.texts = state.limits = undefined
+  state.continuation = undefined
+  state.continuationWindow = undefined
   state.limitsAttempts = state.limitsWindow = 0
   state.settingsFailureLogged = state.limitsFailureLogged = false
   state.warnedWindow = undefined

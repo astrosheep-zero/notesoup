@@ -216,7 +216,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 
 	const resets = registerResetLifecycle(pi, {
 		isEnabled: () => enabled,
-		buildReset: (ctx, isCurrent, prompt, lastWord, firstSeq) => buildResetDrafts(ctx, notifyIncompleteNotes, isCurrent, prompt, lastWord, firstSeq),
+		buildReset: (ctx, isCurrent, prompt, lastWord, firstSeq, origin) => buildResetDrafts(ctx, notifyIncompleteNotes, isCurrent, prompt, lastWord, firstSeq, origin),
 		getLifecycleGeneration: () => lifecycleGeneration,
 		onResetReady: (_ctx, drafts) => {
 			const boot = drafts.find((draft) => draft.type === "custom_message" && draft.customType === BOOT_TYPE);

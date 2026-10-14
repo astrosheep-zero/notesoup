@@ -18,10 +18,18 @@ Boot acquisition/rendering is shared: `src/boot/snapshot.ts` receives explicit i
 A new boundary is ordered as:
 
 1. A native `compaction` entry with `summary: ""` and `firstKeptEntryId` set to its own ID. This is Pi's retain-none canonical checkpoint; it is not a generated summary request.
-2. A `notesoup/reset-marker` custom entry with `{ windowId }`.
+2. A `notesoup/reset-marker` custom entry with `{ windowId, origin }`.
 3. A hidden `notesoup/boot` custom message with matching `details.windowId`.
-4. A hidden continuation message.
+4. A hidden continuation message carrying the paragraph drawn for that boundary.
 5. If the closing window passed a `last_word`, a visible `notesoup/reset-last-word` message carrying it. Pi boundary drafts do not support ordinary user entries, so the parting line is committed with the reset instead of queued separately.
+
+## Handoff origin and the continuation pools
+
+The continuation is one randomly selected, complete paragraph from an approved pool, drawn when a new boundary artifact is created and persisted verbatim in the continuation entry and the marker's `origin` field. Rendering, history reads, and reloads never draw again, so a window keeps the handoff it was opened with.
+
+The origin is the actual reset origin, never the close-out source: `normal` means the model itself called `empty_brain`, `forced` means a reset happened without that call. A direct `empty_brain` is normal, and so is a budget close-out the model wipes inside. A bare `/fresh-window` or `/empty-brain` command, the hard-reserve cutoff, and bounded overflow recovery are forced. During a manual close-out the acknowledging `empty_brain` call is still recorded (`toolCalled`), because the model did call the reset tool; the manual commit keeps the wheel without converting to a turn-end commit. A marker written before the field existed, or with an unreadable one, is treated as normal.
+
+Each host draws once per artifact and shares that value across every representation of it: Pi persists one entry, dsh writes the same paragraph into its checkpoint text and its steered continuation, and Claude — which has no model-facing reset tool, so every Claude reset is forced — caches one line per window so a retried compaction cannot redraw it. A generic read-only text endpoint never draws.
 
 A manual `/empty-brain <prompt>` command line is not persisted after the reset: it reaches the closing window inside the warning, and the closing model records what the next window needs in notes.
 
@@ -36,8 +44,8 @@ The raw session branch is preserved for history. New checkpoint-backed branches 
 | State | Meaning |
 | --- | --- |
 | `{ phase: "none" }` | No close-out/tool request is pending. |
-| `{ phase: "close-out", windowId, source, prompt? }` | Manual or automatic warning close-out remains armed across ordinary note/tool turns. |
-| `{ phase: "stop-pending", windowId }` | A manual hard-reserve reset was proposed for the given old window. The stop survives a committed window change; settlement stops without a second wipe (or retries construction if the old window is still active). New wipe requests only acknowledge it. |
+| `{ phase: "close-out", windowId, source, prompt?, toolCalled? }` | Manual or automatic warning close-out remains armed across ordinary note/tool turns. `toolCalled` records that the model's own `empty_brain` call was acknowledged, without moving the phase. |
+| `{ phase: "stop-pending", windowId, toolCalled? }` | A manual hard-reserve reset was proposed for the given old window. The stop survives a committed window change; settlement stops without a second wipe (or retries construction if the old window is still active). New wipe requests only acknowledge it. |
 | `{ phase: "tool-requested", windowId, source }` | A direct `empty_brain` call commits after its complete turn batch and continues in the fresh window. `source` is `"tool"` for direct calls or `"automatic"` when the agent wipes inside a budget close-out; manual requests never occupy this phase. |
 | `overflow: "idle"` | No overflow recovery is pending. |
 | `overflow: "pending"` | An overflow failure may recover once at pre-settlement. |
@@ -46,8 +54,8 @@ The raw session branch is preserved for history. New checkpoint-backed branches 
 
 ### Transition rules
 
-- `close_out(windowId, source, prompt?)` arms a close-out for that window. Repeating an already-pending request deduplicates and keeps the original prompt (including no prompt); a manual request can upgrade an automatic request for the same window, and a manual request converts a pending tool request into a settle-committed stop.
-- `tool_request(windowId)` marks that window for a turn-end reset. Matching duplicates deduplicate. Inside a budget close-out the call upgrades to a turn-end commit because context pressure cannot wait for settlement; inside a manual close-out it is only an acknowledgement, so a manual wipe is never converted into a turn-end commit that Pi's tool-batch continuation would overrun.
+- `close_out(windowId, source, prompt?)` arms a close-out for that window. Repeating an already-pending request deduplicates and keeps the original prompt (including no prompt); a manual request can upgrade an automatic request for the same window, and a manual request converts a pending tool request into a settle-committed stop — carrying both the fact that the model called `empty_brain` and that call's last word, so a command arriving after a wipe does not turn a normal reset into a forced one.
+- `tool_request(windowId)` marks that window for a turn-end reset. Matching duplicates deduplicate. Inside a budget close-out the call upgrades to a turn-end commit because context pressure cannot wait for settlement; inside a manual close-out it is only an acknowledgement, so a manual wipe is never converted into a turn-end commit that Pi's tool-batch continuation would overrun. Both the last word and the fact that the call happened are recorded either way, because the boundary the manual close-out eventually commits is still the model's own reset.
 - `turn_end` first clears everything on abort. Overflow-like errors preserve a manual close-out, including across queued work; other requests arm automatic overflow recovery only when there is no queued work, the extension is enabled, and automatic reset is enabled. Other failures drop the request but preserve the overflow chain. A successful, enabled turn commits for a tool request or hard-reserve condition; a close-out alone remains armed. Bare manual hard-reserve commits request no continuation and retain `stop-pending` across the window change. A manual request with a prompt instead returns the prompt with the commit effect, clears request state, and continues after the prompt is durably appended; it never enters the stop latch. Further turns cannot reset that stopped run again.
 - `agent_before_settle` clears state on actual abort. Pending manual overflow commits a reset without continuation when enabled and unqueued; it does not require automatic reset enablement. Other pending overflow recovery gets its one bounded attempt when enabled and unqueued. A committed `stop-pending` reset needs only a stop, never a second wipe. Otherwise only a manual close-out commits, if the outcome is successful, the request belongs to the current window, the extension is enabled, and no queued work remains. An automatic close-out alone is cleared without a reset.
 - `agent_settled`, session start/tree navigation/shutdown, `/notesoup off`, and abort clear transient request state. Durable checkpoint/marker history remains authoritative after transient state is gone.
@@ -68,7 +76,7 @@ Budget drafts are instance-local and are consumed at turn end. They are discarde
 
 Commit confirmation and repair are different native facts. `resetBoundaryCommitted` validates a checkpoint-backed marker followed by its matching hidden boot and hidden continuation; later conversation does not undo that commit. `inspectResetTail` instead asks whether the entire suffix remains safe to repair, refusing later conversation, foreign messages, later markers or misordered/duplicate artifacts. UI success notices use confirmation, not the repair predicate, and remain committed-only.
 
-Startup/tree repair is narrow: it may complete a repairable marker tail when later conversation does not make the missing metadata ambiguous. It awaits the notes snapshot and rechecks lifecycle/window identity before sending a repaired boot or continuation. Legacy marker-only tails remain supported; repair never moves a boundary or promotes an arbitrary compaction to a retain-none checkpoint. `/tree` summary generation is suppressed with an empty summary when either branch crosses a reset, because the raw summary generator bypasses the provider projection.
+Startup/tree repair is narrow: it may complete a repairable marker tail when later conversation does not make the missing metadata ambiguous. It awaits the notes snapshot and rechecks lifecycle/window identity before sending a repaired boot or continuation. A missing continuation is drawn from the pool its marker's `origin` names; an existing continuation is never replaced, never redrawn, and its marker is never rewritten. Legacy marker-only tails remain supported; repair never moves a boundary or promotes an arbitrary compaction to a retain-none checkpoint. `/tree` summary generation is suppressed with an empty summary when either branch crosses a reset, because the raw summary generator bypasses the provider projection.
 
 ## Validation and known limits
 

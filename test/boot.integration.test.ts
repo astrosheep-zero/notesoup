@@ -9,7 +9,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { historyFromSession } from "../src/pi/history.js";
 import { BOOT_TYPE, GUIDANCE_TYPE, RESET_MARKER_TYPE } from "../src/pi/entries.js";
 import { NOTES_PROTOCOL_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG } from "../src/boot/text.js";
-import { CONTINUATION } from "../src/budget/text.js";
+import { FORCED_CONTINUATIONS, NORMAL_CONTINUATIONS } from "../src/budget/text.js";
 import { listNotes, physicalPath } from "./helpers/notes.js";
 import { CONTINUATION_TYPE, MANUAL_WIPE_TYPE } from "../src/pi/entries.js";
 import {
@@ -55,7 +55,8 @@ test("custom reset marker removes old provider context while history remains sea
 	assert.equal(checkpoint.summary, "");
 	assert.equal(checkpoint.firstKeptEntryId, checkpoint.id);
 	assert.equal(marker.parentId, checkpoint.id, "marker follows the native checkpoint");
-	assert.deepEqual(Object.keys(marker.data as object), ["windowId"]);
+	assert.deepEqual(Object.keys(marker.data as object), ["windowId", "origin"]);
+	assert.equal((marker.data as { origin?: string }).origin, "normal", "an explicit tool wipe records the model's own call as the origin");
 	const projected = await runContextWithSystemHook(captured, ctx, sessionManager.buildSessionContext().messages);
 	const providerText = JSON.stringify(projected?.messages ?? []);
 	assert.equal(providerText.includes("OLD-UNIQUE-TRANSCRIPT"), false);
@@ -97,7 +98,7 @@ test("the root boot and reset boot carry durable window identity", async () => {
 	assert.deepEqual(rootBoot?.message.details, { windowId: `pcw:${sessionManager.getSessionId().slice(0, 8)}:root` });
 	const rootText = typeof rootBoot?.message.content === "string" ? rootBoot.message.content : "";
 	assert.ok(rootText.startsWith(WINDOW_IDENTITY_OPEN_TAG), "root block omits the reset line");
-	assert.equal(rootText.includes(CONTINUATION), false, "root startup carries no reset message");
+	assert.equal(rootText.includes(NORMAL_CONTINUATIONS[0]!), false, "root startup carries no reset handoff");
 	assertBootHistory(rootText, historyFromSession(ctx));
 	assert.ok(rootText.includes("decisions.md"));
 	const decisionsMeta = (await listNotes(ctx, { scope: "session" })).find((row) => row.path === "decisions.md")?.meta;
@@ -123,6 +124,7 @@ test("the root boot and reset boot carry durable window identity", async () => {
 	assertBootHistory(String(resetBoot.content), historyFromSession(ctx));
 	const continuation = entries.find((entry) => entry.type === "custom_message" && entry.customType === CONTINUATION_TYPE);
 	assert.ok(continuation && continuation.type === "custom_message" && continuation.display === false, "the resumed run is represented by one hidden continuation");
+	assert.ok(NORMAL_CONTINUATIONS.includes(String(continuation.content)), "a tool-requested reset draws the normal handoff");
 });
 
 test("an empty root boot starts at the first projected seq", async () => {
@@ -280,6 +282,41 @@ test("a marker tail that already carries a boot repairs only its missing continu
 	await runHandlers(captured, "session_start", { reason: "reload" }, ctx);
 	assert.equal(captured.sent.length, 1, "a complete reset tail is idempotent");
 	assert.equal(sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === CONTINUATION_TYPE).length, 1);
+});
+
+test("repair draws a missing continuation from its marker's pool and never replaces a persisted one", async () => {
+	const random = Math.random;
+	Math.random = () => 0;
+	try {
+		const forced = manager(true);
+		forced.appendCustomEntry(RESET_MARKER_TYPE, { windowId: "pcw:forced-tail", origin: "forced" });
+		const forcedCapture = makeExtension(forced);
+		await runHandlers(forcedCapture, "session_start", { reason: "startup" }, context(forced));
+		const repaired = forced.getBranch().find((entry) => entry.type === "custom_message" && entry.customType === CONTINUATION_TYPE);
+		assert.ok(repaired?.type === "custom_message");
+		assert.equal(repaired.content, FORCED_CONTINUATIONS[0], "a repaired tail uses the origin its marker recorded");
+
+		const legacy = manager(true);
+		legacy.appendCustomEntry(RESET_MARKER_TYPE, { windowId: "pcw:legacy-tail" });
+		const legacyCapture = makeExtension(legacy);
+		await runHandlers(legacyCapture, "session_start", { reason: "startup" }, context(legacy));
+		const legacyRepair = legacy.getBranch().find((entry) => entry.type === "custom_message" && entry.customType === CONTINUATION_TYPE);
+		assert.ok(legacyRepair?.type === "custom_message");
+		assert.equal(legacyRepair.content, NORMAL_CONTINUATIONS[0], "a marker written before the fact defaults to normal");
+
+		const kept = manager(true);
+		kept.appendCustomEntry(RESET_MARKER_TYPE, { windowId: "pcw:kept-tail", origin: "forced" });
+		kept.appendCustomMessageEntry(BOOT_TYPE, "already-persisted boot", false, { windowId: "pcw:kept-tail" });
+		kept.appendCustomMessageEntry(CONTINUATION_TYPE, NORMAL_CONTINUATIONS[1]!, false);
+		const keptCapture = makeExtension(kept);
+		await runHandlers(keptCapture, "session_start", { reason: "reload" }, context(kept));
+		assert.equal(keptCapture.sent.length, 0, "a complete tail is never touched");
+		const persisted = kept.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === CONTINUATION_TYPE);
+		assert.equal(persisted.length, 1);
+		assert.equal((persisted[0] as { content?: string }).content, NORMAL_CONTINUATIONS[1], "an existing handoff is never redrawn, even when its marker disagrees");
+	} finally {
+		Math.random = random;
+	}
 });
 
 test("a marker tail followed by real conversation is never repaired", async () => {

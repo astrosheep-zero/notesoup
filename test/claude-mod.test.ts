@@ -10,7 +10,7 @@ import { dispatch, handleLine, type ClaudeToolResult } from "../src/claude/helpe
 import { DEFAULT_CLAUDE_RESET_MARGIN_TOKENS, resolveClaudeLimits } from "../src/claude/thresholds.js";
 import { WARNING_RUNWAY_TOKENS } from "../src/budget/constants.js";
 import { PROTOCOL_WIPE_SENTENCE, CLAUDE_WIPE_SENTENCE, renderProtocolBlock } from "../src/boot/text.js";
-import { CLAUDE_WARNING_PROMPT, CONTINUATION, COUNTDOWN_LINE } from "../src/budget/text.js";
+import { CLAUDE_WARNING_PROMPT, COUNTDOWN_LINE, FORCED_CONTINUATIONS } from "../src/budget/text.js";
 import { createNotesStore } from "../src/notes/index.js";
 import { resolveProjectHome } from "../src/notes/project-home.js";
 import { notesIdentityFromPi } from "../src/pi/notes/adapter.js";
@@ -189,12 +189,20 @@ test("Claude helper boot uses actual Claude note tool bindings and a fresh snaps
 });
 
 test("Claude helper serves the shared reset prose and the host's wipe sentence", async () => {
-  const texts = await dispatch({ op: "texts" }) as { warning: string; continuation: string; wipeSentence: string };
+  const texts = await dispatch({ op: "texts" }) as { warning: string; wipeSentence: string; continuation?: unknown };
   assert.equal(texts.warning, CLAUDE_WARNING_PROMPT, "the helper owns the one warning text the mod shows");
-  assert.equal(texts.continuation, CONTINUATION, "the reset message is Pi's, verbatim");
   assert.equal(texts.wipeSentence, CLAUDE_WIPE_SENTENCE);
   assert.match(texts.warning, /end your turn; the reset runs after it\./);
   assert.equal(texts.warning.endsWith(COUNTDOWN_LINE), true, "the Claude notice also ends with the countdown");
+  assert.equal(texts.continuation, undefined, "a plain text read never draws the reset handoff");
+  const random = Math.random;
+  Math.random = () => 0;
+  try {
+    assert.deepEqual(await dispatch({ op: "continuation", origin: "forced" }), { text: FORCED_CONTINUATIONS[0] }, "Claude's system-triggered reset draws the forced pool");
+    await assert.rejects(dispatch({ op: "continuation", origin: "user" }), /invalid reset origin/, "a third origin is refused, not invented");
+  } finally {
+    Math.random = random;
+  }
 });
 
 /** The point values the resolver produced, without the margin bookkeeping. */
@@ -499,7 +507,7 @@ test("Claude Mod resets at Claude's resolved point after the turn, retains one f
   assert.match(kept[0]!.text, /Previous context window id: claude:hook-session:0/);
   assert.match(kept[0]!.text, /FRESH_NOTES_AT_RESET/);
   assert.doesNotMatch(kept[0]!.text, /OLD_SECRET/);
-  assert.equal(kept[1]!.text, CONTINUATION, "the continuation is Pi's message, verbatim");
+  assert.ok(FORCED_CONTINUATIONS.includes(kept[1]!.text), "the handoff comes from the shared forced pool");
   await invoke("session.measure");
   assert.equal(compactions, 1, "invalidated tokens cannot immediately reset twice");
   const upstream = { blocks: [{ name: "unrelated", text: "leave this alone" }], sentinel: "kept" };
@@ -583,7 +591,7 @@ test("Claude Mod refuses to wipe on boot failure and can retry without advancing
   assert.equal(result.skip, undefined);
   assert.equal(result.messages!.length, 2);
   assert.match(result.messages![0]!.text, /Current context window id: claude:hook-session:1/, "a failed reset never consumes a window ordinal");
-  assert.equal(result.messages![1]!.text, CONTINUATION);
+  assert.ok(FORCED_CONTINUATIONS.includes(result.messages![1]!.text));
 });
 
 test("Claude Mod manual reset uses one hidden close-out turn, then recovers its boot on reload", async (t) => {
@@ -621,7 +629,7 @@ test("Claude Mod manual reset uses one hidden close-out turn, then recovers its 
   assert.equal(compactions, 1);
   assert.equal(kept.length, 2);
   assert.match(kept[0]!.text, /Current context window id: claude:hook-session:1/);
-  assert.equal(kept[1]!.text, CONTINUATION);
+  assert.ok(FORCED_CONTINUATIONS.includes(kept[1]!.text));
   host.session.messages = async () => [{ role: "user", text: "OLD_SECRET" }, ...kept];
   handlers = new Map();
   (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
@@ -838,6 +846,44 @@ async function retainedFixture(t: test.TestContext) {
   return { home, host, invoke, context, boot };
 }
 
+test("Claude asks for one handoff per compaction and reuses it when the same window retries", async (t) => {
+  const { host, invoke } = await retainedFixture(t);
+  const run = host.process.run;
+  const draws: string[] = [];
+  host.process.run = async (argv, init) => {
+    const request = init?.stdin ? JSON.parse(init.stdin) as { op?: string } : {};
+    if (request.op === "continuation") draws.push(init?.stdin!);
+    return run(argv, init);
+  };
+  // Every read path stays pure: no boot, warning, context, or measure draws a handoff.
+  await invoke("prompt.context", {}, { blocks: [] });
+  await invoke("session.measure");
+  await invoke("turn.start");
+  await invoke("turn.complete");
+  assert.equal(draws.length, 0, "only a reset draws, never a read");
+
+  const timers: Array<() => void | Promise<void>> = [];
+  const lines: string[] = [];
+  host.clock.after = (_ms, callback) => { timers.push(callback); };
+  host.prompt.submit = async () => { await invoke("turn.start"); };
+  // The host retries one plugin compaction for the same window: one artifact, one draw.
+  host.session.compact = async ({ instructions }) => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await invoke("session.compact", { trigger: "plugin", instructions: instructions ?? "" }) as { messages: Array<{ role: string; text: string }> };
+      lines.push(result.messages[1]!.text);
+    }
+    return { skip: "test default" };
+  };
+  assert.match(((await invoke("command.run", { command: "fresh-window", args: "" })) as { text: string }).text, /Brain being emptied/);
+  await Promise.resolve();
+  await timers.shift()!();
+  await invoke("turn.complete");
+  assert.equal(draws.length, 1, "a retried compaction adds no second draw");
+  assert.equal(lines.length, 2, "both attempts returned a handoff");
+  assert.equal(lines[0], lines[1], "both attempts carry the same artifact's paragraph");
+  assert.ok(FORCED_CONTINUATIONS.includes(lines[0]!), "Claude has no model reset tool, so its pool is always the forced one");
+});
+
 test("Claude session.end gives /clear, /resume and /branch a fresh boot and identity", async (t) => {
   for (const action of ["clear", "resume", "branch"]) {
     await t.test(action, async (t) => {
@@ -900,7 +946,7 @@ test("Claude native compaction becomes a notes-only reset, a veto, or a pass-thr
     assert.equal(result.messages.length, 2);
     assert.match(result.messages[0]!.text, /Current context window id: claude:hook-session:3/);
     assert.doesNotMatch(result.messages[0]!.text, /OLD/);
-    assert.equal(result.messages[1]!.text, CONTINUATION);
+    assert.ok(FORCED_CONTINUATIONS.includes(result.messages[1]!.text));
     const upstream = { blocks: [{ name: "claude:user-context", text: "upstream" }] };
     const context = await invoke("prompt.context", {}, upstream) as { blocks: typeof upstream.blocks };
     assert.deepEqual(context.blocks, upstream.blocks, "the hijacked boot is retained, not injected again");

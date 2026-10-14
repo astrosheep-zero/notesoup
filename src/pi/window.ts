@@ -3,15 +3,25 @@ import { getCurrentSystemMessage } from "@earendil-works/pi-ai";
 import { estimateContextTokens } from "./estimate.js";
 import { convertToLlm, type CustomEntry, type ExtensionContext, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import { BOOT_TYPE, RESET_MARKER_TYPE } from "./entries.js";
+import type { ResetOrigin } from "../budget/text.js";
 import type { SessionReader } from "./session-reader.js";
 
-export type WindowMarker = CustomEntry<{ windowId: string }> & { data: { windowId: string } };
+export type WindowMarkerData = { readonly windowId: string; readonly origin?: ResetOrigin };
+export type WindowMarker = CustomEntry<WindowMarkerData> & { data: WindowMarkerData };
 
 export function isWindowMarker(entry: SessionEntry): entry is WindowMarker {
 	return entry.type === "custom" && entry.customType === RESET_MARKER_TYPE &&
 		typeof entry.data === "object" && entry.data !== null &&
 		typeof (entry.data as { windowId?: unknown }).windowId === "string" &&
 		(entry.data as { windowId: string }).windowId.length > 0;
+}
+
+/**
+ * The origin a marker records for missing-tail repair. A marker written before the fact was
+ * carried, or with an unreadable one, was the model's own reset.
+ */
+export function markerResetOrigin(marker: WindowMarker): ResetOrigin {
+	return marker.data.origin === "forced" ? "forced" : "normal";
 }
 
 /** Only the active branch can supply a window boundary. */

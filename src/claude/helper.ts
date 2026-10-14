@@ -9,7 +9,7 @@ import type { HistoryProjection } from "../history/history.js";
 import { loadNotesSnapshot } from "../boot/snapshot.js";
 import { renderBootBlock } from "../boot/render.js";
 import { CLAUDE_WIPE_SENTENCE, CLAUDE_HISTORY_UNAVAILABLE_SENTENCE, type BootToolNames } from "../boot/text.js";
-import { CLAUDE_WARNING_PROMPT, CONTINUATION } from "../budget/text.js";
+import { CLAUDE_WARNING_PROMPT, selectContinuation } from "../budget/text.js";
 import { resolveClaudeLimits } from "./thresholds.js";
 import { projectKey, snapshotNotesIdentity, type NotesIdentity } from "../notes/index.js";
 import type { Operation } from "../tools/result.js";
@@ -83,7 +83,13 @@ export async function dispatch(request: unknown): Promise<unknown> {
 	if (value.op === "schemas") return [...Object.entries(OPERATIONS), ...Object.entries(HISTORY_OPERATIONS)].map(([name, operation]) => ({ name, description: operation.description, inputSchema: JSON.parse(JSON.stringify(operation.parameters)) }));
 	// The shared reset prose lives here, not in the sandboxed hooks module, so Pi and Claude
 	// cannot drift apart. The hooks module caches one copy per session.
-	if (value.op === "texts") return { warning: CLAUDE_WARNING_PROMPT, continuation: CONTINUATION, wipeSentence: CLAUDE_WIPE_SENTENCE, historyUnavailableSentence: CLAUDE_HISTORY_UNAVAILABLE_SENTENCE };
+	if (value.op === "texts") return { warning: CLAUDE_WARNING_PROMPT, wipeSentence: CLAUDE_WIPE_SENTENCE, historyUnavailableSentence: CLAUDE_HISTORY_UNAVAILABLE_SENTENCE };
+	// Claude has no model-facing reset tool, so every reset it creates is system-triggered. The
+	// caller draws once per artifact and caches the answer; text reads never draw.
+	if (value.op === "continuation") {
+		if (value.origin !== "normal" && value.origin !== "forced") throw new Error("invalid reset origin");
+		return { text: selectContinuation(value.origin) };
+	}
 	// Threshold derivation crosses the boundary as raw facts: everything the engine could
 	// read, unvalidated. resolveClaudeLimits guards every field and never throws.
 	if (value.op === "limits") return resolveClaudeLimits(value.facts);

@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext, SessionBoundaryDraft, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { BOOT_TYPE, CONTINUATION_TYPE, RESET_LAST_WORD_TYPE, RESET_MARKER_TYPE } from "../entries.js";
-import { CONTINUATION } from "../../budget/text.js";
-import { isForeignResetTailEntry, isWindowBootEntry, isWindowMarker, type WindowMarker } from "../window.js";
+import { selectContinuation, type ResetOrigin } from "../../budget/text.js";
+import { isForeignResetTailEntry, isWindowBootEntry, isWindowMarker, markerResetOrigin, type WindowMarker } from "../window.js";
 import { buildBootMessage, sendBoot, type IncompleteNotesNotifier } from "../boot.js";
 
 export type ResetTailState = { readonly boot: boolean; readonly continuation: boolean };
@@ -24,9 +24,9 @@ export function isWindowContinuationEntry(entry: SessionEntry): boolean {
 }
 
 /** The single continuation sender: the only reset prose persisted for a window. */
-function sendContinuation(pi: ExtensionAPI): void {
+function sendContinuation(pi: ExtensionAPI, content: string): void {
 	pi.sendMessage(
-		{ customType: CONTINUATION_TYPE, content: CONTINUATION, display: false },
+		{ customType: CONTINUATION_TYPE, content, display: false },
 		{ triggerTurn: false },
 	);
 }
@@ -35,7 +35,9 @@ function sendContinuation(pi: ExtensionAPI): void {
  * The closed, ordered reset shape: retain-none native checkpoint, marker, matching boot,
  * continuation, then an optional parting line. The prompt is not persisted here — it reached the
  * closing window inside the warning. The boot snapshot is acquired asynchronously after capturing
- * this identity.
+ * this identity. The continuation is drawn from the pool its origin names, here, once: the caller
+ * persists the returned text and no read, render, or repair draws it again. The origin defaults to
+ * `normal`, the same reading a legacy marker with no origin gets.
  */
 export async function buildResetDrafts(
 	ctx: ExtensionContext,
@@ -44,6 +46,7 @@ export async function buildResetDrafts(
 	prompt?: string,
 	lastWord?: string,
 	firstSeq?: number,
+	origin: ResetOrigin = "normal",
 ): Promise<SessionBoundaryDraft[]> {
 	const sessionId = ctx.sessionManager.getSessionId();
 	const sessionPrefix = sessionId.slice(0, 8);
@@ -57,9 +60,9 @@ export async function buildResetDrafts(
 	const boot = await buildBootMessage(ctx, windowId, firstSeq, notifyIncompleteNotes, isCurrent);
 	return [
 		{ type: "compaction", summary: "", firstKeptEntryId: null },
-		{ type: "custom", customType: RESET_MARKER_TYPE, data: { windowId } },
+		{ type: "custom", customType: RESET_MARKER_TYPE, data: { windowId, origin } },
 		{ type: "custom_message", customType: BOOT_TYPE, content: boot.content, display: false, details: { windowId } },
-		{ type: "custom_message", customType: CONTINUATION_TYPE, content: CONTINUATION, display: false },
+		{ type: "custom_message", customType: CONTINUATION_TYPE, content: selectContinuation(origin), display: false },
 		...(lastWord ? [{ type: "custom_message" as const, customType: RESET_LAST_WORD_TYPE, content: `${LAST_WORD_PREFIX}${lastWord}`, display: true }] : []),
 	];
 }
@@ -110,5 +113,5 @@ export async function repairResetTail(
 	const latest = inspectResetTail(ctx, marker.id, marker.data.windowId);
 	if (!latest) return;
 	if (!latest.boot && boot) sendBoot(pi, boot);
-	if (!latest.continuation && (latest.boot || boot)) sendContinuation(pi);
+	if (!latest.continuation && (latest.boot || boot)) sendContinuation(pi, selectContinuation(markerResetOrigin(marker)));
 }

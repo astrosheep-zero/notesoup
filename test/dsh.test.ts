@@ -17,7 +17,7 @@ import { dshFixture } from "./helpers/dsh.js";
 import { decodeHistory } from "../src/dsh/history.js";
 import { checkpointSnapshot, notesIdentity, recoverSnapshot, WINDOW_RECORD } from "../src/dsh/window.js";
 import { measureBudget } from "../src/dsh/budget.js";
-import { COUNTDOWN_LINE } from "../src/budget/text.js";
+import { COUNTDOWN_LINE, FORCED_CONTINUATIONS, NORMAL_CONTINUATIONS } from "../src/budget/text.js";
 import { preflight } from "../src/dsh/engine.js";
 import type { Agent } from "@deepseek-ai/dsh-agent";
 import { BasicCompactionEngine } from "@deepseek-ai/dsh-compaction-basic";
@@ -247,6 +247,40 @@ test("dsh budget follows configured host reserve, close-out tool runs across ste
 	await run(agent, "hard reserve");
 	assert.equal(engine.windows.get(agent.session).snapshot.window, 2);
 	assert.equal(mock.requests.length, 6);
+});
+
+test("dsh draws one reset paragraph for its origin and reuses it for the steered copy", async (t) => {
+	const random = Math.random;
+	Math.random = () => 0;
+	try {
+		const { engine, create, mock } = await dshFixture(t, { thresholdRatio: 0.7, headroomTokens: 32768 });
+		const agent = await create();
+		// The model's own empty_brain call opens the normal handoff.
+		mock.script.push({ tool: "empty_brain", input: {} }, { text: "fresh" });
+		await run(agent, "model asked");
+		const modelCheckpoint = agent.session.eventAt(agent.session.surface.nodes[1]!)!;
+		if (modelCheckpoint.type !== "user/message") assert.fail("a reset must write a checkpoint message");
+		const modelText = contentText(modelCheckpoint.data.content);
+		assert.ok(modelText.endsWith(`${NORMAL_CONTINUATIONS[0]}\n</notesoup-continuation>`), "the model's call draws the normal pool");
+		assert.equal(FORCED_CONTINUATIONS.some((line) => modelText.includes(line)), false);
+
+		// A budget cutoff happens without a call, and its one draw serves both representations.
+		mock.script.push({ text: "hard", inputTokens: 145000 }, { text: "recovered" });
+		await run(agent, "nobody asked");
+		assert.equal(engine.windows.get(agent.session).snapshot.window, 2);
+		const checkpoints = agent.session.snapshotEvents().filter((event) => event.type === "user/message" && event.data.source.kind === "compact-checkpoint");
+		assert.equal(checkpoints.length, 2);
+		const budgetCheckpoint = checkpoints[1]!;
+		if (budgetCheckpoint.type !== "user/message") assert.fail("the budget reset must write a checkpoint message");
+		const budgetText = contentText(budgetCheckpoint.data.content);
+		assert.ok(budgetText.endsWith(`${FORCED_CONTINUATIONS[0]}\n</notesoup-continuation>`), "a budget cutoff draws the forced pool");
+		assert.equal(NORMAL_CONTINUATIONS.some((line) => budgetText.includes(line)), false);
+		const steered = agent.session.snapshotEvents().filter((event) => event.type === "user/message" && event.data.source.kind === "notesoup-continuation").at(-1);
+		assert.ok(steered && steered.type === "user/message", "the budget reset steers its continuation");
+		assert.equal(contentText(steered.data.content), FORCED_CONTINUATIONS[0], "the steered copy is the same artifact, never a second draw");
+	} finally {
+		Math.random = random;
+	}
 });
 
 test("dsh explicit resets survive auto:false; shared tool reads and expected errors keep their codes", async (t) => {

@@ -7,7 +7,6 @@ import { createHash } from "node:crypto";
 import { loadNotesSnapshot } from "../boot/snapshot.js";
 import { renderBootBlock } from "../boot/render.js";
 import { DEFAULT_BOOT_TOOL_NAMES } from "../boot/text.js";
-import { CONTINUATION } from "../budget/text.js";
 import { contentText } from "../history/history.js";
 import { projectKey, slugify, snapshotNotesIdentity, type NotesIdentity } from "../notes/index.js";
 
@@ -17,7 +16,7 @@ const BOOT_OPEN = "<notesoup-boot>\n";
 const BOOT_CLOSE = "\n</notesoup-boot>";
 const CHECKPOINT_END = "\n\n<notesoup-continuation>\n";
 export type WindowSnapshot = Readonly<{ version: 1; window: number; windowId: string; openedAt: number; boot: string; notesDigest: string }>;
-export type WindowState = { snapshot: WindowSnapshot; pendingReset: boolean; warned: boolean; reminded: boolean };
+export type WindowState = { snapshot: WindowSnapshot; pendingReset: boolean; warned: boolean; reminded: boolean; continuation?: string };
 export type NotesConfig = { notesHome?: string; agentName?: string };
 
 export function restoreWarnings(state: WindowState, events: readonly SessionEvent[]): void {
@@ -37,7 +36,7 @@ declare module "@deepseek-ai/dsh-session/types" {
 
 export function windowId(sessionId: string, window: number): string { return `dsh:${sessionId}:${window}`; }
 function digest(boot: string): string { return createHash("sha256").update(boot).digest("hex"); }
-export function checkpointText(snapshot: WindowSnapshot): string { return snapshot.boot + CHECKPOINT_END + CONTINUATION + "\n</notesoup-continuation>"; }
+export function checkpointText(snapshot: WindowSnapshot, continuation: string): string { return snapshot.boot + CHECKPOINT_END + continuation + "\n</notesoup-continuation>"; }
 
 export function recordSnapshot(event: SessionEvent): WindowSnapshot | undefined {
 	const record = pluginRecordOf(event);

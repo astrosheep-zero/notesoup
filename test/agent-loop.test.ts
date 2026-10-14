@@ -21,7 +21,7 @@ import { BOOT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, MANUAL_WIPE_TYPE, RESET_MA
 import { historyFromSession } from "../src/pi/history.js";
 import { assertBootHistory } from "./helpers/extension.js";
 import { NOTES_PROTOCOL_OPEN_TAG, WINDOW_IDENTITY_OPEN_TAG } from "../src/boot/text.js";
-import { CONTINUATION, GUIDANCE_OPEN_TAG, warningContent, warningPrompt } from "../src/budget/text.js";
+import { FORCED_CONTINUATIONS, GUIDANCE_OPEN_TAG, NORMAL_CONTINUATIONS, warningContent, warningPrompt } from "../src/budget/text.js";
 
 type StreamScript = (request: number, context: AgentContext) => AssistantMessage | Promise<AssistantMessage>;
 type Hook = (pi: ExtensionAPI, getSession: () => AgentSession, requests: AgentContext[]) => void;
@@ -245,7 +245,12 @@ function text(message: AgentContext | undefined): string {
 }
 
 /** `text()` serializes to JSON, so match the reset prose in its escaped form. */
-const CONTINUATION_JSON = JSON.stringify(CONTINUATION).slice(1, -1);
+const CONTINUATION_JSON_LINES = [...NORMAL_CONTINUATIONS, ...FORCED_CONTINUATIONS].map((line) => JSON.stringify(line).slice(1, -1));
+
+/** How many distinct reset paragraphs a serialized request carries; one fresh window carries one. */
+function continuationLinesIn(body: string): string[] {
+	return CONTINUATION_JSON_LINES.filter((line) => body.includes(line));
+}
 const WARNING_JSON = JSON.stringify(warningPrompt()).slice(1, -1);
 
 function resetMarkers(fixture: Fixture) {
@@ -268,7 +273,7 @@ function assertFreshRequest(fixture: Fixture, requestIndex: number, oldSentinel:
 	const body = text(fixture.requests[requestIndex]);
 	assert.equal(body.includes(oldSentinel), false, "the new provider request excludes the old window transcript");
 	assert.ok(body.includes(WINDOW_IDENTITY_OPEN_TAG), "the new provider request includes the fresh context-window boot");
-	assert.equal(body.split(CONTINUATION_JSON).length - 1, 1, "the fresh window carries exactly one reset message");
+	assert.deepEqual(continuationLinesIn(body).length, 1, "the fresh window carries exactly one reset paragraph");
 }
 
 test("real Pi codemode receives typed notes/history outcomes, including expected errors", { timeout: 20000 }, async () => {
@@ -480,7 +485,8 @@ test("real AgentSession: explicit tiny-session wipe ignores keepRecentTokens and
 		assert.equal(resetMarkers(fixture).length, 1, "explicit wipe does not depend on Pi's compaction keep window");
 		const marker = resetMarkers(fixture)[0]!;
 		assert.equal(marker.type, "custom");
-		assert.deepEqual(Object.keys(marker.data as object), ["windowId"]);
+		assert.deepEqual(Object.keys(marker.data as object), ["windowId", "origin"]);
+		assert.equal((marker.data as { origin?: string }).origin, "normal", "the model's own wipe opens the normal handoff");
 		const windowId = (marker.data as { windowId: string }).windowId;
 		const boot = fixture.sessionManager.getBranch().find((entry) => entry.type === "custom_message" && entry.customType === BOOT_TYPE && entry.details && typeof entry.details === "object" && (entry.details as { windowId?: unknown }).windowId === windowId);
 		assert.ok(boot && boot.type === "custom_message", "the reset boot is persisted after the marker");
@@ -562,7 +568,7 @@ test("real AgentSession: a clear command keeps its prompt out of the fresh windo
 				assert.equal(text(context).includes("PROMPT_RESET_OLD_SENTINEL"), false);
 				assert.equal(text(context).includes("AFTER_CLEAR_PROMPT_SENTINEL"), false, "the fresh window is not handed the prompt");
 				assert.equal(text(context).includes("literal text"), false, "not even the quoted argument survives the reset");
-				assert.ok(text(context).includes(CONTINUATION_JSON), "wake-up prose opens the fresh window");
+				assert.deepEqual(continuationLinesIn(text(context)).length, 1, "wake-up prose opens the fresh window, once");
 				return assistant(fixture, [{ type: "text", text: "prompt handled" }]);
 			},
 		});

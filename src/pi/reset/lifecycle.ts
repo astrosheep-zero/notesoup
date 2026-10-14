@@ -4,6 +4,7 @@ import type { AgentBeforeSettleEvent, ExtensionAPI, ExtensionContext, SessionBou
 import { currentReset, currentWindowId } from "../window.js";
 import { nextHistorySeq } from "../history.js";
 import { resetBoundaryCommitted } from "./committed.js";
+import type { ResetOrigin } from "../../budget/text.js";
 import { errorMessage } from "../../error-message.js";
 
 type BudgetOwner = {
@@ -16,7 +17,7 @@ type BudgetOwner = {
 type ResetOptions = {
 	isEnabled: () => boolean;
 	budget: BudgetOwner;
-	buildReset: (ctx: ExtensionContext, isCurrent: () => boolean, prompt: string | undefined, lastWord: string | undefined, firstSeq: number) => SessionBoundaryDraft[] | Promise<SessionBoundaryDraft[]>;
+	buildReset: (ctx: ExtensionContext, isCurrent: () => boolean, prompt: string | undefined, lastWord: string | undefined, firstSeq: number, origin: ResetOrigin) => SessionBoundaryDraft[] | Promise<SessionBoundaryDraft[]>;
 	getLifecycleGeneration?: () => number;
 	onResetReady?: (ctx: ExtensionContext, drafts: readonly SessionBoundaryDraft[]) => void;
 };
@@ -37,8 +38,9 @@ export type ResetRequest =
 	| { readonly phase: "none" }
 	// The safety reset may change windows before Pi finishes its tool-batch continuation.
 	// This run-scoped stop intent survives that change; windowId is the pre-reset window.
-	| { readonly phase: "stop-pending"; readonly windowId: string }
-	| { readonly phase: "close-out"; readonly windowId: string; readonly source: ResetRequestSource; readonly prompt?: string; readonly lastWord?: string }
+	// `toolCalled` is the recorded fact that the model's own `empty_brain` call happened.
+	| { readonly phase: "stop-pending"; readonly windowId: string; readonly toolCalled?: true }
+	| { readonly phase: "close-out"; readonly windowId: string; readonly source: ResetRequestSource; readonly prompt?: string; readonly lastWord?: string; readonly toolCalled?: true }
 	| { readonly phase: "tool-requested"; readonly windowId: string; readonly source: ToolResetRequestSource; readonly lastWord?: string };
 export type ResetOverflowPhase = "idle" | "pending" | "pending-spent" | "spent";
 
@@ -98,17 +100,33 @@ export interface ResetControlResult {
 	readonly effect: ResetControlEffect;
 	readonly prompt?: string;
 	readonly lastWord?: string;
+	/** The origin of the boundary this decision commits. Absent means no `empty_brain` call was recorded, so forced. */
+	readonly origin?: ResetOrigin;
 }
 
 function requestForWindow(request: ResetRequest, windowId: string): ResetRequest {
 	return request.phase === "stop-pending" || (request.phase !== "none" && request.windowId === windowId) ? request : NO_REQUEST;
 }
 
-function manualCommit(prompt?: string, lastWord?: string): ResetControlResult {
+/**
+ * The actual origin fact: `empty_brain` was called, no matter who else asked for the reset. A
+ * `close-out` source is not it — a manual or budget close-out without the call is a system reset.
+ */
+function requestOrigin(request: ResetRequest): ResetOrigin {
+	if (request.phase === "tool-requested") return "normal";
+	return (request.phase === "close-out" || request.phase === "stop-pending") && request.toolCalled === true ? "normal" : "forced";
+}
+
+/** The recorded call fact survives into the run-scoped stop latch. */
+function carriedToolCall(request: ResetRequest): { toolCalled?: true } {
+	return request.phase === "close-out" && request.toolCalled === true ? { toolCalled: true } : {};
+}
+
+function manualCommit(origin: ResetOrigin, prompt?: string, lastWord?: string): ResetControlResult {
 	const parting = lastWord ? { lastWord } : {};
 	return prompt
-		? { state: initialResetControl(), effect: "commit-boundary", prompt, ...parting }
-		: { state: initialResetControl(), effect: "commit-boundary-stop", ...parting };
+		? { state: initialResetControl(), effect: "commit-boundary", origin, prompt, ...parting }
+		: { state: initialResetControl(), effect: "commit-boundary-stop", origin, ...parting };
 }
 
 /** The parting line rides either committing phase; other phases never carry one. */
@@ -124,9 +142,12 @@ export function reduceResetControl(state: ResetControlState, event: ResetControl
 			const prompt = event.source === "manual" && event.prompt?.trim() ? { prompt: event.prompt.trim() } : {};
 			if (request.phase === "stop-pending") return { state, effect: "already-pending" };
 			if (request.phase === "tool-requested" && request.windowId === event.windowId) {
-				// A manual wipe outranks a pending rollover: close out before committing.
+				// A manual wipe outranks a pending rollover: close out before committing. The call
+				// that already happened still counts — the conversion carries its origin and parting
+				// line, so a command arriving after a model wipe does not rewrite it as a forced reset.
 				if (event.source === "manual") {
-					return { state: { ...state, request: { phase: "close-out", windowId: event.windowId, source: "manual", ...prompt } }, effect: "close-out-armed" };
+					const lastWord = request.lastWord;
+					return { state: { ...state, request: { phase: "close-out", windowId: event.windowId, source: "manual", toolCalled: true, ...(lastWord ? { lastWord } : {}), ...prompt } }, effect: "close-out-armed" };
 				}
 				return { state, effect: "already-pending" };
 			}
@@ -148,10 +169,12 @@ export function reduceResetControl(state: ResetControlState, event: ResetControl
 			// commit that pi's tool-batch continuation can overrun. A budget close-out still
 			// upgrades: context pressure cannot wait for settlement.
 			if (request.phase === "close-out" && request.windowId === event.windowId) {
-				// The acknowledging call still contributes its last word; the manual commit keeps the wheel.
+				// The acknowledging call still contributes its last word and still records that
+				// `empty_brain` really ran; the manual commit keeps the wheel, so its boundary is
+				// the model's own reset even though the close-out source stays manual.
 				if (request.source === "manual") {
 					const lastWord = request.lastWord ?? event.lastWord;
-					return { state: { ...state, request: { ...request, ...(lastWord ? { lastWord } : {}) } }, effect: "already-pending" };
+					return { state: { ...state, request: { ...request, toolCalled: true, ...(lastWord ? { lastWord } : {}) } }, effect: "already-pending" };
 				}
 				return { state: { ...state, request: { phase: "tool-requested", windowId: event.windowId, source: "automatic", ...parting } }, effect: "close-out-armed" };
 			}
@@ -179,9 +202,10 @@ export function reduceResetControl(state: ResetControlState, event: ResetControl
 			// a separate hard-reserve safety path; ordinary close-out waits for settlement.
 			if (request.phase === "tool-requested" || facts.hardReserveDue) {
 				const lastWord = requestLastWord(request);
-				if (manual && request.prompt) return manualCommit(request.prompt, lastWord);
-				if (manual) return { state: { request: { phase: "stop-pending", windowId: facts.windowId }, overflow: "idle" }, effect: "commit-boundary-stop", ...(lastWord ? { lastWord } : {}) };
-				return { state: { request: NO_REQUEST, overflow: "idle" }, effect: "commit-boundary", ...(lastWord ? { lastWord } : {}) };
+				const origin = requestOrigin(request);
+				if (manual && request.prompt) return manualCommit(origin, request.prompt, lastWord);
+				if (manual) return { state: { request: { phase: "stop-pending", windowId: facts.windowId, ...carriedToolCall(request) }, overflow: "idle" }, effect: "commit-boundary-stop", origin, ...(lastWord ? { lastWord } : {}) };
+				return { state: { request: NO_REQUEST, overflow: "idle" }, effect: "commit-boundary", origin, ...(lastWord ? { lastWord } : {}) };
 			}
 			return { state: { request, overflow: "idle" }, effect: "none" };
 		}
@@ -194,7 +218,7 @@ export function reduceResetControl(state: ResetControlState, event: ResetControl
 				// Only retry construction if the safety boundary never committed. Otherwise
 				// stop without a second wipe, even if a queued turn subsequently failed.
 				if (request.windowId !== facts.windowId) return { state: initialResetControl(), effect: "stop" };
-				return { state: initialResetControl(), effect: facts.failed || !facts.enabled ? "none" : "commit-boundary-stop" };
+				return { state: initialResetControl(), effect: facts.failed || !facts.enabled ? "none" : "commit-boundary-stop", origin: requestOrigin(request) };
 			}
 			const manual = request.phase === "close-out" && request.source === "manual";
 			if (state.overflow === "pending" || state.overflow === "pending-spent") {
@@ -203,18 +227,18 @@ export function reduceResetControl(state: ResetControlState, event: ResetControl
 				}
 				// An explicit manual wipe is not an automatic recovery/retry. It must still
 				// clear on overflow, including when automatic reset is disabled.
-				if (manual && facts.enabled) return manualCommit(request.prompt, requestLastWord(request));
+				if (manual && facts.enabled) return manualCommit(requestOrigin(request), request.prompt, requestLastWord(request));
 				const spent = state.overflow === "pending-spent";
 				if (!facts.enabled || !facts.automaticResetEnabled) {
 					return { state: { request: facts.failed ? NO_REQUEST : request, overflow: spent ? "spent" : "idle" }, effect: "none" };
 				}
-				return { state: { request: NO_REQUEST, overflow: "spent" }, effect: spent ? "none" : "recover-overflow" };
+				return { state: { request: NO_REQUEST, overflow: "spent" }, effect: spent ? "none" : "recover-overflow", origin: requestOrigin(request) };
 			}
 			if (facts.failed || !facts.enabled || !manual) {
 				return { state: { ...state, request: NO_REQUEST }, effect: "none" };
 			}
 			if (facts.queued) return { state: { ...state, request }, effect: "none" };
-			return manualCommit(request.prompt, requestLastWord(request));
+			return manualCommit(requestOrigin(request), request.prompt, requestLastWord(request));
 		}
 		case "settled":
 			return { state: initialResetControl(), effect: "none" };
@@ -239,7 +263,7 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 	let control = initialResetControl();
 
 	const clear = () => { control = reduceResetControl(control, { type: "clear" }).state; };
-	const resetBoundaryResult = async (entries: SessionBoundaryDraft[], ctx: ExtensionContext, continueAfterReset: boolean, prompt?: string, lastWord?: string) => {
+	const resetBoundaryResult = async (entries: SessionBoundaryDraft[], ctx: ExtensionContext, continueAfterReset: boolean, prompt: string | undefined, lastWord: string | undefined, origin: ResetOrigin) => {
 		const generation = lifecycleGeneration;
 		const outerGeneration = options.getLifecycleGeneration?.();
 		const sessionId = ctx.sessionManager.getSessionId();
@@ -251,7 +275,7 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 		const firstSeq = nextHistorySeq(ctx, entries) + 1;
 		let resetDrafts: SessionBoundaryDraft[];
 		try {
-			resetDrafts = await options.buildReset(ctx, isCurrent, prompt, lastWord, firstSeq);
+			resetDrafts = await options.buildReset(ctx, isCurrent, prompt, lastWord, firstSeq, origin);
 		} catch (error) {
 			if (isCurrent()) ctx.ui.notify(`🥣 Brain still full: ${errorMessage(error)}${prompt ? " · prompt not sent" : ""}`, "warning");
 			return entries.length > 0 ? { entries } : undefined;
@@ -297,7 +321,7 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 			},
 		});
 		control = decision.state;
-		if (decision.effect === "commit-boundary" || decision.effect === "commit-boundary-stop") return await resetBoundaryResult(entries, ctx, decision.effect === "commit-boundary", decision.prompt, decision.lastWord);
+		if (decision.effect === "commit-boundary" || decision.effect === "commit-boundary-stop") return await resetBoundaryResult(entries, ctx, decision.effect === "commit-boundary", decision.prompt, decision.lastWord, decision.origin ?? "forced");
 		return entries.length > 0 ? { entries } : undefined;
 	});
 
@@ -317,7 +341,7 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 		control = decision.state;
 		if (decision.effect === "stop") return { entries: event.entries, continue: false };
 		if (decision.effect !== "commit-boundary" && decision.effect !== "commit-boundary-stop" && decision.effect !== "recover-overflow") return undefined;
-		return await resetBoundaryResult(event.entries, ctx, decision.effect !== "commit-boundary-stop", decision.prompt, decision.lastWord);
+		return await resetBoundaryResult(event.entries, ctx, decision.effect !== "commit-boundary-stop", decision.prompt, decision.lastWord, decision.origin ?? "forced");
 	});
 
 	pi.on("session_before_compact", (event, ctx) => {

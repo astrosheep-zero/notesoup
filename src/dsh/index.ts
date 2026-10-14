@@ -1,7 +1,7 @@
 import type { Context } from "@deepseek-ai/cordis";
 import type {} from "@deepseek-ai/dsh-agent";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
-import { CONTINUATION, COUNTDOWN_LINE, warningPrompt, tokenBudgetGuidance } from "../budget/text.js";
+import { COUNTDOWN_LINE, warningPrompt, tokenBudgetGuidance } from "../budget/text.js";
 import { measureBudget } from "./budget.js";
 import { BOOT_SECTION, restoreWarnings } from "./window.js";
 import { preflight } from "./engine.js";
@@ -55,7 +55,12 @@ export function apply(ctx: Context): void {
 	ctx.on("agent/turn-stopping", async ({ agent, signal }) => {
 		if (signal.aborted) return;
 		const result = await engine.compactIfNeeded(agent, "pressure", signal);
-		if (result) agent.steer(createUserMessage({ content: [{ type: "text", text: CONTINUATION }], source: { kind: "notesoup-continuation" } }));
+		if (result) {
+			// The checkpoint already carries this exact paragraph; the steer is the same artifact's
+			// second representation, never a second draw.
+			const { continuation } = engine.windows.get(agent.session);
+			if (continuation !== undefined) agent.steer(createUserMessage({ content: [{ type: "text", text: continuation }], source: { kind: "notesoup-continuation" } }));
+		}
 	});
 	ctx.on("session/event", (session, event) => {
 		if (event.type === "turn/end" && event.data.reason.kind !== "completed") {

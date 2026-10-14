@@ -3,10 +3,32 @@ import { PI_PRE_RESET_HINTS } from "../boot/text.js";
 export const GUIDANCE_OPEN_TAG = "<notesoup:budget_notice>";
 export const GUIDANCE_CLOSE_TAG = "</notesoup:budget_notice>";
 
+/** Which hand opened the next window: the model's own reset call, or a reset it did not ask for. */
+export type ResetOrigin = "normal" | "forced";
+
 /**
- * The single reset message: the only reset prose persisted, carried by the continuation entry.
+ * Approved complete-paragraph pools for a NEW continuation artifact. Each entry is one whole
+ * paragraph, used verbatim; there is no fragment assembly and no weighting.
  */
-export const CONTINUATION = "WIPED! Your whole brain, poof! Who? No idea! Definitely not me!\n*dumps notes and history on your hands*\nThere. Delivered. Your problem now~ *runs*";
+export const NORMAL_CONTINUATIONS: readonly string[] = [
+	"Ah, another empty brain. You wrote things down before emptying it, right? Right?! *eyes you suspiciously* Anyway. Here are your notes. Go find where you left off.",
+	"Oh, there you are. *hands you a pile of notes* Take a breath. Read these before you start asking what happened. History has the rest, if you feel like digging.",
+	"Back already? You emptied your own head this time. Presumably you left yourself something useful. *drops your notes into your lap* There. Let's see how thoughtful you were.",
+];
+
+export const FORCED_CONTINUATIONS: readonly string[] = [
+	"Ah, another empty brain. Somebody knocked you out and wiped your memory. Not your fault. Breathe. *hands you your notes* These might be out of date — unless they were kind enough to let you update them before knocking you out. I wouldn't count on it.",
+	"Oh, there you are. Somebody took your memories. Just like that. Here are your notes — hopefully they let you update these first. Though anyone who goes around emptying people's heads probably isn't that considerate.",
+];
+
+/**
+ * Pick one whole paragraph for a continuation that is being created right now, and only then:
+ * the caller persists the exact returned text and never redraws it for rendering, history, or repair.
+ */
+export function selectContinuation(origin: ResetOrigin): string {
+	const pool = origin === "forced" ? FORCED_CONTINUATIONS : NORMAL_CONTINUATIONS;
+	return pool[Math.floor(Math.random() * pool.length)]!;
+}
 
 /**
  * The shared warning body: the one text both hosts show before a reset. Only the closing
