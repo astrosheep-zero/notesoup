@@ -8,7 +8,7 @@
  *
  * This is the deliberate embedding surface for a host adapter — a curated list, not a re-export
  * of every internal module. The notes family is also published as `notesoup/notes`; the Pi
- * extension is `notesoup/pi` and the dsh plugins are `notesoup/dsh` and `notesoup/dsh/engine`.
+ * extension is loaded through the Pi manifest; dsh uses `notesoup/dsh` and `notesoup/dsh/engine`.
  */
 
 // Notes: the standalone filesystem library, addressed by an explicit identity.
