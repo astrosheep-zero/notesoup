@@ -96,6 +96,33 @@ function fakeEngine(home: string): { host: HookEngine; registered: HookToolSpec[
   };
 }
 
+test("Claude notes survive removal of the session's worktree cwd", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "claude-deleted-worktree-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const repo = join(root, "repo"), home = join(root, "notes"), worktree = join(repo, ".worktrees", "job");
+  mkdirSync(repo);
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, stdio: "pipe" });
+  git("init");
+  git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "fixture");
+  git("worktree", "add", "--detach", worktree);
+  const { host } = fakeEngine(home);
+  host.session.cwd = async () => worktree;
+  const handlers = new Map<string, HookHandler>();
+  (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
+  await handlers.get("session.start")!(host, { cwd: worktree, isInteractive: true }, async () => ({}));
+  const call = (tool: string, params: Record<string, unknown>) => handlers.get("tool.call")!(host,
+    { tool: `mcp__notesoup__${tool}`, tool_use_id: "probe", ...params }, async () => ({})) as Promise<{ result: string; isError?: boolean }>;
+  for (const address of ["task.md", "@project/task.md"]) {
+    assert.equal((await call("notes_write", { address, content: "pending" })).isError, undefined);
+  }
+  git("worktree", "remove", worktree);
+  for (const address of ["task.md", "@project/task.md"]) {
+    const updated = await call("notes_update", { address, edits: [{ oldText: "pending", newText: "done" }] });
+    assert.equal(updated.isError, undefined, updated.result);
+    assert.match((await call("notes_read", { address })).result, /done/);
+  }
+});
+
 test("Claude helper exposes the five shared note schemas", async () => {
   const schemas = await dispatch({ op: "schemas" }) as Array<{ name: string; description: string; inputSchema: { type: string } }>;
   assert.deepEqual(schemas.map((schema) => schema.name), ["notes_write", "notes_update", "notes_read", "notes_list", "notes_search"]);

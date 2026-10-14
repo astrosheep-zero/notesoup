@@ -39,7 +39,7 @@ const BOOT_TOOLS = {
 /** The boot names the host's own wipe path, so the protocol block speaks about `/fresh-window`. */
 async function buildBoot($: Engine, identity: Identity, window: number, texts?: SharedTexts) {
   const tools = texts?.wipeSentence === undefined ? BOOT_TOOLS : { ...BOOT_TOOLS, wipeSentence: texts.wipeSentence }
-  return run($, { op: "boot", identity, window, tools }, identity.cwd)
+  return run($, { op: "boot", identity, window, tools })
 }
 /** The notes-only reset shape, shared by our own reset and Claude's native auto compaction. */
 type ResetMessages = { boot: string; messages: Array<{ role: "user"; text: string; toolUses: [] }> }
@@ -156,7 +156,7 @@ async function limitsOf($: Engine, state: ResetState, usage: ContextUsage): Prom
   const generation = state.generation
   const facts = await limitFacts($, state, usage)
   if (generation !== state.generation) return undefined
-  const response = await run($, { op: "limits", facts }, state.identity?.cwd ?? ".")
+  const response = await run($, { op: "limits", facts })
   if (generation !== state.generation) return undefined
   const limits = response.ok ? limitsShape(response.result) : undefined
   state.limitsWindow = window
@@ -183,7 +183,7 @@ async function loadTexts($: Engine, state: ResetState): Promise<SharedTexts | un
   if (state.texts) return state.texts
   if (!state.identity) return undefined
   const generation = state.generation
-  const response = await run($, { op: "texts" }, state.identity.cwd)
+  const response = await run($, { op: "texts" })
   if (generation !== state.generation) return undefined
   const texts = response.ok ? sharedTextsOf(response.result) : undefined
   if (texts) state.texts = texts
@@ -217,8 +217,10 @@ function decode(result: ProcessRunResult): { ok: true; result: unknown } | { ok:
     return { ok: false, error: typeof value.error === "string" ? value.error : "helper returned an invalid error" }
   } catch { return { ok: false, error: "helper returned invalid JSON" } }
 }
-async function run($: { process: { run: (argv: readonly string[], init?: { cwd?: string; stdin?: string; timeoutMs?: number }) => Promise<ProcessRunResult> } }, request: unknown, cwd: string) {
-  try { return decode(await $.process.run(["node", HELPER], { cwd, stdin: `${JSON.stringify(request)}\n`, timeoutMs: TIMEOUT_MS })) }
+async function run($: { process: { run: (argv: readonly string[], init?: { cwd?: string; stdin?: string; timeoutMs?: number }) => Promise<ProcessRunResult> } }, request: unknown) {
+  // A session may still name a removed worktree. Project identity travels in stdin;
+  // launch from the plugin directory so removing that worktree cannot prevent spawn.
+  try { return decode(await $.process.run(["node", HELPER], { cwd: import.meta.dir, stdin: `${JSON.stringify(request)}\n`, timeoutMs: TIMEOUT_MS })) }
   // The host's rejection is the only diagnosis there is: it carries the spawn failure's own
   // reason (`timed out after …`), which a bare phrase would throw away.
   catch (error) { return { ok: false as const, error: `helper execution failed: ${describeFailure(error)}` } }
@@ -283,7 +285,7 @@ export function register(on: On) {
     armManual($, state, manualSignal)
     await $.command.register({ name: "empty-brain", description: "Reset context to a fresh notes-only window", immediate: true })
     await $.command.register({ name: "fresh-window", description: "Reset context to a fresh notes-only window", immediate: true })
-    const schemas = await run($, { op: "schemas" }, e.cwd)
+    const schemas = await run($, { op: "schemas" })
     if (!schemas.ok || !Array.isArray(schemas.result)) return next(e)
     for (const row of schemas.result as SchemaRow[]) {
       if (!TOOL_NAMES.includes(row.name as typeof TOOL_NAMES[number])) continue
@@ -301,7 +303,7 @@ export function register(on: On) {
     const identity = await refreshIdentity($, state)
     if (!identity) return errorResult("session changed during identity lookup")
     const { tool, tool_use_id: _toolUseId, agentId: _agentId, ...params } = e
-    const result = await run($, { op: "tool", tool: tool.slice(PREFIX.length), params, identity }, identity.cwd)
+    const result = await run($, { op: "tool", tool: tool.slice(PREFIX.length), params, identity })
     if (!result.ok) return errorResult(result.error)
     // The outcome already decided success or refusal; Claude requires isError: true on errors and no discriminator on success.
     const outcome = toolResultOf(result.result)
