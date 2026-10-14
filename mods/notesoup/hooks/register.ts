@@ -41,6 +41,22 @@ async function buildBoot($: Engine, identity: Identity, window: number, texts?: 
   const tools = texts?.wipeSentence === undefined ? BOOT_TOOLS : { ...BOOT_TOOLS, wipeSentence: texts.wipeSentence }
   return run($, { op: "boot", identity, window, tools }, identity.cwd)
 }
+/** The notes-only reset shape, shared by our own reset and Claude's native auto compaction. */
+type ResetMessages = { boot: string; messages: Array<{ role: "user"; text: string; toolUses: [] }> }
+async function resetMessages($: Engine, state: ResetState, identity: Identity): Promise<ResetMessages | { skip: string }> {
+  const generation = state.generation
+  const texts = await loadTexts($, state)
+  if (texts?.continuation === undefined) return { skip: "reset text didn't load" }
+  const boot = await buildBoot($, identity, state.window + 1, texts)
+  if (generation !== state.generation) return { skip: "session changed while building the notes boot" }
+  if (!boot.ok) return { skip: `notes didn't load: ${boot.error}` }
+  // The same closed reset shape as Pi: notes boot first, then the one reset message.
+  const text = String(boot.result)
+  return { boot: text, messages: [
+    { role: "user", text, toolUses: [] },
+    { role: "user", text: texts.continuation, toolUses: [] },
+  ] }
+}
 function numberOf(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined
 }
@@ -325,9 +341,9 @@ export function register(on: On) {
   on("session.compact", async ($, e, next) => {
     if (e.agentId !== undefined) return next(e)
     const identity = await refreshIdentity($, state)
-    // Do not take over native /compact or another plugin's compaction.
-    if (!state.resetting || e.trigger !== "plugin" || !identity) {
-      const generation = state.generation
+    const generation = state.generation
+    // Every pass-through keeps the current boot unless the engine's own summary replaced it.
+    const passThrough = async () => {
       const result = await next(e)
       // Precompute installs nothing; a veto or subagent compact cannot remove our boot.
       if (generation === state.generation && e.trigger !== "precompute" && result.skip === undefined) {
@@ -336,18 +352,30 @@ export function register(on: On) {
       }
       return result
     }
-    const generation = state.generation
-    const texts = await loadTexts($, state)
-    if (texts?.continuation === undefined) return { skip: "reset text didn't load" }
-    const boot = await buildBoot($, identity, state.window + 1, texts)
-    if (generation !== state.generation) return { skip: "session changed while building the notes boot" }
-    if (!boot.ok) return { skip: `notes didn't load: ${boot.error}` }
-    state.preparedBoot = String(boot.result)
-    // The same closed reset shape as Pi: notes boot first, then the one reset message.
-    return { messages: [
-      { role: "user", text: state.preparedBoot, toolUses: [] },
-      { role: "user", text: texts.continuation, toolUses: [] },
-    ] }
+    // Native compaction never runs the summarizer while notesoup is on: manual and
+    // precompute are vetoed, an automatic compaction becomes the notes-only reset.
+    if (e.trigger === "manual") return { skip: "No compacting brains here · use /fresh-window" }
+    if (e.trigger === "precompute") return { skip: "No precomputing brains here" }
+    const own = state.resetting && e.trigger === "plugin" && identity !== undefined
+    if (!own && e.trigger !== "auto") return passThrough()
+    if (identity === undefined) return passThrough()
+    const built = await resetMessages($, state, identity)
+    if ("skip" in built) {
+      if (own) return { skip: built.skip }
+      // An over-long prompt must still compact: fall back to the engine's summary.
+      log($, `Notes didn't load (${built.skip}) · Claude compacted natively`)
+      return passThrough()
+    }
+    if (own) {
+      state.preparedBoot = built.boot
+    } else {
+      // The auto hijack keeps the books a successful plugin reset does.
+      state.retainedBoot = built.boot
+      state.preparedBoot = undefined
+      state.window++
+      log($, "Brain emptied")
+    }
+    return { messages: built.messages }
   })
   on("prompt.context", async ($, e, next) => {
     const result = await next(e)

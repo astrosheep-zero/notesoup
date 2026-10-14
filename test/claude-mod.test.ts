@@ -774,8 +774,8 @@ async function retainedFixture(t: test.TestContext) {
   host.session.messages = async () => [{ role: "user", text: `# notesoup:boot\n${boot}` }];
   const handlers = new Map<string, HookHandler>();
   (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
-  const invoke = (name: string, e: Record<string, unknown> = {}, result: unknown = {}) =>
-    handlers.get(name)!(host, e, async () => result);
+  const invoke = (name: string, e: Record<string, unknown> = {}, result: unknown = {}, next?: (e: unknown) => Promise<unknown>) =>
+    handlers.get(name)!(host, e, next ?? (async () => result));
   const context = async () => await invoke("prompt.context", {}, { blocks: [] }) as { blocks: Array<{ name: string; text: string }> };
   await invoke("session.start", { cwd: home, isInteractive: true });
   assert.deepEqual((await context()).blocks, [], "the existing boot is retained, not injected twice");
@@ -822,26 +822,66 @@ test("Claude lazy identity detects a switched session without session.start or s
   assert.match(fresh.blocks[0]!.text, /Current context window id: claude:lazy-session:0/);
 });
 
-test("Claude native compaction invalidates only a removed main-conversation retained boot", async (t) => {
-  for (const mode of ["manual", "auto", "foreign plugin", "veto", "precompute", "subagent", "kept boot"]) {
-    await t.test(mode, async (t) => {
-      const { host, invoke, context } = await retainedFixture(t);
-      const before = { role: "user", text: "OLD" };
-      const trigger = mode === "foreign plugin" ? "plugin" : mode === "precompute" ? "precompute" : mode === "auto" ? "auto" : "manual";
-      const event = { trigger, messages: [before], ...(mode === "subagent" ? { agentId: "child" } : {}) };
-      const upstream = mode === "veto" ? { skip: "user veto" } : {
-        messages: mode === "kept boot" ? await host.session.messages() : [{ role: "user", text: "SUMMARY" }], sentinel: mode,
-      };
-      assert.equal(await invoke("session.compact", event, upstream), upstream, "native compaction is passed through unchanged");
-      const after = await context();
-      if (["manual", "auto", "foreign plugin"].includes(mode)) {
-        assert.deepEqual(after.blocks.map((block) => block.name), ["notesoup:boot"]);
-        assert.match(after.blocks[0]!.text, /Current context window id: claude:hook-session:2/);
-      } else {
-        assert.deepEqual(after.blocks, [], "veto, precompute and subagent leave the main boot alone");
-      }
-    });
-  }
+test("Claude native compaction becomes a notes-only reset, a veto, or a pass-through", async (t) => {
+  await t.test("manual and precompute are vetoed before upstream", async (t) => {
+    for (const [trigger, pattern] of [["manual", /No compacting brains here/], ["precompute", /No precomputing brains here/]] as const) {
+      const { invoke, context } = await retainedFixture(t);
+      let upstreamCalls = 0;
+      const result = await invoke("session.compact", { trigger, messages: [{ role: "user", text: "OLD" }] }, {},
+        async () => { upstreamCalls++; return { messages: [{ role: "user", text: "SUMMARY" }] }; }) as { skip?: string; messages?: unknown };
+      assert.equal(upstreamCalls, 0, `${trigger} never runs the summarizer`);
+      assert.match(result.skip!, pattern);
+      assert.equal(result.messages, undefined);
+      assert.deepEqual((await context()).blocks, [], "the retained boot is untouched");
+    }
+  });
+  await t.test("auto becomes the next window's notes boot", async (t) => {
+    const { invoke } = await retainedFixture(t);
+    let upstreamCalls = 0;
+    const result = await invoke("session.compact", { trigger: "auto", messages: [{ role: "user", text: "OLD" }] }, {},
+      async () => { upstreamCalls++; return { messages: [{ role: "user", text: "SUMMARY" }] }; }) as { messages: Array<{ role: string; text: string }> };
+    assert.equal(upstreamCalls, 0, "an automatic compaction never runs the summarizer");
+    assert.equal(result.messages.length, 2);
+    assert.match(result.messages[0]!.text, /Current context window id: claude:hook-session:3/);
+    assert.doesNotMatch(result.messages[0]!.text, /OLD/);
+    assert.equal(result.messages[1]!.text, CONTINUATION);
+    const upstream = { blocks: [{ name: "claude:user-context", text: "upstream" }] };
+    const context = await invoke("prompt.context", {}, upstream) as { blocks: typeof upstream.blocks };
+    assert.deepEqual(context.blocks, upstream.blocks, "the hijacked boot is retained, not injected again");
+  });
+  await t.test("a failed auto build falls back to native compaction", async (t) => {
+    const { host, invoke } = await retainedFixture(t);
+    const run = host.process.run;
+    host.process.run = async (argv, init) => JSON.parse(init!.stdin!).op === "boot" ? { exitCode: 1, stdout: "" } : run(argv, init);
+    const upstream = { messages: [{ role: "user", text: "SUMMARY" }], sentinel: "native" };
+    let upstreamCalls = 0;
+    const result = await invoke("session.compact", { trigger: "auto", messages: [{ role: "user", text: "OLD" }] }, upstream,
+      async () => { upstreamCalls++; return upstream; });
+    assert.equal(upstreamCalls, 1, "an over-long prompt still compacts natively");
+    assert.equal(result, upstream);
+  });
+  await t.test("foreign plugin, veto, subagent and kept boot still pass through", async (t) => {
+    for (const mode of ["foreign plugin", "veto", "subagent", "kept boot"]) {
+      await t.test(mode, async (t) => {
+        const { host, invoke, context } = await retainedFixture(t);
+        const event = { trigger: mode === "subagent" ? "manual" : "plugin", messages: [{ role: "user", text: "OLD" }], ...(mode === "subagent" ? { agentId: "child" } : {}) };
+        const upstream = mode === "veto" ? { skip: "user veto" } : {
+          messages: mode === "kept boot" ? await host.session.messages() : [{ role: "user", text: "SUMMARY" }], sentinel: mode,
+        };
+        let upstreamCalls = 0;
+        const result = await invoke("session.compact", event, upstream, async () => { upstreamCalls++; return upstream; });
+        assert.equal(upstreamCalls, 1, "the engine's compaction is passed through");
+        assert.equal(result, upstream);
+        const after = await context();
+        if (mode === "foreign plugin") {
+          assert.deepEqual(after.blocks.map((block) => block.name), ["notesoup:boot"]);
+          assert.match(after.blocks[0]!.text, /Current context window id: claude:hook-session:2/);
+        } else {
+          assert.deepEqual(after.blocks, [], "veto, subagent and kept boot leave the main boot alone");
+        }
+      });
+    }
+  });
 });
 
 test("Claude serves every registered notes tool to subagents without leaking event fields into params", async (t) => {
