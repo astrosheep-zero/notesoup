@@ -76,7 +76,6 @@ export function assertAddress(value: unknown): NoteAddress {
 		if (path === "" && scope !== "agent" && scope !== "model") throw new NoteError("invalid_address", `${shown(value)} isn't a note address. ${ADDRESS_FORMS}`);
 		if (path === "" && who === undefined) throw new NoteError("invalid_address", `${shown(value)} isn't a note address. ${ADDRESS_FORMS}`);
 	}
-	if (path.includes("@")) throw new NoteError("invalid_address", `${shown(value)} isn't a note address. ${ADDRESS_FORMS}`);
 	assertVirtualPath(path);
 	return { scope, path, who };
 }

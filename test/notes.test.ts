@@ -14,7 +14,7 @@ import test from "node:test";
 import type { TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { parseNote } from "../src/notes/frontmatter.js";
-import { projectKey } from "../src/notes/index.js";
+import { createNotesStore, projectKey } from "../src/notes/index.js";
 import { globToRegExp } from "../src/notes/address.js";
 import type { Scope } from "../src/notes/index.js";
 import { listNotes, physicalPath, scopeDir } from "./helpers/notes.js";
@@ -526,7 +526,7 @@ test("a read keeps its body window verbatim under the new presentation", async (
 	assert.equal(wholeText.includes("more characters"), false);
 });
 
-test("@ addresses select one home, reject illegal sigils, and never fall back", async () => {
+test("@ addresses select one home, keep boundaries, and never fall back", async () => {
 	const root = freshRoot();
 	const session = manager();
 	const captured = makeExtension(session);
@@ -539,8 +539,43 @@ test("@ addresses select one home, reject illegal sigils, and never fall back", 
 	assert.match(resultRead(await call(captured, "notes_read", { address: "same.md" }, ctx)).content, /session$/);
 	assert.equal(resultError(await call(captured, "notes_read", { address: "@project/missing.md" }, ctx)).code, "not_found");
 	assert.match(resultError(await call(captured, "notes_read", { address: "@glboal/same.md" }, ctx)).message, /isn't a note address.*@project\/.*@human\//);
-	assert.equal(resultError(await call(captured, "notes_write", { address: "bad@name.md", content: "no" }, ctx)).code, "invalid_address");
-	assert.equal(existsSync(join(root, "human", "bad@name.md")), false, "a bad sigil creates nothing anywhere");
+	assert.equal(resultError(await call(captured, "notes_write", { address: "@glboal/same.md", content: "no" }, ctx)).code, "invalid_address", "an unknown leading head is still not a note address");
+	assert.equal(resultError(await call(captured, "notes_write", { address: "@project/../escape.md", content: "no" }, ctx)).code, "invalid_address", "traversal never hides behind a known head");
+	assert.equal(existsSync(join(root, "human", "escape.md")), false, "a refused address creates nothing anywhere");
+});
+
+test("interior @ in a note path round-trips through write, list, search, read, update and rename", async () => {
+	const root = freshRoot();
+	const session = manager();
+	const captured = makeExtension(session);
+	const ctx = context(session);
+	assertReceiptIdentity(resultData<NotesWriteData>(await call(captured, "notes_write", { address: "release@v1.md", content: "release needle" }, ctx)), "release@v1.md", "session", ctx);
+	assertReceiptIdentity(resultData<NotesWriteData>(await call(captured, "notes_write", { address: "@project/mail/alice@example.com.md", content: "mail needle" }, ctx)), "@project/mail/alice@example.com.md", "project", ctx);
+	assert.ok(existsSync(join(root, "pi", "session", session.getSessionId(), "release@v1.md")), "the session file keeps its interior @");
+	assert.ok(existsSync(physicalPath("project", "mail/alice@example.com.md", ctx)), "the project file keeps its interior @ inside a folder");
+
+	const listed = resultData<NotesListData>(await call(captured, "notes_list", {}, ctx));
+	assert.deepEqual(listed.files.map((row) => row.address).sort(), ["@project/mail/alice@example.com.md", "release@v1.md"], "both addresses list in canonical form");
+	const globbed = resultData<NotesListData>(await call(captured, "notes_list", { glob: "@project/**" }, ctx));
+	assert.deepEqual(globbed.files.map((row) => row.address), ["@project/mail/alice@example.com.md"], "a home glob still narrows to that home");
+	const searched = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle" }, ctx));
+	assert.deepEqual(searched.files.map((row) => row.address).sort(), ["@project/mail/alice@example.com.md", "release@v1.md"], "searched addresses carry the interior @ back out");
+	assert.match(resultRead(await call(captured, "notes_read", { address: "@project/mail/alice@example.com.md" }, ctx)).content, /mail needle$/);
+
+	await call(captured, "notes_update", { address: "release@v1.md", edits: [{ oldText: "release", newText: "shipped" }] }, ctx);
+	assert.match(resultRead(await call(captured, "notes_read", { address: "release@v1.md" }, ctx)).content, /shipped needle$/);
+
+	const store = createNotesStore(notesIdentityFromPi(ctx));
+	await store.rename("release@v1.md", "shipped@v2.md");
+	assert.match((await store.read("shipped@v2.md"))!.body, /shipped needle$/);
+	assert.equal(await store.read("release@v1.md"), undefined, "the rename leaves no old name behind");
+
+	// A file dropped on disk (before any address change) still lists and reads under its full address.
+	mkdirSync(join(root, "human"), { recursive: true });
+	writeFileSync(join(root, "human", "pre@existing.md"), "---\norigin: user\n---\n\nlegacy needle\n");
+	const legacy = resultData<NotesListData>(await call(captured, "notes_list", { glob: "@human/**" }, ctx));
+	assert.deepEqual(legacy.files.map((row) => row.address), ["@human/pre@existing.md"]);
+	assert.match(resultRead(await call(captured, "notes_read", { address: "@human/pre@existing.md" }, ctx)).content, /legacy needle/);
 });
 
 test("Pi adapter defaults to anonymous agent identity", async () => {
