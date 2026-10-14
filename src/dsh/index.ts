@@ -1,7 +1,7 @@
 import type { Context } from "@deepseek-ai/cordis";
 import type {} from "@deepseek-ai/dsh-agent";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
-import { CONTINUATION, warningPrompt, tokenBudgetGuidance } from "../budget/text.js";
+import { CONTINUATION, COUNTDOWN_LINE, warningPrompt, tokenBudgetGuidance } from "../budget/text.js";
 import { measureBudget } from "./budget.js";
 import { BOOT_SECTION, restoreWarnings } from "./window.js";
 import { preflight } from "./engine.js";
@@ -43,7 +43,7 @@ export function apply(ctx: Context): void {
 				const state = engine.windows.get(agent.session);
 				const phase = budget.remaining <= budget.warning ? "warning" : budget.remaining <= budget.reminder ? "reminder" : undefined;
 				if (phase && !(phase === "warning" ? state.warned : state.reminded || state.warned)) {
-					const text = phase === "warning" ? warningPrompt() : tokenBudgetGuidance(budget.countdown, "empty_brain");
+					const text = phase === "warning" ? `${warningPrompt()}\n${COUNTDOWN_LINE}` : tokenBudgetGuidance(budget.countdown, "empty_brain");
 					agent.steer(createUserMessage({ content: [{ type: "text", text }], source: { kind: "notesoup-budget", windowId: state.snapshot.windowId, phase } }));
 					if (phase === "warning") state.warned = true;
 					else state.reminded = true;

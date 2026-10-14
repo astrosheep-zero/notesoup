@@ -1,4 +1,4 @@
-import { DEFAULT_BOOT_TOOL_NAMES } from "../boot/text.js";
+import { DEFAULT_BOOT_TOOL_NAMES, PI_PRE_RESET_HINTS } from "../boot/text.js";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { agentSlug, modelSlug, notesIdentityFromPi } from "./notes/adapter.js";
 import { loadNotesSnapshot, unavailableNotesSnapshot, type NotesSnapshot } from "../boot/snapshot.js";
@@ -64,7 +64,7 @@ export async function buildBootMessage(
 	if (isCurrent()) notifyIncompleteNotes?.(ctx, windowId, notes);
 	return {
 		customType: BOOT_TYPE,
-		content: renderBootBlock({ agentName, modelName, tree, notes, tools: DEFAULT_BOOT_TOOL_NAMES }),
+		content: renderBootBlock({ agentName, modelName, tree, notes, tools: { ...DEFAULT_BOOT_TOOL_NAMES, preResetHints: PI_PRE_RESET_HINTS } }),
 		display: false,
 		details: { windowId },
 	};

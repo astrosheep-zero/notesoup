@@ -8,7 +8,7 @@ import test from "node:test";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { loadNotesSnapshot } from "../src/boot/snapshot.js";
 import { renderBootBlock } from "../src/boot/render.js";
-import { MAP_BOOT_MAX_CHARS, MAPS_BLOCK, NOTES_PROTOCOL_CLOSE_TAG, NOTES_PROTOCOL_OPEN_TAG } from "../src/boot/text.js";
+import { MAP_BOOT_MAX_CHARS, MAPS_BLOCK, NOTES_PROTOCOL_CLOSE_TAG, NOTES_PROTOCOL_OPEN_TAG, PI_PRE_RESET_HINTS } from "../src/boot/text.js";
 import { localIso } from "../src/notes/frontmatter.js";
 import type { NoteRow, Scope } from "../src/notes/index.js";
 import { listNotes, physicalPath, scopeDir } from "./helpers/notes.js";
@@ -347,6 +347,7 @@ test("the boot block gives awake agents the notes-home file layout", async () =>
 	const rendered = await explicitBoot(context(session), "pcw:test:root", undefined);
 	assert.equal(rendered.includes(process.env.PI_NOTES_HOME ?? ""), false, "the absolute notes home is never exposed");
 	assert.match(rendered, /`<path>`, no @[\s\S]*`@project\/<path>`[\s\S]*`@human\/<path>`/);
+	assert.ok(rendered.includes(`\n${PI_PRE_RESET_HINTS}\n${NOTES_PROTOCOL_CLOSE_TAG}`), "Pi's boot closes the protocol with the pre-reset hints");
 });
 
 test("the boot binds its tools and bounds an over-cap MAP with a lookup pointer", async () => {

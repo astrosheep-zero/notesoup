@@ -185,6 +185,7 @@ test("Claude helper boot uses actual Claude note tool bindings and a fresh snaps
   assert.match(boot, /mcp__notesoup__notes_\*/);
   assert.match(boot, /claude:session/);
   assert.doesNotMatch(boot, /brain empty|continuation/);
+  assert.equal(boot.includes("chat view"), false, "a Claude boot never claims a reset clears the human's view");
 });
 
 test("Claude helper serves the shared reset prose and the host's wipe sentence", async () => {
@@ -344,6 +345,7 @@ test("Claude Mod appends boot once and reuses persisted blocks after re-registra
   assert.match(boot.text, /mcp__notesoup__notes_\*/, "the boot text names the actual Claude note tool binding");
   assert.ok(boot.text.includes(CLAUDE_WIPE_SENTENCE), "the boot speaks the Claude wipe path");
   assert.equal(boot.text.includes("erase yourself with dignity"), false);
+  assert.equal(boot.text.includes("chat view"), false, "the Claude boot block carries no Pi-only pre-reset hints");
   assert.equal(first.sentinel, "kept", "unrelated result fields survive");
   assert.equal(bootRequests, 1, "the first prompt makes exactly one boot helper request");
   assert.equal(nextCalls, 1, "the upstream chain runs exactly once per prompt");

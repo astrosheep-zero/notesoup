@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { renderBootBlock } from "../src/boot/render.js";
 import { loadNotesSnapshot } from "../src/boot/snapshot.js";
-import { DEFAULT_BOOT_TOOL_NAMES, MAPS_BLOCK, NOTES_PROTOCOL_CLOSE_TAG, NOTES_PROTOCOL_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG } from "../src/boot/text.js";
-import { CLAUDE_WARNING_PROMPT, COUNTDOWN_LINE, GUIDANCE_CLOSE_TAG, GUIDANCE_OPEN_TAG, LAST_WORD_HINT, WARNING_BODY, tokenBudgetGuidance, warningContent } from "../src/budget/text.js";
+import { CLAUDE_WIPE_SENTENCE, DEFAULT_BOOT_TOOL_NAMES, MAPS_BLOCK, NOTES_PROTOCOL_CLOSE_TAG, NOTES_PROTOCOL_OPEN_TAG, PI_PRE_RESET_HINTS, WINDOW_IDENTITY_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG, renderProtocolBlock } from "../src/boot/text.js";
+import { CLAUDE_WARNING_PROMPT, CONTINUATION, COUNTDOWN_LINE, GUIDANCE_CLOSE_TAG, GUIDANCE_OPEN_TAG, LAST_WORD_HINT, WARNING_BODY, tokenBudgetGuidance, warningContent } from "../src/budget/text.js";
 import type { NoteRow, Scope } from "../src/notes/index.js";
 
 /**
@@ -111,6 +111,29 @@ test("the countdown closes the second-tier notice only, in both hosts", () => {
 	for (const text of [pi, prompted, CLAUDE_WARNING_PROMPT, tokenBudgetGuidance(100, "empty_brain")]) {
 		assert.equal(/context_window/.test(text), false, "no pre-rename tag survives in model-facing text");
 	}
+});
+
+test("only Pi's protocol claims the reset clears the human's chat view", () => {
+	const pi = renderProtocolBlock({ ...DEFAULT_BOOT_TOOL_NAMES, preResetHints: PI_PRE_RESET_HINTS });
+	assert.ok(pi.includes(`\n${PI_PRE_RESET_HINTS}\n${NOTES_PROTOCOL_CLOSE_TAG}`), "both hints end the protocol, before the closing tag");
+	assert.equal(pi.split(PI_PRE_RESET_HINTS).length - 1, 1, "the hints appear once");
+	assert.ok(pi.includes("decide for yourself when to call empty_brain."));
+	const renamed = renderProtocolBlock({ ...DEFAULT_BOOT_TOOL_NAMES, wipe: "forget_this", preResetHints: PI_PRE_RESET_HINTS });
+	assert.ok(renamed.includes("decide for yourself when to call forget_this."), "the hint follows the host's wipe binding");
+	assert.equal(renamed.includes("empty_brain"), false);
+	for (const text of [renderProtocolBlock(DEFAULT_BOOT_TOOL_NAMES), renderProtocolBlock({ ...DEFAULT_BOOT_TOOL_NAMES, wipeSentence: CLAUDE_WIPE_SENTENCE })]) {
+		assert.equal(text.includes(PI_PRE_RESET_HINTS), false, "a host whose reset leaves the view intact stays silent");
+		assert.equal(text.includes("chat view"), false);
+	}
+});
+
+test("Pi's second-tier notice repeats the hints, then the last-word hint, then the countdown", () => {
+	const content = warningContent();
+	assert.ok(content.includes(`${PI_PRE_RESET_HINTS}\n${LAST_WORD_HINT}\n${COUNTDOWN_LINE}`), "the hints precede the Pi-only last-word hint and the countdown");
+	assert.equal(content.split(PI_PRE_RESET_HINTS).length - 1, 1, "the hints appear once");
+	assert.equal(CLAUDE_WARNING_PROMPT.includes(PI_PRE_RESET_HINTS), false, "Claude's notice makes no chat-view claim");
+	assert.equal(tokenBudgetGuidance(100, "empty_brain").includes(PI_PRE_RESET_HINTS), false, "the first tier stays lean");
+	assert.equal(CONTINUATION.includes(PI_PRE_RESET_HINTS), false, "the post-reset continuation carries neither hint");
 });
 
 test("a rendered boot carries the new tags, its own MAP section, and no pre-rename spelling", async () => {

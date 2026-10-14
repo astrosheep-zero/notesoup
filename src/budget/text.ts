@@ -1,3 +1,5 @@
+import { PI_PRE_RESET_HINTS } from "../boot/text.js";
+
 export const GUIDANCE_OPEN_TAG = "<notesoup:budget_notice>";
 export const GUIDANCE_CLOSE_TAG = "</notesoup:budget_notice>";
 
@@ -45,7 +47,7 @@ export const LAST_WORD_HINT = "If you want, pass `empty_brain` a `last_word`: a 
 
 /** The hidden checkpoint text for pi's manual/budget-triggered requests (dsh reads warningPrompt() directly). */
 export function warningContent(commandLine?: string): string {
-	return `${GUIDANCE_OPEN_TAG}\n${warningPrompt(commandLine)}\n${LAST_WORD_HINT}\n${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}`;
+	return `${GUIDANCE_OPEN_TAG}\n${warningPrompt(commandLine)}\n${PI_PRE_RESET_HINTS}\n${LAST_WORD_HINT}\n${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}`;
 }
 
 /** Claude's variant: the mod resets after the turn, so the model only has to stop. */

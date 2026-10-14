@@ -1,5 +1,5 @@
 import { notesIdentityFromPi } from "../../src/pi/notes/adapter.js";
-import { DEFAULT_BOOT_TOOL_NAMES, WINDOW_IDENTITY_CLOSE_TAG } from "../../src/boot/text.js";
+import { DEFAULT_BOOT_TOOL_NAMES, PI_PRE_RESET_HINTS, WINDOW_IDENTITY_CLOSE_TAG } from "../../src/boot/text.js";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -215,7 +215,7 @@ export function assertBootHistory(body: string, projection: HistoryProjection): 
 
 export async function explicitBoot(ctx: ExtensionContext, currentWindowId: string, previousWindowId: string | undefined): Promise<string> {
 	return renderBootBlock({
-		tools: DEFAULT_BOOT_TOOL_NAMES,
+		tools: { ...DEFAULT_BOOT_TOOL_NAMES, preResetHints: PI_PRE_RESET_HINTS },
 		agentName: agentSlug(),
 		modelName: modelSlug(ctx),
 		tree: {

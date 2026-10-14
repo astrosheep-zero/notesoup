@@ -89,6 +89,15 @@ remembering, new Cheatsheet line. And when a line stops being true, kill it — 
 reads that page as fact.
 </notesoup:maps>`;
 
+/**
+ * Pi-only closing hints. Pi's TUI drops the human's visible transcript when a window resets, and
+ * the model, not the human, owns when that reset happens. A host whose reset leaves the human's
+ * view intact must not carry these — the claim would be false there. The bare `empty_brain` token
+ * is interpolated by renderProtocolBlock; the prose itself stays plain English.
+ */
+export const PI_PRE_RESET_HINTS = `Resetting clears the human's chat view too. Don't put a long explanation right before a reset and assume they'll still be able to read it. Save the handoff in notes; give the explanation after the reset.
+Unless the human explicitly directs otherwise, decide for yourself when to call empty_brain. Don't keep asking them whether to reset.`;
+
 /** Logical tool names are supplied by the composing host, not discovered here. */
 export type BootToolNames = Readonly<{
 	notes: string;
@@ -103,6 +112,11 @@ export type BootToolNames = Readonly<{
 	wipeSentence?: string;
 	/** A host without an authoritative history source replaces the entire history advice. */
 	historySentence?: string;
+	/**
+	 * Extra protocol prose appended before the closing tag. Pi passes PI_PRE_RESET_HINTS; hosts
+	 * whose reset leaves the human's view intact leave it absent.
+	 */
+	preResetHints?: string;
 }>;
 
 export const DEFAULT_BOOT_TOOL_NAMES = {
@@ -121,11 +135,16 @@ export function renderProtocolBlock(tools: BootToolNames): string {
 		get_context_remaining: tools.remaining,
 		empty_brain: tools.wipe,
 	};
+	// Host-specific prose is injected before the closing tag, so it rides the same substitution
+	// pass and any tool names in it follow the host's bindings.
+	const hinted = typeof tools.preResetHints === "string" && tools.preResetHints.length > 0
+		? PROTOCOL_BLOCK.replace(`\n${NOTES_PROTOCOL_CLOSE_TAG}`, () => `\n${tools.preResetHints!}\n${NOTES_PROTOCOL_CLOSE_TAG}`)
+		: PROTOCOL_BLOCK;
 	// The sentence is replaced before name substitution, so a replacement may speak the host's
 	// own words (a command line, a tool name) instead of any `notes_*`-style token.
 	const block = typeof tools.wipeSentence === "string" && tools.wipeSentence.length > 0
-		? PROTOCOL_BLOCK.replace(PROTOCOL_WIPE_SENTENCE, () => tools.wipeSentence!)
-		: PROTOCOL_BLOCK;
+		? hinted.replace(PROTOCOL_WIPE_SENTENCE, () => tools.wipeSentence!)
+		: hinted;
 	const history = typeof tools.historySentence === "string" && tools.historySentence.length > 0
 		? block.replace(PROTOCOL_HISTORY_SENTENCE, () => tools.historySentence!) : block;
 	return history.replace(/notes_\*|notes_list|history_\*|get_context_remaining|(?<!\/)empty_brain/g, (name) => names[name]!);
