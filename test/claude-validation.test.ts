@@ -6,11 +6,13 @@ import { join } from "node:path";
 import test from "node:test";
 
 const plugin = join(process.cwd(), "plugins/claude");
+const CLAUDE_VALIDATE_TIMEOUT_MS = 60_000;
 
 /** Only an absent executable may skip the real loader gate; other failures fail the suite. */
 function validate(t: test.TestContext, dir: string) {
   const result = spawnSync("claude", ["plugin", "validate", dir, "--strict", "--json"], {
     encoding: "utf8",
+    timeout: CLAUDE_VALIDATE_TIMEOUT_MS,
   });
   if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
     t.skip("Claude mod validation skipped: claude is not installed (not found on PATH)");
