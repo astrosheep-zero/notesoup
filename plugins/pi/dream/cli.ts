@@ -64,7 +64,7 @@ export async function main(argv = process.argv.slice(2), deps: DreamDependencies
 		: a["min-sessions"] !== undefined && minSessions === undefined ? "--min-sessions needs a positive whole number"
 		: undefined;
 	if (badArg) { console.error(`dream: ${badArg}`); return 1; }
-	const home = resolve(homeArg ?? notesRoot()); process.env.PI_NOTES_HOME = home; mkdirSync(home, { recursive: true });
+	const home = resolve(homeArg ?? notesRoot()); process.env.NOTESOUP_HOME = home; mkdirSync(home, { recursive: true });
 	const lockPath = join(home, ".dream.lock"); const stampPath = lastRunPath(lockPath);
 	const time = timeGate(stampPath, minHours ?? 24); console.log(time.reason); if (!a.force && !time.ok) return 0;
 	const since = existsSync(stampPath) ? statSync(stampPath).mtimeMs : 0;

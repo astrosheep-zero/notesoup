@@ -78,10 +78,10 @@ async function openFixture(options: {
 	const agentDir = options.agentDir ?? dir;
 	const managesEnvironment = options.manageEnvironment ?? true;
 	const previousDir = managesEnvironment ? process.env.PI_CODING_AGENT_DIR : undefined;
-	const previousNotesRoot = managesEnvironment ? process.env.PI_NOTES_HOME : undefined;
+	const previousNotesRoot = managesEnvironment ? process.env.NOTESOUP_HOME : undefined;
 	if (managesEnvironment) {
 		process.env.PI_CODING_AGENT_DIR = agentDir;
-		process.env.PI_NOTES_HOME = notesRoot;
+		process.env.NOTESOUP_HOME = notesRoot;
 	}
 	if (options.notesRootFile) {
 		rmSync(notesRoot, { recursive: true, force: true });
@@ -212,8 +212,8 @@ async function openFixture(options: {
 			if (managesEnvironment) {
 				if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 				else process.env.PI_CODING_AGENT_DIR = previousDir;
-				if (previousNotesRoot === undefined) delete process.env.PI_NOTES_HOME;
-				else process.env.PI_NOTES_HOME = previousNotesRoot;
+				if (previousNotesRoot === undefined) delete process.env.NOTESOUP_HOME;
+				else process.env.NOTESOUP_HOME = previousNotesRoot;
 			}
 			if (ownsDir) rmSync(dir, { recursive: true, force: true });
 			if (ownsNotesRoot) rmSync(notesRoot, { recursive: true, force: true });
@@ -1460,10 +1460,10 @@ test("real AgentSession: injected settings managers own live policy and ignore c
 	const defaultAgentDir = mkdtempSync(join(tmpdir(), "notesoup-injected-default-agent-"));
 	const notesRoot = mkdtempSync(join(tmpdir(), "notesoup-injected-notes-"));
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-	const previousNotesRoot = process.env.PI_NOTES_HOME;
+	const previousNotesRoot = process.env.NOTESOUP_HOME;
 	writeFileSync(join(defaultAgentDir, "settings.json"), JSON.stringify({ compaction: { enabled: false, reserveTokens: 1_000 } }));
 	process.env.PI_CODING_AGENT_DIR = defaultAgentDir;
-	process.env.PI_NOTES_HOME = notesRoot;
+	process.env.NOTESOUP_HOME = notesRoot;
 	let first!: Fixture;
 	let second!: Fixture;
 	const firstHighUsage = { next: false };
@@ -1537,8 +1537,8 @@ test("real AgentSession: injected settings managers own live policy and ignore c
 		first?.close();
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		if (previousNotesRoot === undefined) delete process.env.PI_NOTES_HOME;
-		else process.env.PI_NOTES_HOME = previousNotesRoot;
+		if (previousNotesRoot === undefined) delete process.env.NOTESOUP_HOME;
+		else process.env.NOTESOUP_HOME = previousNotesRoot;
 		rmSync(defaultAgentDir, { recursive: true, force: true });
 		rmSync(notesRoot, { recursive: true, force: true });
 	}
@@ -1548,8 +1548,8 @@ test("real AgentSession: injected model overrides select the active model's rese
 	let settingsManager!: SettingsManager;
 	let modelBId = "";
 	const notesRoot = mkdtempSync(join(tmpdir(), "notesoup-model-override-notes-"));
-	const previousNotesRoot = process.env.PI_NOTES_HOME;
-	process.env.PI_NOTES_HOME = notesRoot;
+	const previousNotesRoot = process.env.NOTESOUP_HOME;
+	process.env.NOTESOUP_HOME = notesRoot;
 	let fixture!: Fixture;
 	fixture = await openFixture({
 		contextWindow: 100_000,
@@ -1589,8 +1589,8 @@ test("real AgentSession: injected model overrides select the active model's rese
 		assert.ok((results[1] ?? 0) > 0, "model-b's lower reserve is selected for the next real tool result");
 	} finally {
 		fixture.close();
-		if (previousNotesRoot === undefined) delete process.env.PI_NOTES_HOME;
-		else process.env.PI_NOTES_HOME = previousNotesRoot;
+		if (previousNotesRoot === undefined) delete process.env.NOTESOUP_HOME;
+		else process.env.NOTESOUP_HOME = previousNotesRoot;
 		rmSync(notesRoot, { recursive: true, force: true });
 	}
 });

@@ -1,10 +1,10 @@
 /**
  * OWNER: notesoup (adopted).
  * STATUS: tracked acceptance spec for the real-file notes store and its five tools.
- * CLAIM: notes live as markdown files under $PI_NOTES_HOME with harness-owned frontmatter;
+ * CLAIM: notes live as markdown files under $NOTESOUP_HOME with harness-owned frontmatter;
  *   the five tools (notes_write/update/read/list/search) are the only note surface, and the
  *   boot index reads the physical store across scopes.
- * HERMETIC: every test points PI_NOTES_HOME at its own temp root; no real ~/.agents is touched.
+ * HERMETIC: every test points NOTESOUP_HOME at its own temp root; no real ~/.agents is touched.
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -31,7 +31,7 @@ function freshRoot(): string {
 
 function assertReceiptIdentity(value: { address: string; project_key?: string }, address: string, scope: Scope, ctx: ReturnType<typeof context>): void {
 	assert.equal(value.address, address);
-	assert.equal(value.project_key, scope === "project" ? projectKey(ctx.cwd, process.env.PI_NOTES_HOME!) : undefined);
+	assert.equal(value.project_key, scope === "project" ? projectKey(ctx.cwd, process.env.NOTESOUP_HOME!) : undefined);
 }
 
 test("exactly the five notes tools are registered; the legacy five are gone", () => {
@@ -142,8 +142,8 @@ test("session-note project ownership is per note, persistent across sessions, an
 	const cwdB = join(testEnvironment.cwd, "project-b");
 	mkdirSync(cwdA, { recursive: true });
 	mkdirSync(cwdB, { recursive: true });
-	const projectA = projectKey(cwdA, process.env.PI_NOTES_HOME!);
-	const projectB = projectKey(cwdB, process.env.PI_NOTES_HOME!);
+	const projectA = projectKey(cwdA, process.env.NOTESOUP_HOME!);
+	const projectB = projectKey(cwdB, process.env.NOTESOUP_HOME!);
 	assert.notEqual(projectA, projectB);
 
 	const firstSession = manager();
@@ -197,8 +197,8 @@ test("linked git worktrees share the main checkout's project key", () => {
 	git(["commit", "-q", "--allow-empty", "-m", "init"]);
 	const worktree = join(root, "wt");
 	git(["worktree", "add", "-q", "--detach", worktree]);
-	assert.equal(projectKey(worktree, process.env.PI_NOTES_HOME!), projectKey(main, process.env.PI_NOTES_HOME!), "a linked worktree resolves to the main checkout's key");
-	assert.equal(projectKey(join(worktree, "gone", "deeper"), process.env.PI_NOTES_HOME!), projectKey(main, process.env.PI_NOTES_HOME!), "a nonexistent subdirectory still resolves through its worktree");
+	assert.equal(projectKey(worktree, process.env.NOTESOUP_HOME!), projectKey(main, process.env.NOTESOUP_HOME!), "a linked worktree resolves to the main checkout's key");
+	assert.equal(projectKey(join(worktree, "gone", "deeper"), process.env.NOTESOUP_HOME!), projectKey(main, process.env.NOTESOUP_HOME!), "a nonexistent subdirectory still resolves through its worktree");
 	assert.equal(scopeDir("project", context(manager(), undefined, undefined, true, worktree)), scopeDir("project", context(manager(), undefined, undefined, true, main)), "@project uses the same physical home from both checkouts");
 });
 
@@ -246,7 +246,7 @@ project: 17
 
 invalid owner`);
 	assert.equal(parseNote(readFileSync(invalidFile, "utf8")).meta.project, 17);
-	assert.notEqual(parseNote(readFileSync(invalidFile, "utf8")).meta.project, projectKey(ctx.cwd, process.env.PI_NOTES_HOME!), "invalid ownership does not match the current project key");
+	assert.notEqual(parseNote(readFileSync(invalidFile, "utf8")).meta.project, projectKey(ctx.cwd, process.env.NOTESOUP_HOME!), "invalid ownership does not match the current project key");
 	await call(captured, "notes_write", { address: "invalid.md", content: "still invalid" }, ctx);
 	assert.equal(parseNote(readFileSync(invalidFile, "utf8")).meta.project, 17, "an invalid value remains unknown and is not replaced with cwd-derived ownership");
 	assert.equal(existsSync(join(scopeDir("session", ctx), ".session.json")), false, "new notes use no ownership sidecar");
@@ -399,7 +399,7 @@ test("empty results distinguish hidden notes and unavailable homes", async () =>
 	const searchResult = await notesSearch.execute({ query: "needle", glob: "**" }, identity);
 	assert.ok(searchResult.ok);
 	assert.deepEqual(searchResult.data.homes_unavailable, ["@project"]);
-	writeFileSync(join(process.env.PI_NOTES_HOME!, "agents"), "not a directory");
+	writeFileSync(join(process.env.NOTESOUP_HOME!, "agents"), "not a directory");
 	const namespace = resultData<NotesListData>(await call(captured, "notes_list", { glob: "@agents/*/note.md" }, ctx));
 	assert.deepEqual(namespace.homes_unavailable, ["@agents"]);
 });
@@ -617,16 +617,16 @@ test("Pi adapter resolves agent and switched model identity on each notes call a
 });
 
 async function withAgent(name: string | undefined, run: () => Promise<void>): Promise<void> {
-	const previous = process.env.PI_NOTES_AGENT;
-	if (name === undefined) delete process.env.PI_NOTES_AGENT;
-	else process.env.PI_NOTES_AGENT = name;
+	const previous = process.env.NOTESOUP_AGENT;
+	if (name === undefined) delete process.env.NOTESOUP_AGENT;
+	else process.env.NOTESOUP_AGENT = name;
 	try {
 		// A plain `return run()` would run the finally block the moment the promise pends,
 		// restoring the env while the callback still has awaits ahead of it.
 		await run();
 	} finally {
-		if (previous === undefined) delete process.env.PI_NOTES_AGENT;
-		else process.env.PI_NOTES_AGENT = previous;
+		if (previous === undefined) delete process.env.NOTESOUP_AGENT;
+		else process.env.NOTESOUP_AGENT = previous;
 	}
 }
 
@@ -636,8 +636,8 @@ test("a symlinked checkout resolves the canonical root, so one checkout has one 
 	mkdirSync(join(real, ".git"), { recursive: true });
 	const linked = join(root, "linked-repo");
 	symlinkSync(real, linked);
-	assert.equal(projectKey(linked, process.env.PI_NOTES_HOME!), "real-repo", "the name comes from the canonical root");
-	assert.equal(projectKey(real, process.env.PI_NOTES_HOME!), "real-repo", "both spellings reuse one home");
+	assert.equal(projectKey(linked, process.env.NOTESOUP_HOME!), "real-repo", "the name comes from the canonical root");
+	assert.equal(projectKey(real, process.env.NOTESOUP_HOME!), "real-repo", "both spellings reuse one home");
 });
 
 test("a glob ? matches exactly one non-slash character", () => {

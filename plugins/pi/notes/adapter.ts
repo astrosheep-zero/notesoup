@@ -5,13 +5,13 @@ import { projectKey, slugify, type NotesIdentity } from "../../../src/notes/inde
 
 /** Pi's default notes root; environment access stays on the host side of the library boundary. */
 export function notesRoot(): string {
-	const override = process.env.PI_NOTES_HOME;
+	const override = process.env.NOTESOUP_HOME;
 	return override && override.length > 0 ? resolve(override) : join(homedir(), ".agents", "notes");
 }
 
 /** Translate the current Pi runtime into a fresh, explicit identity snapshot. */
 export function agentSlug(): string {
-	return slugify(process.env.PI_NOTES_AGENT ?? "anonymous");
+	return slugify(process.env.NOTESOUP_AGENT ?? "anonymous");
 }
 
 /** Pi's active model identity is resolved live so a mid-session switch retargets @model. */

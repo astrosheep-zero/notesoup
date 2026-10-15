@@ -18,7 +18,7 @@ type ClaudeLimits = {
   native: number; reset: number; warn: number; resetMargin: number; warningRunway: number
 }
 type ResetState = {
-  identity?: Identity; history?: HistorySource; historyWindowHead?: string; generation: number; window: number; turnRunning: boolean; resetting: boolean
+  identity?: Identity; history?: HistorySource; historyWindowHead?: string; generation: number; window: number; disabled: boolean; turnRunning: boolean; resetting: boolean
   manualPending: boolean; headless: boolean; usageFailureLogged: boolean; preparedBoot?: string; retainedBoot?: string
   continuation?: string; continuationWindow?: number
   compactDisabled: boolean; limitsFailureLogged: boolean; limitsAttempts: number; limitsWindow: number
@@ -26,6 +26,7 @@ type ResetState = {
 }
 const HEADLESS = "No brain when headless"
 const COMPACT_DISABLED = "Brain can't be emptied with DISABLE_COMPACT"
+const NOTESOUP_DISABLED = "Notesoup is off with NOTESOUP_DISABLED"
 const THRESHOLDS_UNAVAILABLE = "Brain size unknown · no automatic emptying"
 const SETTINGS_UNAVAILABLE = "Notesoup settings unreadable · using the default flush margins"
 /** Bounded retries: a transient helper failure must not disable thresholds for a whole window. */
@@ -101,6 +102,14 @@ async function compactDisabled($: Engine): Promise<boolean> {
   if (value === undefined) return false
   const text = value.trim().toLowerCase()
   // The same presence convention as the helper's flag parsing: "off"/"no" mean not disabled.
+  return text !== "" && text !== "0" && text !== "false" && text !== "no" && text !== "off"
+}
+/** Presence-style kill switch for the whole mod; the same convention as DISABLE_COMPACT. */
+async function notesoupDisabled($: Engine): Promise<boolean> {
+  let value: string | undefined
+  try { value = await $.env.get("NOTESOUP_DISABLED") } catch { return false }
+  if (value === undefined) return false
+  const text = value.trim().toLowerCase()
   return text !== "" && text !== "0" && text !== "false" && text !== "no" && text !== "off"
 }
 async function readSettings($: Engine, state: ResetState): Promise<unknown> {
@@ -279,7 +288,7 @@ async function refreshIdentity($: Engine, state: ResetState): Promise<Identity |
     await syncHistoryWindow($, state)
     return state.identity
   }
-  const home = await $.env.get("PI_NOTES_HOME") ?? `${await $.env.get("HOME") ?? await $.env.get("USERPROFILE") ?? ""}/.agents/notes`
+  const home = await $.env.get("NOTESOUP_HOME") ?? `${await $.env.get("HOME") ?? await $.env.get("USERPROFILE") ?? ""}/.agents/notes`
   if (generation !== state.generation) return undefined
   forgetSession(state)
   state.identity = { home, sessionId, cwd, agent: "claude", model }
@@ -308,7 +317,7 @@ async function syncHistoryWindow($: Engine, state: ResetState) {
 
 export function register(on: On) {
   const manualSignal: { wake?: () => void } = {}
-  const state: ResetState = { generation: 0, window: 0, turnRunning: false, resetting: false, manualPending: false, headless: false, usageFailureLogged: false, compactDisabled: false, limitsFailureLogged: false, limitsAttempts: 0, limitsWindow: 0, settingsFailureLogged: false }
+  const state: ResetState = { generation: 0, window: 0, disabled: false, turnRunning: false, resetting: false, manualPending: false, headless: false, usageFailureLogged: false, compactDisabled: false, limitsFailureLogged: false, limitsAttempts: 0, limitsWindow: 0, settingsFailureLogged: false }
   const registered = new Set<string>()
   // Classic SessionStart precedes typed session.start and startup appends. Keep this binding
   // across forgetSession; re-key it only against the actual session id, never a guessed path.
@@ -330,6 +339,12 @@ export function register(on: On) {
   })
   on("session.start", async ($, e, next) => {
     forgetSession(state)
+    state.disabled = await notesoupDisabled($)
+    if (state.disabled) {
+      registered.clear()
+      log($, NOTESOUP_DISABLED)
+      return next(e)
+    }
     await refreshIdentity($, state)
     state.headless = !e.isInteractive
     if (state.headless) log($, HEADLESS)
@@ -355,6 +370,7 @@ export function register(on: On) {
     return next(e)
   })
   on("tool.call", async ($, e, next) => {
+    if (state.disabled) return next(e)
     if (!registered.has(e.tool)) return next(e)
     const identity = await refreshIdentity($, state)
     if (!identity) return errorResult("session changed during identity lookup")
@@ -371,6 +387,7 @@ export function register(on: On) {
   on("turn.start", async ($, e, next) => {
     // The documented turn.start is main-loop only. Guard tagged host events too:
     // only a main-agent turn.complete clears this latch.
+    if (state.disabled) return next(e)
     if ("agentId" in e && e.agentId !== undefined) return next(e)
     if (!await refreshIdentity($, state)) return next(e)
     state.turnRunning = true
@@ -379,6 +396,7 @@ export function register(on: On) {
   on("turn.complete", async ($, e, next) => {
     const result = await next(e)
     if (e.agentId !== undefined) return result
+    if (state.disabled) return result
     if (!await refreshIdentity($, state)) return result
     state.turnRunning = false
     await maybeReset($, state, true)
@@ -386,10 +404,11 @@ export function register(on: On) {
   })
   on("session.measure", async ($, e, next) => {
     const result = await next(e)
-    if (await refreshIdentity($, state)) await maybeReset($, state, false)
+    if (!state.disabled && await refreshIdentity($, state)) await maybeReset($, state, false)
     return result
   })
   on("command.run", async ($, e, next) => {
+    if (state.disabled) return next(e)
     if (e.command !== "empty" && e.command !== "fresh-window") return next(e)
     if (!await refreshIdentity($, state)) return { text: "🥣 Different brain now · try /fresh-window again" }
     if (state.headless) return { text: `🥣 ${HEADLESS}` }
@@ -406,6 +425,8 @@ export function register(on: On) {
     return { text: "🥣 Brain being emptied" }
   })
   on("session.compact", async ($, e, next) => {
+    // Disabled means fully transparent: native compaction runs exactly as if the mod were absent.
+    if (state.disabled) return next(e)
     if (e.agentId !== undefined) return next(e)
     const identity = await refreshIdentity($, state)
     const generation = state.generation
@@ -445,6 +466,7 @@ export function register(on: On) {
     return { messages: built.messages }
   })
   on("prompt.context", async ($, e, next) => {
+    if (state.disabled) return next(e)
     const result = await next(e)
     const identity = await refreshIdentity($, state)
     const generation = state.generation

@@ -70,6 +70,12 @@ The dreamer model is configured under the same key; `--dreamer <model pattern>` 
 }
 ```
 
+Environment variables:
+
+- `NOTESOUP_DISABLED` — presence-style kill switch: any value but an explicit no (`0`, `false`, `no`, `off`) turns notesoup off. On Pi the extension registers nothing at all; on Claude the mod passes every event through and native compaction behaves as if the mod were absent.
+- `NOTESOUP_HOME` — overrides the notes root (default `~/.agents/notes`).
+- `NOTESOUP_AGENT` — overrides the agent name on Pi (default `anonymous`).
+
 ## Documentation
 
 - [Architecture](docs/architecture.md) and [reset lifecycle](docs/reset-lifecycle.md) — how windows, checkpoints, markers and branches actually work

@@ -47,7 +47,7 @@ export type ExtensionTestEnvironment = {
  */
 export function installExtensionTestEnvironment(prefix = "notesoup-test"): ExtensionTestEnvironment {
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-	const previousNotesHome = process.env.PI_NOTES_HOME;
+	const previousNotesHome = process.env.NOTESOUP_HOME;
 	const defaultAgentDir = mkdtempSync(join(tmpdir(), `${prefix}-agent-`));
 	const cwd = mkdtempSync(join(tmpdir(), `${prefix}-cwd-`));
 	defaultCwd = cwd;
@@ -58,7 +58,7 @@ export function installExtensionTestEnvironment(prefix = "notesoup-test"): Exten
 	const newNotesRoot = (): string => {
 		const root = mkdtempSync(join(tmpdir(), `${prefix}-notes-`));
 		notesRoots.add(root);
-		process.env.PI_NOTES_HOME = root;
+		process.env.NOTESOUP_HOME = root;
 		return root;
 	};
 	const beforeEach = (): void => {
@@ -71,8 +71,8 @@ export function installExtensionTestEnvironment(prefix = "notesoup-test"): Exten
 		notesRoots.clear();
 		for (const path of tempPaths) rmSync(path, { recursive: true, force: true });
 		tempPaths.clear();
-		if (previousNotesHome === undefined) delete process.env.PI_NOTES_HOME;
-		else process.env.PI_NOTES_HOME = previousNotesHome;
+		if (previousNotesHome === undefined) delete process.env.NOTESOUP_HOME;
+		else process.env.NOTESOUP_HOME = previousNotesHome;
 	};
 	const dispose = (): void => {
 		afterEach();
@@ -82,8 +82,8 @@ export function installExtensionTestEnvironment(prefix = "notesoup-test"): Exten
 		registerTempPath = undefined;
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		if (previousNotesHome === undefined) delete process.env.PI_NOTES_HOME;
-		else process.env.PI_NOTES_HOME = previousNotesHome;
+		if (previousNotesHome === undefined) delete process.env.NOTESOUP_HOME;
+		else process.env.NOTESOUP_HOME = previousNotesHome;
 	};
 	return { cwd, agentDir: defaultAgentDir, beforeEach, afterEach, newNotesRoot, dispose };
 }

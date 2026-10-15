@@ -79,7 +79,7 @@ function fakeEngine(home: string): { host: HookEngine; registered: HookToolSpec[
     registered,
     notifications,
     host: {
-      env: { get: async (name) => name === "PI_NOTES_HOME" ? home : undefined },
+      env: { get: async (name) => name === "NOTESOUP_HOME" ? home : undefined },
       session: { id: async () => "hook-session", cwd: async () => home, model: async () => "claude", messages: async () => [], usage: async () => ({ context: {} }), compact: async () => ({ skip: "test default" }) },
       settings: { read: async () => ({}) },
       command: { register: async (spec) => ({ command: spec.name }) },
@@ -364,6 +364,42 @@ test("Claude Mod appends boot once and reuses persisted blocks after re-registra
   assert.equal(bootRequests, 1, "a persisted boot block needs no second boot helper request");
   assert.equal(nextCalls, 2, "the upstream chain still runs exactly once per prompt");
   assert.deepEqual(notifications, [], "successful boot never notifies");
+});
+
+test("Claude Mod with NOTESOUP_DISABLED registers nothing and passes every event through", async (t) => {
+  const home = mkdtempSync(join(tmpdir(), "claude-hook-disabled-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const { host, registered, notifications } = fakeEngine(home);
+  const readEnv = host.env.get;
+  host.env.get = async (name) => name === "NOTESOUP_DISABLED" ? "1" : await readEnv(name);
+  const commands: string[] = [];
+  host.command.register = async (spec) => { commands.push(spec.name); return spec; };
+  let helperCalls = 0;
+  const runProcess = host.process.run;
+  host.process.run = async (argv, init) => { helperCalls += 1; return await runProcess(argv, init); };
+
+  const handlers = new Map<string, HookHandler>();
+  (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
+  const startResult = { session: "started" };
+  const started = await handlers.get("session.start")!(host, { cwd: home, isInteractive: true }, async () => startResult);
+  assert.equal(started, startResult, "session.start passes through untouched");
+  assert.deepEqual(registered, [], "no tools are registered");
+  assert.deepEqual(commands, [], "no commands are registered");
+  assert.ok(notifications.some((text) => text.includes("NOTESOUP_DISABLED")), "the off state is logged");
+
+  const upstream = { blocks: [{ name: "claude:user-context", text: "unrelated upstream block" }] };
+  const prompt = await handlers.get("prompt.context")!(host, {}, async () => upstream);
+  assert.equal(prompt, upstream, "prompt.context gets no boot block");
+
+  const native = { skip: "engine default" };
+  const compact = await handlers.get("session.compact")!(host, { trigger: "auto" }, async () => native);
+  assert.equal(compact, native, "native compaction runs exactly as if the mod were absent");
+
+  const completed = await handlers.get("turn.complete")!(host, {}, async () => ({ done: true }));
+  assert.deepEqual(completed, { done: true }, "turn.complete passes through without a reset");
+  const measured = await handlers.get("session.measure")!(host, {}, async () => ({ marks: true }));
+  assert.deepEqual(measured, { marks: true }, "session.measure passes through without a reset");
+  assert.equal(helperCalls, 0, "the helper never runs while disabled");
 });
 
 test("Claude Mod boot failure preserves fallback with available, absent, or failing notifications", async (t) => {
@@ -705,7 +741,7 @@ test("Claude Mod stops the automatic reset and the manual command under DISABLE_
   const home = mkdtempSync(join(tmpdir(), "claude-disabled-home-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const { host, notifications } = fakeEngine(home);
-  host.env = { get: async (name) => name === "PI_NOTES_HOME" ? home : name === "DISABLE_COMPACT" ? "1" : undefined };
+  host.env = { get: async (name) => name === "NOTESOUP_HOME" ? home : name === "DISABLE_COMPACT" ? "1" : undefined };
   const timers: Array<() => void | Promise<void>> = [];
   host.clock.after = (_ms, callback) => { timers.push(callback); };
   const handlers = new Map<string, HookHandler>();
@@ -790,7 +826,7 @@ test("Claude Mod treats DISABLE_COMPACT=off as not disabled", async (t) => {
 	const home = mkdtempSync(join(tmpdir(), "claude-flag-off-home-"));
 	t.after(() => rmSync(home, { recursive: true, force: true }));
 	const { host, notifications } = fakeEngine(home);
-	host.env = { get: async (name) => name === "PI_NOTES_HOME" ? home : name === "DISABLE_COMPACT" ? "off" : undefined };
+	host.env = { get: async (name) => name === "NOTESOUP_HOME" ? home : name === "DISABLE_COMPACT" ? "off" : undefined };
 	const handlers = new Map<string, HookHandler>();
 	(await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
 	const invoke = (name: string, e: Record<string, unknown> = {}) => handlers.get(name)!(host, e, async () => ({}));

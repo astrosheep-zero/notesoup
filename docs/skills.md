@@ -24,7 +24,7 @@ If a dream process crashed, its lock remains and later runs refuse to start. The
 
 ```sh
 # only when no dream is running
-rm "${PI_NOTES_HOME:-$HOME/.agents/notes}/.dream.lock"
+rm "${NOTESOUP_HOME:-$HOME/.agents/notes}/.dream.lock"
 ```
 
 Removing a lock while a holder is running is outside the supported cooperative protocol and can let two dreams run at once.

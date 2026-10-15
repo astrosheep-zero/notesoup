@@ -1,9 +1,12 @@
 import { VERSION, type ExtensionAPI, type ExtensionFactory, type SettingsManager } from "@earendil-works/pi-coding-agent";
+import { presenceFlag } from "../../src/budget/parse.js";
 import { registerHistoryTools } from "./history-tools.js";
 import { registerNotesTools } from "./notes/tools.js";
 import { registerContext } from "./runtime.js";
 
 function registerNotesoup(pi: ExtensionAPI, settingsManager?: SettingsManager): void {
+	// Presence-style kill switch for the whole extension, same convention as the DISABLE_* flags.
+	if (presenceFlag(process.env.NOTESOUP_DISABLED)) return;
 	const [major, minor] = VERSION.split(".").map(Number);
 	if (!(major > 0 || (major === 0 && minor >= 87))) {
 		throw new Error(`notesoup requires Pi >= 0.87.0; running ${VERSION}. Upgrade Pi and restart the process; /reload only reloads extensions.`);

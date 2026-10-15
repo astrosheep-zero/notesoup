@@ -177,3 +177,28 @@ test("the configured extension source and the moved dream CLI are executable cur
 	assert.ok(help.startsWith("dream doctor [--notes-home <dir>]"));
 	assert.ok(help.includes("Default playbook: <installed package root>/playbook.md"));
 });
+
+test("NOTESOUP_DISABLED turns the Pi extension fully off", async () => {
+	const built = await import(pathToFileURL(resolve(repository(), "dist/plugins/pi/index.js")).href);
+	const run = () => {
+		const tools: ToolDefinition[] = [];
+		const commands: string[] = [];
+		const events: string[] = [];
+		built.default({
+			on(event: string) { events.push(event); },
+			registerTool(tool: ToolDefinition) { tools.push(tool); },
+			registerCommand(name: string) { commands.push(name); },
+		} as unknown as ExtensionAPI);
+		return { tools, commands, events };
+	};
+	const previous = process.env.NOTESOUP_DISABLED;
+	try {
+		process.env.NOTESOUP_DISABLED = "1";
+		assert.deepEqual(run(), { tools: [], commands: [], events: [] }, "a present flag registers nothing at all");
+		process.env.NOTESOUP_DISABLED = "0";
+		assert.ok(run().tools.length > 0, "an explicit no keeps the extension on");
+	} finally {
+		if (previous === undefined) delete process.env.NOTESOUP_DISABLED;
+		else process.env.NOTESOUP_DISABLED = previous;
+	}
+});

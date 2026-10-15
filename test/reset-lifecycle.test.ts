@@ -34,12 +34,12 @@ import {
 	type ResetTurnEndFacts,
 } from "../plugins/pi/reset/lifecycle.js";
 
-const previousNotesHome = process.env.PI_NOTES_HOME;
+const previousNotesHome = process.env.NOTESOUP_HOME;
 const testNotesHome = mkdtempSync(join(tmpdir(), "notesoup-lifecycle-notes-"));
-process.env.PI_NOTES_HOME = testNotesHome;
+process.env.NOTESOUP_HOME = testNotesHome;
 test.after(() => {
-	if (previousNotesHome === undefined) delete process.env.PI_NOTES_HOME;
-	else process.env.PI_NOTES_HOME = previousNotesHome;
+	if (previousNotesHome === undefined) delete process.env.NOTESOUP_HOME;
+	else process.env.NOTESOUP_HOME = previousNotesHome;
 	rmSync(testNotesHome, { recursive: true, force: true });
 });
 

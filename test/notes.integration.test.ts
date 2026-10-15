@@ -346,7 +346,7 @@ test("boot note acquisition is one closed snapshot and isolates one or all faile
 test("the boot block gives awake agents the notes-home file layout", async () => {
 	const session = manager();
 	const rendered = await explicitBoot(context(session), "pcw:test:root", undefined);
-	assert.equal(rendered.includes(process.env.PI_NOTES_HOME ?? ""), false, "the absolute notes home is never exposed");
+	assert.equal(rendered.includes(process.env.NOTESOUP_HOME ?? ""), false, "the absolute notes home is never exposed");
 	assert.match(rendered, /`<path>`, no @[\s\S]*`@project\/<path>`[\s\S]*`@human\/<path>`/);
 	assert.ok(rendered.includes(`\n${PI_PRE_RESET_HINTS}\n${NOTES_PROTOCOL_CLOSE_TAG}`), "Pi's boot closes the protocol with the pre-reset hints");
 });
@@ -409,7 +409,7 @@ test("an over-budget note is delivered as a bounded prefix and resumed by next_o
 	// Both surfaces stay inside the budget, and a refusal carries no window at all.
 	const missingResult = await call(captured, "notes_read", { address: "no-such.md" }, ctx);
 	assertWithinBudget(missingResult, "refused read");
-	const root = process.env.PI_NOTES_HOME!;
+	const root = process.env.NOTESOUP_HOME!;
 	for (const result of [
 		await call(captured, "notes_write", { address: "@project/receipt", content: "body" }, ctx),
 		await call(captured, "notes_update", { address: "@project/receipt", edits: [{ oldText: "body", newText: "changed" }] }, ctx),

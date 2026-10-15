@@ -196,7 +196,7 @@ test("a boot beyond three windows shows only root, the previous window, and the 
 });
 
 test("an aborted async boot repair emits no boot, continuation, or incomplete-notes notice", async () => {
-	const notesHome = process.env.PI_NOTES_HOME;
+	const notesHome = process.env.NOTESOUP_HOME;
 	assert.ok(notesHome);
 	rmSync(notesHome, { recursive: true, force: true });
 	writeFileSync(notesHome, "not a directory");
