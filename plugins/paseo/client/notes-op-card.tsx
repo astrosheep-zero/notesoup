@@ -37,22 +37,11 @@ export function NotesOpCard({ item, layout }: PluginTimelineItemProps<NotesOp>) 
   const hasBody = Boolean(data.text || data.preview || data.diff || footnotes.length);
   return (
     <PaperCard compact={layout.compact}>
+      <View style={{ gap: 5, paddingRight: hasBody && !expanded ? 34 : 0 }}>
         <View style={{ gap: 3 }}>
-          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-            <Text style={{ color: PAPER.inkMuted, fontSize: 11, letterSpacing: 0.5 }}>
-              {title}{data.status === "running" ? " …" : ""}
-            </Text>
-            {hasBody && !expanded && <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`${expanded ? "收起" : "展开"} ${data.address}`}
-              aria-expanded={expanded}
-              onPress={() => setExpanded(value => !value)}
-              hitSlop={6}
-              style={({ pressed }) => ({ padding: 5, opacity: pressed ? 0.6 : 1 })}
-            >
-              <Icon name={expanded ? "ChevronUp" : "ChevronDown"} size={18} color={PAPER.inkMuted} />
-            </Pressable>}
-          </View>
+          <Text style={{ color: PAPER.inkMuted, fontSize: 11, letterSpacing: 0.5 }}>
+            {title}{data.status === "running" ? " …" : ""}
+          </Text>
           <Text style={{ color: PAPER.ink, fontSize: 13, flexShrink: 1 }}>
             {data.address}
             {state !== undefined && <Text style={{ color: PAPER.inkMuted, fontSize: 12, fontWeight: "400" }}>{"  "}{state}</Text>}
@@ -69,16 +58,22 @@ export function NotesOpCard({ item, layout }: PluginTimelineItemProps<NotesOp>) 
           {data.diff !== undefined && <DiffBody diff={data.diff} />}
           {footnotes.length > 0 && <Text style={{ color: PAPER.inkMuted, fontSize: 11 }}>{footnotes.join(" · ")}</Text>}
         </ScrollView>}
-        {hasBody && expanded && <Pressable
+        {hasBody && <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`收起 ${data.address}`}
-          aria-expanded={true}
-          onPress={() => setExpanded(false)}
+          accessibilityLabel={`${expanded ? "收起" : "展开"} ${data.address}`}
+          aria-expanded={expanded}
+          onPress={() => setExpanded(value => !value)}
           hitSlop={6}
-          style={({ pressed }) => ({ alignSelf: "flex-end", paddingHorizontal: 5, paddingVertical: 1, opacity: pressed ? 0.6 : 1 })}
+          style={({ pressed }) => ({
+            ...(expanded
+              ? { alignSelf: "flex-end" as const, marginTop: -3, marginBottom: -4 }
+              : { position: "absolute" as const, right: 0, bottom: 0 }),
+            paddingHorizontal: 5, opacity: pressed ? 0.6 : 1,
+          })}
         >
-          <Icon name="ChevronUp" size={18} color={PAPER.inkMuted} />
+          <Icon name={expanded ? "ChevronUp" : "ChevronDown"} size={18} color={PAPER.inkMuted} />
         </Pressable>}
+      </View>
     </PaperCard>
   );
 }
