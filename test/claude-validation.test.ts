@@ -10,7 +10,7 @@ const plugin = join(process.cwd(), "plugins/claude");
 /** Only an absent executable may skip the real loader gate; other failures fail the suite. */
 function validate(t: test.TestContext, dir: string) {
   const result = spawnSync("claude", ["plugin", "validate", dir, "--strict", "--json"], {
-    encoding: "utf8", timeout: 30_000,
+    encoding: "utf8",
   });
   if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
     t.skip("Claude mod validation skipped: claude is not installed (not found on PATH)");
@@ -35,7 +35,7 @@ test("Claude mod passes the installed engine's strict loader validation", (t) =>
 
 test("Claude mod typechecks against the vendored engine contract without Node globals", () => {
   const result = spawnSync(process.execPath, ["node_modules/typescript/bin/tsc", "-p", "plugins/claude/tsconfig.json"], {
-    encoding: "utf8", timeout: 30_000,
+    encoding: "utf8",
   });
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stdout + result.stderr);

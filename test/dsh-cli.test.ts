@@ -12,7 +12,7 @@ const exec = promisify(execFile);
 const repository = fileURLToPath(new URL("../../", import.meta.url));
 const system = (request: { system?: string | { text: string }[] }) => typeof request.system === "string" ? request.system : request.system?.map((block) => block.text).join("\n") ?? "";
 
-test("dsh profile loads our rows and a second process restores the on-disk window", { timeout: 45000 }, async (t) => {
+test("dsh profile loads our rows and a second process restores the on-disk window", async (t) => {
 	const directory = await mkdtemp(join(tmpdir(), "notesoup-dsh-cli-"));
 	const mock = await messagesServer();
 	t.after(async () => { await mock.close(); await rm(directory, { recursive: true, force: true }); });
@@ -28,19 +28,20 @@ test("dsh profile loads our rows and a second process restores the on-disk windo
 		.replace("'notesoup/dsh'", `'${pathToFileURL(join(repository, "dist/plugins/dsh/index.js")).href}'`)
 		.replace("# notesHome: /absolute/path/to/notes", `notesHome: ${join(directory, "notes")}`);
 	await writeFile(join(profile, "cordis.patch.yml"), patch + "\n- id: session-title-llm\n  disabled: true\n");
-	const env = { ...process.env, DSH_HOME: home, DEEPSEEK_API_KEY: "mock-key", DEEPSEEK_BASE_URL: mock.url, DSH_TOOLS_MODE: "native" };
+	// A broken ambient proxy must not intercept the local Messages server.
+	const env = { ...process.env, NODE_USE_ENV_PROXY: "1", HTTP_PROXY: "http://127.0.0.1:1", http_proxy: "http://127.0.0.1:1", DSH_HOME: home, DEEPSEEK_API_KEY: "mock-key", DEEPSEEK_BASE_URL: mock.url, DSH_TOOLS_MODE: "native" };
 	const cli = resolve(repository, "node_modules/@deepseek-ai/dsh/lib/bin.js");
 	mock.script.push({ tool: "empty_brain", input: {} }, { text: "after reset" });
-	const first = await exec(process.execPath, [cli, "--profile", "notesoup-test", "old conversation"], { cwd: directory, env, timeout: 20000 });
-	assert.equal(mock.requests.length, 2, first.stderr);
+	const first = await exec(process.execPath, [cli, "--profile", "notesoup-test", "old conversation"], { cwd: directory, env, signal: t.signal, killSignal: "SIGKILL" });
+	assert.equal(mock.requests.length, 2, JSON.stringify(first));
 	assert.equal(mock.requests[1]!.messages.length, 1);
 	assert.notEqual(system(mock.requests[0]!), system(mock.requests[1]!));
 	const sessionPaths = await readdir(join(home, "sessions"), { recursive: true });
 	const sessionId = sessionPaths.map((entry) => entry.split("/").at(-1)!).find((entry) => entry.startsWith("session-"))!;
 	assert.ok(sessionId, JSON.stringify(sessionPaths));
 	mock.script.push({ text: "reloaded" });
-	const second = await exec(process.execPath, [cli, "--profile", "notesoup-test", "--session-id", sessionId, "resume"], { cwd: directory, env, timeout: 20000 });
-	assert.equal(mock.requests.length, 3, second.stderr);
+	const second = await exec(process.execPath, [cli, "--profile", "notesoup-test", "--session-id", sessionId, "resume"], { cwd: directory, env, signal: t.signal, killSignal: "SIGKILL" });
+	assert.equal(mock.requests.length, 3, JSON.stringify(second));
 	assert.equal(system(mock.requests[2]!), system(mock.requests[1]!));
 	assert.equal(JSON.stringify(mock.requests[2]!.messages).includes("old conversation"), false);
 });

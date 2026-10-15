@@ -1,6 +1,10 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
+// Keep local fixtures off inherited proxies, including in the DSH CLI child processes.
+// Lowercase wins in Node's proxy settings; preserve that effective exclusion list.
+process.env.no_proxy = process.env.NO_PROXY = [process.env.no_proxy || process.env.NO_PROXY, "127.0.0.1"].filter(Boolean).join(",");
+
 export type Behavior = { text: string; inputTokens?: number } | { tool: string; input: unknown; inputTokens?: number } | { error: string };
 export type WireRequest = { system?: string | { text: string }[]; messages: { role: string; content: unknown }[]; tools?: { name: string }[] };
 

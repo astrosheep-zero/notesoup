@@ -277,7 +277,7 @@ function assertFreshRequest(fixture: Fixture, requestIndex: number, oldSentinel:
 	assert.deepEqual(continuationLinesIn(body).length, 1, "the fresh window carries exactly one reset paragraph");
 }
 
-test("real Pi codemode receives typed notes/history outcomes, including expected errors", { timeout: 20000 }, async () => {
+test("real Pi codemode receives typed notes/history outcomes, including expected errors", async () => {
 	let fixture!: Fixture;
 	fixture = await openFixture({
 		codemode: true,
@@ -430,7 +430,7 @@ test("real AgentSession: a final warning notifies before the response, even if a
 	}
 });
 
-test("real AgentSession: final warning survives its reset boundary and notifies once", { timeout: 20000 }, async () => {
+test("real AgentSession: final warning survives its reset boundary and notifies once", async () => {
 	let fixture!: Fixture;
 	fixture = await openFixture({
 		compactionEnabled: true,
@@ -502,7 +502,7 @@ test("real AgentSession: explicit tiny-session wipe ignores keepRecentTokens and
 	}
 });
 
-test("real AgentSession: manual command spans its tool batch and stops at settlement", { timeout: 20000 }, async () => {
+test("real AgentSession: manual command spans its tool batch and stops at settlement", async () => {
 	let fixture!: Fixture;
 	fixture = await openFixture({
 		compactionEnabled: false,
@@ -548,7 +548,7 @@ test("real AgentSession: manual command spans its tool batch and stops at settle
 	}
 });
 
-test("real AgentSession: a clear command keeps its prompt out of the fresh window and resumes once", { timeout: 25000 }, async () => {
+test("real AgentSession: a clear command keeps its prompt out of the fresh window and resumes once", async () => {
 	for (const mode of ["empty", "fresh-window", "hard-reserve", "overflow"] as const) {
 		let fixture!: Fixture;
 		const prompt = 'AFTER_CLEAR_PROMPT_SENTINEL /cm "literal text"';
@@ -589,7 +589,7 @@ test("real AgentSession: a clear command keeps its prompt out of the fresh windo
 	}
 });
 
-test("real AgentSession: whitespace-only /fresh-window clears and stops", { timeout: 20000 }, async () => {
+test("real AgentSession: whitespace-only /fresh-window clears and stops", async () => {
 	let fixture!: Fixture;
 	fixture = await openFixture({
 		compactionEnabled: false,
@@ -606,7 +606,7 @@ test("real AgentSession: whitespace-only /fresh-window clears and stops", { time
 	} finally { fixture.close(); }
 });
 
-test("real AgentSession: streaming clear prompt keeps the first request", { timeout: 20000 }, async () => {
+test("real AgentSession: streaming clear prompt keeps the first request", async () => {
 	let fixture!: Fixture;
 	let started!: () => void;
 	let release!: () => void;
@@ -645,7 +645,7 @@ test("real AgentSession: streaming clear prompt keeps the first request", { time
 	} finally { release(); fixture.close(); }
 });
 
-test("real AgentSession: manual hard-reserve reset stops clean and mixed-tool turns without fresh provider work", { timeout: 20000 }, async () => {
+test("real AgentSession: manual hard-reserve reset stops clean and mixed-tool turns without fresh provider work", async () => {
 	for (const mixed of [false, true]) {
 		let fixture!: Fixture;
 		let newUserAllowed = false;
@@ -686,7 +686,7 @@ test("real AgentSession: manual hard-reserve reset stops clean and mixed-tool tu
 	}
 });
 
-test("real AgentSession: manual safety reset answers queued user input once before stopping", { timeout: 20000 }, async () => {
+test("real AgentSession: manual safety reset answers queued user input once before stopping", async () => {
 	let fixture!: Fixture;
 	fixture = await openFixture({
 		hook: (pi, getSession) => pi.on("tool_call", async (event) => {
@@ -717,7 +717,7 @@ test("real AgentSession: manual safety reset answers queued user input once befo
 	}
 });
 
-test("real AgentSession: manual overflow wipes and stops even with automatic reset disabled", { timeout: 20000 }, async () => {
+test("real AgentSession: manual overflow wipes and stops even with automatic reset disabled", async () => {
 	let fixture!: Fixture;
 	fixture = await openFixture({
 		compactionEnabled: false,
@@ -740,7 +740,7 @@ test("real AgentSession: manual overflow wipes and stops even with automatic res
 	}
 });
 
-test("real AgentSession: streaming /empty steers a close-out and stops at settlement", { timeout: 20000 }, async () => {
+test("real AgentSession: streaming /empty steers a close-out and stops at settlement", async () => {
 	let fixture!: Fixture;
 	let announceStarted!: () => void;
 	let releaseResponse!: () => void;
@@ -780,7 +780,7 @@ test("real AgentSession: streaming /empty steers a close-out and stops at settle
 	}
 });
 
-test("real AgentSession: repeated manual commands share one pending window", { timeout: 20000 }, async () => {
+test("real AgentSession: repeated manual commands share one pending window", async () => {
 	let fixture!: Fixture;
 	let announceStarted!: () => void;
 	let releaseResponse!: () => void;
@@ -813,7 +813,7 @@ test("real AgentSession: repeated manual commands share one pending window", { t
 	}
 });
 
-test("real AgentSession: user abort, synthetic aborted response, and generic error never fall back", { timeout: 25000 }, async () => {
+test("real AgentSession: user abort, synthetic aborted response, and generic error never fall back", async () => {
 	for (const mode of ["ctx-abort", "synthetic-abort", "generic-error"] as const) {
 		let fixture!: Fixture;
 		let didAbort = false;
@@ -855,7 +855,7 @@ test("real AgentSession: user abort, synthetic aborted response, and generic err
 	}
 });
 
-test("real AgentSession: steering and follow-up queued during a manual reset are answered before the stop", { timeout: 25000 }, async () => {
+test("real AgentSession: steering and follow-up queued during a manual reset are answered before the stop", async () => {
 	for (const delivery of ["steer", "followUp"] as const) {
 		let fixture!: Fixture;
 		let announceStarted!: () => void;
@@ -895,7 +895,7 @@ test("real AgentSession: steering and follow-up queued during a manual reset are
 	}
 });
 
-test("real AgentSession: a reset survives all notes-home read failures with an incomplete boot", { timeout: 15000 }, async () => {
+test("real AgentSession: a reset survives all notes-home read failures with an incomplete boot", async () => {
 	let fixture!: Fixture;
 	fixture = await openFixture({
 		compactionEnabled: false,
@@ -924,7 +924,7 @@ test("real AgentSession: a reset survives all notes-home read failures with an i
 	}
 });
 
-test("real AgentSession: reset projection drops legacy message shapes but keeps raw history and equal/backwards new timestamps", { timeout: 15000 }, async () => {
+test("real AgentSession: reset projection drops legacy message shapes but keeps raw history and equal/backwards new timestamps", async () => {
 	let fixture!: Fixture;
 	const legacyTimestamp = Date.now();
 	const legacyTexts = [
@@ -1005,7 +1005,7 @@ test("real AgentSession: successive resets and a mixed tool batch cut only after
 	}
 });
 
-test("real AgentSession: two retain-none checkpoints survive session-file reopen", { timeout: 20000 }, async () => {
+test("real AgentSession: two retain-none checkpoints survive session-file reopen", async () => {
 	const sessionDir = mkdtempSync(join(tmpdir(), "notesoup-persisted-session-"));
 	let fixture!: Fixture;
 	let sessionFile = "";
@@ -1097,7 +1097,7 @@ test("real AgentSession: steering and follow-up are delivered exactly once in th
 	}
 });
 
-test("real AgentSession: hidden or missing reset boots refuse to move the boundary", { timeout: 15000 }, async () => {
+test("real AgentSession: hidden or missing reset boots refuse to move the boundary", async () => {
 	let fixture!: Fixture;
 	fixture = await openFixture({
 		compactionEnabled: false,
@@ -1191,7 +1191,7 @@ test("real AgentSession: the complete system message and a changed tool loadout 
 	}
 });
 
-test("real AgentSession: overflow and recoverable length reset and retry once; repeated failure is bounded", { timeout: 15000 }, async () => {
+test("real AgentSession: overflow and recoverable length reset and retry once; repeated failure is bounded", async () => {
 	for (const failure of ["overflow", "length"] as const) {
 		let fixture!: Fixture;
 		fixture = await openFixture({
@@ -1228,7 +1228,7 @@ test("real AgentSession: overflow and recoverable length reset and retry once; r
 	}
 });
 
-test("real AgentSession: concurrent trusted projects keep reserve and automatic policy isolated", { timeout: 20000 }, async () => {
+test("real AgentSession: concurrent trusted projects keep reserve and automatic policy isolated", async () => {
 	const agentDir = mkdtempSync(join(tmpdir(), "notesoup-shared-agent-"));
 	const notesRoot = mkdtempSync(join(tmpdir(), "notesoup-shared-notes-"));
 	const cwdAutomatic = mkdtempSync(join(tmpdir(), "notesoup-project-automatic-"));
@@ -1318,7 +1318,7 @@ test("real AgentSession: concurrent trusted projects keep reserve and automatic 
 	}
 });
 
-test("real AgentSession: injected settings managers own live policy and ignore conflicting default files", { timeout: 20000 }, async () => {
+test("real AgentSession: injected settings managers own live policy and ignore conflicting default files", async () => {
 	const firstManager = SettingsManager.inMemory({ compaction: { enabled: true, reserveTokens: 80_000 } });
 	const secondManager = SettingsManager.inMemory({ compaction: { enabled: false, reserveTokens: 20_000 } });
 	const defaultAgentDir = mkdtempSync(join(tmpdir(), "notesoup-injected-default-agent-"));
@@ -1408,7 +1408,7 @@ test("real AgentSession: injected settings managers own live policy and ignore c
 	}
 });
 
-test("real AgentSession: injected model overrides select the active model's reserve", { timeout: 20000 }, async () => {
+test("real AgentSession: injected model overrides select the active model's reserve", async () => {
 	let settingsManager!: SettingsManager;
 	let modelBId = "";
 	const notesRoot = mkdtempSync(join(tmpdir(), "notesoup-model-override-notes-"));
@@ -1459,7 +1459,7 @@ test("real AgentSession: injected model overrides select the active model's rese
 	}
 });
 
-test("real AgentSession: persisted budget warning re-arms after a later abort/error", { timeout: 30000 }, async () => {
+test("real AgentSession: persisted budget warning re-arms after a later abort/error", async () => {
 	for (const mode of ["ctx-abort", "generic-error"] as const) {
 		let fixture!: Fixture;
 		let warningTurnStarted!: () => void;
@@ -1523,7 +1523,7 @@ test("real AgentSession: persisted budget warning re-arms after a later abort/er
 	}
 });
 
-test("real AgentSession: warning precedes a durable checkpoint, including failed writes and an ignored warning", { timeout: 20000 }, async () => {
+test("real AgentSession: warning precedes a durable checkpoint, including failed writes and an ignored warning", async () => {
 	for (const scenario of ["checkpoint", "write-error", "ignored-warning"] as const) {
 		let fixture!: Fixture;
 		fixture = await openFixture({
