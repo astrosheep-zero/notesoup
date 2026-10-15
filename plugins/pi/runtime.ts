@@ -6,8 +6,8 @@ import { registerBudget } from "./budget.js";
 import { output } from "./tool-result.js";
 import { currentReset, currentWindowId, isCheckpointBackedReset, isWindowBoot, isWindowMarker, markerResetOrigin, projectRootWindow, projectWindow, rootWindowId, type WindowMarker } from "./window.js";
 import { registerResetLifecycle } from "./reset/lifecycle.js";
-import { buildResetDrafts, LAST_WORD_PREFIX, MAX_LAST_WORD_CHARS, repairResetTail, sanitizeLastWord } from "./reset/artifacts.js";
-import { BOOT_TYPE, MANUAL_WIPE_TYPE, RESET_LAST_WORD_TYPE } from "./entries.js";
+import { buildResetDrafts, MAX_LAST_WORD_CHARS, repairResetTail, sanitizeLastWord } from "./reset/artifacts.js";
+import { BOOT_TYPE, MANUAL_WIPE_TYPE } from "./entries.js";
 import { warningContent } from "./text.js";
 import { buildBootMessage, sendBoot, type IncompleteNotesNotifier } from "./boot.js";
 import { nextHistorySeq } from "./history.js";
@@ -72,11 +72,10 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 			const marker = branch.find((entry): entry is WindowMarker => isWindowMarker(entry) && entry.data.windowId === windowId);
 			if (!marker || !isCheckpointBackedReset(ctx, marker) || !resetBoundaryCommitted(ctx, marker.id, windowId)) continue;
 			pendingResetNotices.delete(windowId);
-			const tail = branch.slice(branch.indexOf(marker) + 1);
-			const lastWordEntry = tail.find((entry) => (entry as { customType?: string }).customType === RESET_LAST_WORD_TYPE) as { content?: string } | undefined;
-			const lastWord = lastWordEntry?.content?.startsWith(LAST_WORD_PREFIX) ? lastWordEntry.content.slice(LAST_WORD_PREFIX.length) : undefined;
+			// The last word already lands as its own visible sticky-note entry; the
+			// committed notice stays a one-line marker instead of repeating it.
 			const forced = markerResetOrigin(marker) === "forced";
-			ctx.ui.notify(`🥣 Brain emptied${forced ? " forcibly: overflow" : ""}${lastWord ? ` · last word: “${lastWord}”` : ""}`, forced ? "warning" : "info");
+			ctx.ui.notify(forced ? "🥣 Brain forcibly emptied: overflow" : "🥣 Fresh brain", forced ? "warning" : "info");
 		}
 	};
 	pi.on("turn_start", (_event, ctx) => notifyCommittedResets(ctx));

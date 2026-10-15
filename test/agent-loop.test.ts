@@ -179,7 +179,7 @@ async function openFixture(options: {
 	await session.bindExtensions({
 		uiContext: {
 			notify(message: string, type?: "info" | "warning" | "error") {
-				if (message === "🥣 Brain emptied") {
+				if (message === "🥣 Fresh brain") {
 					const marker = sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE).at(-1);
 					const windowId = (marker as { data?: { windowId?: string } } | undefined)?.data?.windowId;
 					assert.ok(sessionManager.getBranch().some((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE && (entry.data as { windowId?: string })?.windowId === windowId), "notification follows the reset marker commit");
@@ -253,6 +253,9 @@ function continuationLinesIn(body: string): string[] {
 	return CONTINUATION_JSON_LINES.filter((line) => body.includes(line));
 }
 const WARNING_JSON = JSON.stringify(warningPrompt()).slice(1, -1);
+
+/** The committed-reset success notice: fresh wording for the model's own wipe, forced for system resets. */
+const isResetSuccessNotice = (notice: string) => notice.includes("🥣 Fresh brain") || notice.includes("🥣 Brain forcibly emptied");
 
 function resetMarkers(fixture: Fixture) {
 	return fixture.sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE);
@@ -454,12 +457,12 @@ test("real AgentSession: final warning survives its reset boundary and notifies 
 		assert.equal(fixture.sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === WARNING_TYPE).length, 1);
 		assert.equal(resetMarkers(fixture).length, 1, "the reset commits in the same boundary as the final warning");
 		assert.equal(fixture.budgetNotices(), 1, "the old-window committed warning reaches the UI after reset");
-		assert.equal(fixture.notices.filter((notice) => notice === "🥣 Brain emptied").length, 1, "reset notification remains intact");
+		assert.equal(fixture.notices.filter((notice) => notice === "🥣 Fresh brain").length, 1, "reset notification remains intact");
 		assert.equal(fixture.notices.some((notice) => notice.includes("Context running low")), false, "early guidance stays silent");
 		await fixture.session.prompt("Continue after reset.");
 		await fixture.session.waitForIdle();
 		assert.equal(fixture.budgetNotices(), 1, "later turns cannot repeat the consumed final warning");
-		assert.equal(fixture.notices.filter((notice) => notice === "🥣 Brain emptied").length, 1, "the prior reset notification is also deduplicated");
+		assert.equal(fixture.notices.filter((notice) => notice === "🥣 Fresh brain").length, 1, "the prior reset notification is also deduplicated");
 	} finally {
 		fixture.close();
 	}
@@ -479,7 +482,7 @@ test("real AgentSession: explicit tiny-session wipe ignores keepRecentTokens and
 		assert.equal(fixture.notices.length, 0, "startup boot is silent");
 		await fixture.session.prompt("OLD_CONTEXT_SENTINEL: retain this only in durable history.");
 		await fixture.session.waitForIdle();
-		assert.deepEqual(fixture.notices.filter((message) => message.includes("Brain emptied")), ["🥣 Brain emptied · last word: “shoe”"], "the reset notifies once, carrying the last word");
+		assert.deepEqual(fixture.notices.filter(isResetSuccessNotice), ["🥣 Fresh brain"], "the reset notifies once, without repeating the last word");
 		assert.equal(fixture.requests.length, 2, "the tool starts exactly one continuation");
 		assert.ok(text(fixture.requests[0]).includes("OLD_CONTEXT_SENTINEL"));
 		assertFreshRequest(fixture, 1, "OLD_CONTEXT_SENTINEL");
@@ -582,7 +585,7 @@ test("real AgentSession: a clear command keeps its prompt out of the fresh windo
 			const branch = fixture.sessionManager.getBranch();
 			const continuationIndex = branch.findIndex((entry) => entry.type === "custom_message" && entry.customType === CONTINUATION_TYPE);
 			assert.equal(branch.slice(continuationIndex + 1).filter((entry) => entry.type === "custom_message").length, 0, "nothing is injected after the continuation");
-			assert.ok(fixture.notices.some((notice) => notice.includes("Brain emptied")));
+			assert.ok(fixture.notices.some(isResetSuccessNotice));
 		} finally {
 			fixture.close();
 		}
@@ -667,7 +670,7 @@ test("real AgentSession: manual hard-reserve reset stops clean and mixed-tool tu
 			assert.equal(fixture.requests.length, 2);
 			assert.equal(resetMarkers(fixture).length, 1, "the safety wipe is not repeated at settlement");
 			assert.equal(JSON.stringify(fixture.sessionManager.buildSessionProjection().messages).includes("HARD_RESERVE_OLD_SENTINEL"), false);
-			assert.ok(fixture.notices.some((notice) => notice.includes("Brain emptied")));
+			assert.ok(fixture.notices.some(isResetSuccessNotice));
 			if (mixed) {
 				assert.ok(existsSync(join(fixture.notesRoot, "pi", "session", fixture.sessionManager.getSessionId(), "pressure.md")), "the whole tool batch completes before the cut");
 				assert.equal(fixture.streamSignals.at(-1), true, "Pi's unavoidable tool follow-up is cancelled before provider work");
@@ -734,7 +737,7 @@ test("real AgentSession: manual overflow wipes and stops even with automatic res
 		assert.equal(fixture.requests.length, 2);
 		assert.equal(resetMarkers(fixture).length, 1);
 		assert.equal(JSON.stringify(fixture.sessionManager.buildSessionProjection().messages).includes("MANUAL_OVERFLOW_OLD_SENTINEL"), false);
-		assert.ok(fixture.notices.some((notice) => notice.includes("Brain emptied")));
+		assert.ok(fixture.notices.some(isResetSuccessNotice));
 	} finally {
 		fixture.close();
 	}
@@ -773,7 +776,7 @@ test("real AgentSession: streaming /empty steers a close-out and stops at settle
 		assert.equal(fixture.requests.length, 2, "the warning closes out and the run stops — no continuation in the fresh window");
 		assert.equal(fixture.sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === MANUAL_WIPE_TYPE).length, 1, "the busy warning is persisted once");
 		assert.equal(JSON.stringify(fixture.sessionManager.buildSessionProjection().messages).includes("STREAMING_WIPE_OLD_SENTINEL"), false);
-		assert.ok(fixture.notices.some((notice) => notice.includes("Brain emptied")), "the committed boundary has a separate success notice");
+		assert.ok(fixture.notices.some(isResetSuccessNotice), "the committed boundary has a separate success notice");
 	} finally {
 		releaseResponse();
 		fixture.close();
@@ -836,7 +839,7 @@ test("real AgentSession: user abort, synthetic aborted response, and generic err
 			await fixture.session.waitForIdle();
 			assert.equal(resetMarkers(fixture).length, 0, `${mode} does not force a reset`);
 			assert.equal(fixture.sessionManager.getBranch().filter((entry) => entry.type === "compaction").length, 0);
-			assert.equal(fixture.notices.some((notice) => notice.includes("Brain emptied")), false);
+			assert.equal(fixture.notices.some(isResetSuccessNotice), false);
 			if (mode === "ctx-abort") assert.equal(fixture.streamSignals.at(-1), true, "this case aborts the real Pi operation signal");
 			else assert.equal(fixture.streamSignals.at(-1), false, "synthetic abort/error is not a user abort signal");
 			await fixture.session.prompt("AFTER_UNSUCCESSFUL_CLOSEOUT");
@@ -1225,6 +1228,36 @@ test("real AgentSession: overflow and recoverable length reset and retry once; r
 		assert.equal(repeated.requests.length, 2, "repeated overflow stops after one recovery request");
 	} finally {
 		repeated.close();
+	}
+});
+
+test("real AgentSession: switching to a smaller model recovers through the existing overflow path", async () => {
+	let fixture!: Fixture;
+	fixture = await openFixture({
+		contextWindow: 200_000,
+		script: (request) => {
+			if (request === 1) return assistant(fixture, [{ type: "text", text: "LARGE_MODEL_HISTORY" }], "stop", { usage: usage(150_000) });
+			if (request === 2) return assistant(fixture, [], "error", { errorMessage: "Prompt too long: context exceeds maximum context length" });
+			return assistant(fixture, [{ type: "text", text: "continued on smaller model" }]);
+		},
+	});
+	try {
+		await fixture.session.prompt("LARGE_MODEL_TASK");
+		await fixture.session.waitForIdle();
+		assert.equal(resetMarkers(fixture).length, 0, "150k fits the original model's reserve");
+		const smaller = { ...fixture.model, id: `${fixture.model.id}-small`, contextWindow: 100_000 };
+		fixture.model = smaller;
+		await fixture.session.setModel(smaller, { persist: false });
+		await fixture.session.prompt("CONTINUE_AFTER_MODEL_SWITCH");
+		await fixture.session.waitForIdle();
+		assert.equal(resetMarkers(fixture).length, 1, "model downgrade overflow commits one reset");
+		assert.equal(fixture.requests.length, 3, "one failed small-model request and one recovery request");
+		assert.equal(fixture.session.model?.id, smaller.id, "recovery stays on the selected model");
+		assertFreshRequest(fixture, 2, "LARGE_MODEL_HISTORY");
+		assert.ok(FORCED_CONTINUATIONS.some((line) => text(fixture.requests[2]!).includes(line)), "recovery uses the forced continuation");
+		assert.ok(fixture.sessionManager.getBranch().some((entry) => entry.type === "message" && JSON.stringify(entry.message).includes("CONTINUE_AFTER_MODEL_SWITCH")), "the latest user request survives in raw history");
+	} finally {
+		fixture.close();
 	}
 });
 

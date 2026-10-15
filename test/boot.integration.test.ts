@@ -113,7 +113,7 @@ test("the root boot and reset boot carry durable window identity", async () => {
 	assert.equal(boundary.continue, true);
 	await runHandlers(captured, "turn_start", {}, ctx);
 	await runHandlers(captured, "agent_settled", {}, ctx);
-	assert.deepEqual(noticesOf(ctx).filter((notice) => notice.message.includes("Brain emptied")), [{ message: "🥣 Brain emptied", type: "info" }], "the committed reset is announced once");
+	assert.deepEqual(noticesOf(ctx).filter((notice) => notice.message.includes("Fresh brain")), [{ message: "🥣 Fresh brain", type: "info" }], "the committed reset is announced once");
 	const entries = sessionManager.getBranch();
 	const marker = entries.find((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE);
 	assert.ok(marker && marker.type === "custom");
@@ -432,7 +432,7 @@ test("forced reset confirmation warns about overflow", async () => {
 	const ctx = context(sessionManager, undefined, { tokens: 199_000, contextWindow: 200_000, percent: 99.5 });
 	await commitTurnEndBoundary(captured, sessionManager, ctx);
 	await runHandlers(captured, "agent_settled", {}, ctx);
-	assert.deepEqual(noticesOf(ctx).filter((notice) => notice.message.includes("Brain emptied")), [{ message: "🥣 Brain emptied forcibly: overflow", type: "warning" }]);
+	assert.deepEqual(noticesOf(ctx).filter((notice) => notice.message.includes("forcibly emptied")), [{ message: "🥣 Brain forcibly emptied: overflow", type: "warning" }]);
 });
 
 test("committed reset confirmation survives later work while repair refuses that suffix", async () => {
@@ -450,7 +450,7 @@ test("committed reset confirmation survives later work while repair refuses that
 	assert.equal(resetBoundaryCommitted(ctx, marker.id, windowId), true, "later work does not undo a committed native boundary");
 	await runHandlers(captured, "agent_settled", {}, ctx);
 	await runHandlers(captured, "turn_start", {}, ctx);
-	assert.equal(noticesOf(ctx).filter((notice) => notice.message.includes("Brain emptied")).length, 1);
+	assert.equal(noticesOf(ctx).filter((notice) => notice.message.includes("Fresh brain")).length, 1);
 	assert.equal(resetBoundaryCommitted(ctx, marker.id, "wrong-window"), false);
 
 	const partial = manager();
