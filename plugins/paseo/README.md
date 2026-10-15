@@ -1,6 +1,6 @@
 # Notesoup Paseo plugin
 
-Client-only last-word renderer. See [OVERVIEW.md](OVERVIEW.md) for behavior and the upstream live-event limitation.
+Client-only renderers: last-word sticky cards and paper cards for notes_read/notes_write/notes_update tool calls. See [OVERVIEW.md](OVERVIEW.md) for behavior and the upstream live-event limitation.
 
 ```sh
 cd plugins/paseo

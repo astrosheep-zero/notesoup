@@ -5,7 +5,7 @@ import { NOTES_NAMESPACE, registerOperation } from "../tool-result.js";
 import type { NoteChange } from "../../../src/notes/index.js";
 
 function renderDiff(change: NoteChange): string {
-	return change.kind === "none" ? "" : generateDiffString(change.before, change.after).diff;
+	return change.kind === "none" ? "" : generateDiffString(change.before, change.after, 1).diff;
 }
 
 /** Register the five shared note operations; each one supplies Pi's session identity and nothing else. */
