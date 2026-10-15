@@ -8,7 +8,7 @@ import { currentReset, currentWindowId, isCheckpointBackedReset, isWindowBoot, i
 import { registerResetLifecycle } from "./reset/lifecycle.js";
 import { buildResetDrafts, MAX_LAST_WORD_CHARS, repairResetTail, sanitizeLastWord } from "./reset/artifacts.js";
 import { BOOT_TYPE, MANUAL_WIPE_TYPE } from "./entries.js";
-import { warningContent } from "./text.js";
+import { commandWarningContent } from "./text.js";
 import { buildBootMessage, sendBoot, type IncompleteNotesNotifier } from "./boot.js";
 import { nextHistorySeq } from "./history.js";
 import { errorMessage } from "../../src/error-message.js";
@@ -182,15 +182,15 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 			// Manual wipes close out at settlement, then stop or continue with the prompt. The hidden warning goes out in both cases — triggered when idle,
 			// steered into the running turn when busy — so the agent closes out promptly
 			// instead of the reset waiting for the whole run.
-			const prompt = args.trim() || undefined;
-			const armed = resets.command(requestedWindowId, prompt !== undefined);
+			const prompt = args.trim() ? args : undefined;
+			const armed = resets.command(requestedWindowId, prompt !== undefined, prompt);
 			if (armed === "already-pending") {
 				cmdCtx.ui.notify("🥣 Brain already being emptied", "info");
 				return;
 			}
 			cmdCtx.ui.notify("🥣 Brain being emptied", "info");
 			try {
-				pi.sendMessage({ customType: MANUAL_WIPE_TYPE, content: warningContent(prompt ? `/empty ${prompt}` : undefined), display: false }, { triggerTurn: true, deliverAs: "steer" });
+				pi.sendMessage({ customType: MANUAL_WIPE_TYPE, content: commandWarningContent(prompt !== undefined ? `/empty ${prompt}` : undefined), display: false }, { triggerTurn: true, deliverAs: "steer" });
 			} catch (error) {
 				resets.clear();
 				cmdCtx.ui.notify(`🥣 Brain refused to empty: ${errorMessage(error)}`, "error");

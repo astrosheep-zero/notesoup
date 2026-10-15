@@ -6,7 +6,7 @@ import { renderBootBlock } from "../src/boot/render.js";
 import { loadNotesSnapshot } from "../src/boot/snapshot.js";
 import { DEFAULT_BOOT_TOOL_NAMES, MAPS_BLOCK, NOTES_PROTOCOL_CLOSE_TAG, NOTES_PROTOCOL_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG, renderProtocolBlock } from "../src/boot/text.js";
 import { CLAUDE_WARNING_PROMPT, CLAUDE_WIPE_SENTENCE } from "../plugins/claude/src/text.js";
-import { PI_PRE_RESET_HINTS, LAST_WORD_HINT, warningContent } from "../plugins/pi/text.js";
+import { COMMAND_NOTICE, PI_PRE_RESET_HINTS, LAST_WORD_HINT, commandWarningContent, warningContent } from "../plugins/pi/text.js";
 import { COUNTDOWN_LINE, FORCED_CONTINUATIONS, GUIDANCE_CLOSE_TAG, GUIDANCE_OPEN_TAG, NORMAL_CONTINUATIONS, WARNING_BODY, selectContinuation, tokenBudgetGuidance } from "../src/budget/text.js";
 import type { NoteRow, Scope } from "../src/notes/index.js";
 
@@ -120,9 +120,12 @@ test("the countdown closes the second-tier notice only, in both hosts", () => {
 	assert.ok(pi.endsWith(`\n${GUIDANCE_CLOSE_TAG}`));
 	assert.ok(pi.includes(`\n${LAST_WORD_HINT}\n${COUNTDOWN_LINE}\n`), "the countdown comes after the Pi-only last-word hint");
 	assert.equal(pi.split(COUNTDOWN_LINE).length - 1, 1, "the second tier carries the countdown exactly once");
-	const prompted = warningContent("/empty keep going");
+	const prompted = commandWarningContent("/empty keep going");
 	assert.ok(prompted.includes("<notesoup:next_window_prompt>\n/empty keep going\n</notesoup:next_window_prompt>"));
-	assert.ok(prompted.endsWith(`\n${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}`), "the prompt block does not displace the countdown");
+	assert.ok(prompted.includes(`\n${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}\n<notesoup:next_window_prompt>`), "the prompt block follows the closed notice");
+	assert.equal(commandWarningContent(), `${GUIDANCE_OPEN_TAG}\n${COMMAND_NOTICE.bare}\n${WARNING_BODY}\n${LAST_WORD_HINT}\n${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}`);
+	assert.equal(prompted, `${GUIDANCE_OPEN_TAG}\n${COMMAND_NOTICE.prompted}\n${WARNING_BODY}\n${LAST_WORD_HINT}\n${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}\n<notesoup:next_window_prompt>\n/empty keep going\n</notesoup:next_window_prompt>`);
+	assert.equal(prompted.includes(PI_PRE_RESET_HINTS), false, "manual commands own reset timing");
 	assert.equal(CLAUDE_WARNING_PROMPT.endsWith(`\n${COUNTDOWN_LINE}`), true, "Claude's variant ends the same way");
 	assert.equal(tokenBudgetGuidance(100, "empty_brain").includes(COUNTDOWN_LINE), false, "the first tier never counts down");
 	for (const text of [pi, prompted, CLAUDE_WARNING_PROMPT, tokenBudgetGuidance(100, "empty_brain")]) {
@@ -130,7 +133,10 @@ test("the countdown closes the second-tier notice only, in both hosts", () => {
 	}
 });
 
-test("only Pi's protocol claims the reset clears the human's chat view", () => {
+test("only Pi's protocol explains that reset erases the human's view", () => {
+	assert.equal(PI_PRE_RESET_HINTS, "Anything you say here is erased with the reset — the human can't read it afterward either. Put the handoff in your notes; explanations belong after the reset.\nUnless the human explicitly directs otherwise, decide for yourself when to call empty_brain. Don't keep asking them whether to reset.");
+	assert.equal(COMMAND_NOTICE.bare, "The human ran /empty. Save your notes now and call `empty_brain` immediately. Anything you say here will be erased afterward — put the handoff in your notes. Anything the human sends from now on should be handled after the reset.");
+	assert.equal(COMMAND_NOTICE.prompted, "The human ran /empty. Save your notes now and call `empty_brain` immediately. Anything you say here will be erased afterward — put the handoff in your notes. The prompt below, and anything the human sends from now on, should be handled after the reset.");
 	const pi = renderProtocolBlock({ ...DEFAULT_BOOT_TOOL_NAMES, preResetHints: PI_PRE_RESET_HINTS });
 	assert.ok(pi.includes(`\n${PI_PRE_RESET_HINTS}\n${NOTES_PROTOCOL_CLOSE_TAG}`), "both hints end the protocol, before the closing tag");
 	assert.equal(pi.split(PI_PRE_RESET_HINTS).length - 1, 1, "the hints appear once");

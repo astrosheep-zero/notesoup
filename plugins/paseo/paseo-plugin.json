@@ -1,0 +1,4 @@
+{
+  "id": "notesoup-last-word",
+  "requirements": { "paseo": ">=0.11.2 <0.12.0" }
+}

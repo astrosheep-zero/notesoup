@@ -16,13 +16,14 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { SessionManager as Manager } from "@earendil-works/pi-coding-agent";
 import notesoup from "../plugins/pi/extension.js";
-import { BOOT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, RESET_LAST_WORD_TYPE, RESET_MARKER_TYPE } from "../plugins/pi/entries.js";
+import { BOOT_TYPE, CARRIED_INPUT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, RESET_LAST_WORD_TYPE, RESET_MARKER_TYPE } from "../plugins/pi/entries.js";
 import { MANUAL_WIPE_TYPE } from "../plugins/pi/entries.js";
 import { assertBootHistory, toolContext } from "./helpers/extension.js";
 import { COUNTDOWN_LINE, FORCED_CONTINUATIONS, NORMAL_CONTINUATIONS } from "../src/budget/text.js";
-import { LAST_WORD_HINT, WARNING_CALL_PROMPTED, warningContent } from "../plugins/pi/text.js";
+import { LAST_WORD_HINT, commandWarningContent } from "../plugins/pi/text.js";
 import { historyFromSession, nextHistorySeq } from "../plugins/pi/history.js";
-import { buildResetDrafts, LAST_WORD_PREFIX, MAX_LAST_WORD_CHARS, sanitizeLastWord } from "../plugins/pi/reset/artifacts.js";
+import { buildResetDrafts, inspectResetTail, LAST_WORD_PREFIX, MAX_LAST_WORD_CHARS, repairResetTail, sanitizeLastWord } from "../plugins/pi/reset/artifacts.js";
+import { resetBoundaryCommitted } from "../plugins/pi/reset/committed.js";
 import {
 	initialResetControl,
 	reduceResetControl,
@@ -252,15 +253,14 @@ test("off stops future automatic/manual reset requests while an existing marker 
 	assert.equal(h.sent[0]?.customType, MANUAL_WIPE_TYPE);
 	const warning = h.sessionManager.getBranch().find((entry) => entry.type === "custom_message" && entry.customType === MANUAL_WIPE_TYPE);
 	assert.ok(warning && warning.type === "custom_message");
-	assert.equal(warning.content, warningContent());
+	assert.equal(warning.content, commandWarningContent());
 	const markers = h.sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE);
 	assert.equal(markers.length, 1, "manual command waits for an agent boundary; it does not persist an immediate reset");
 });
 
 test("manual /empty with a prompt shows the human's command line in the close-out", async () => {
 	const h = harness();
-	// Assert on values, not on the warning's wording: the command line must survive verbatim
-	// and must precede the closing instruction, so the prompt cannot read as this window's task.
+	// Structure and carried values are checked here; exact copy lives in model-facing-text tests.
 	await h.runCommand("empty", "Continue reviewing the implementation");
 	const warning = h.sessionManager.getBranch().find((entry) => entry.type === "custom_message" && entry.customType === MANUAL_WIPE_TYPE);
 	assert.ok(warning?.type === "custom_message", "the close-out warning is persisted");
@@ -268,11 +268,10 @@ test("manual /empty with a prompt shows the human's command line in the close-ou
 	const promptLine = "/empty Continue reviewing the implementation";
 	const promptIndex = content.indexOf(promptLine);
 	assert.ok(promptIndex >= 0, "the human's raw command line reaches the closing model");
-	const closingIndex = content.indexOf(WARNING_CALL_PROMPTED);
-	assert.ok(closingIndex > promptIndex, "the closing instruction follows the prompt, so the order stays prompt then act");
+	assert.ok(promptIndex > content.indexOf("</notesoup:budget_notice>"), "deferred work is outside the notice");
 	assert.ok(content.indexOf(COUNTDOWN_LINE) > content.indexOf(LAST_WORD_HINT), "the countdown follows the Pi-only last-word hint");
 	assert.equal(content.split(COUNTDOWN_LINE).length - 1, 1, "the notice carries the countdown once");
-	// The prompt was a note-to-self for the closing window: it never becomes the next window's task.
+	// The same original text becomes the new window's task, not a notes-only hint.
 	const settle = resultEntries(await h.emit("agent_before_settle", {
 		type: "agent_before_settle",
 		entries: [],
@@ -285,7 +284,94 @@ test("manual /empty with a prompt shows the human's command line in the close-ou
 		RESET_MARKER_TYPE,
 		BOOT_TYPE,
 		CONTINUATION_TYPE,
-	], "the reset tail is one boot, one continuation, and no persisted prompt");
+		CARRIED_INPUT_TYPE,
+	], "the reset tail ends with the carried human input");
+	assert.deepEqual(settle.entries.at(-1), { type: "custom_message", customType: CARRIED_INPUT_TYPE, content: "Continue reviewing the implementation", display: true });
+});
+
+test("input arriving during reset construction survives even when the hidden steer is never delivered", async () => {
+	const sessionManager = Manager.inMemory("/private/tmp/notesoup-late-input-test");
+	const handlers = new Map<string, Handler>();
+	const steers: unknown[] = [];
+	const api = {
+		on(name: string, handler: Handler) { handlers.set(name, handler); },
+		sendMessage(message: unknown, options: unknown) { steers.push({ message, options }); },
+	} as unknown as ExtensionAPI;
+	const ctx = {
+		cwd: "/private/tmp", sessionManager, model: undefined, hasPendingMessages: () => false,
+		isProjectTrusted: () => true, ui: { notify() {} },
+	} as unknown as ExtensionContext;
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => { release = resolve; });
+	const lifecycle = registerResetLifecycle(api, {
+		isEnabled: () => true,
+		budget: { automaticResetEnabled: () => true, hardReserveDue: () => false, consumeTurnEnd: () => [], clear() {} },
+		async buildReset(ctx, isCurrent, lastWord, firstSeq, origin) {
+			await gate;
+			return buildResetDrafts(ctx, undefined, isCurrent, lastWord, firstSeq, origin);
+		},
+	});
+	lifecycle.command(`pcw:${sessionManager.getSessionId().slice(0, 8)}:root`, false);
+	lifecycle.request(`pcw:${sessionManager.getSessionId().slice(0, 8)}:root`, "handoff");
+	const pending = handlers.get("agent_before_settle")!({ ...fakeBoundaryEvent(), type: "agent_before_settle" }, ctx);
+	assert.equal(await handlers.get("input")!({ source: "extension", text: "not intercepted" }, ctx), undefined);
+	assert.deepEqual(await handlers.get("input")!({ source: "rpc", text: "  first\ninput  " }, ctx), { action: "handled" });
+	assert.deepEqual(await handlers.get("input")!({ source: "interactive", text: "second" }, ctx), { action: "handled" });
+	release();
+	const boundary = resultEntries([await pending]);
+	assert.equal(boundary.continue, true, "late input overrides the bare command's stop");
+	assert.deepEqual(boundary.entries.slice(-2).map((entry) => entry.type === "custom_message" ? entry.content : null), ["  first\ninput  ", "second"]);
+	assert.equal(steers.length, 2, "steers were queued but never delivered by this host");
+	appendDrafts(sessionManager, boundary.entries);
+	const marker = sessionManager.getBranch().find((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE)!;
+	const windowId = (marker as { data: { windowId: string } }).data.windowId;
+	assert.equal(resetBoundaryCommitted(ctx, marker.id, windowId), true);
+	assert.deepEqual(inspectResetTail(ctx, marker.id, windowId), { boot: true, continuation: true }, "last word and trailing inputs form a complete ordered boundary");
+	await repairResetTail(api, ctx, marker as Parameters<typeof repairResetTail>[2]);
+	assert.equal(steers.length, 2, "repair never duplicates a complete boundary with carried inputs");
+	sessionManager.appendCustomMessageEntry(BOOT_TYPE, "late boot", false, { windowId });
+	assert.equal(inspectResetTail(ctx, marker.id, windowId), undefined, "artifacts cannot restart after carried input");
+	assert.equal(resetBoundaryCommitted(ctx, marker.id, windowId), true, "later malformed work does not undo a committed prefix");
+	sessionManager.appendCompaction("", null, 0);
+	const partialMarker = sessionManager.appendCustomEntry(RESET_MARKER_TYPE, { windowId: "partial" });
+	sessionManager.appendCustomMessageEntry(BOOT_TYPE, "boot", false, { windowId: "partial" });
+	sessionManager.appendCustomMessageEntry(CARRIED_INPUT_TYPE, "too early", true);
+	assert.equal(inspectResetTail(ctx, partialMarker, "partial"), undefined, "repair cannot append a continuation after human content");
+	assert.equal(resetBoundaryCommitted(ctx, partialMarker, "partial"), false);
+});
+
+test("abort during reset construction restores handled input at settlement, once", async () => {
+	const sessionManager = Manager.inMemory("/private/tmp/notesoup-cancelled-build-test");
+	const handlers = new Map<string, Handler>();
+	const sent: Array<{ message: { customType: string; content: unknown; display: boolean }; options?: { triggerTurn?: boolean } }> = [];
+	const api = {
+		on(name: string, handler: Handler) { handlers.set(name, handler); },
+		sendMessage(message: typeof sent[number]["message"], options?: typeof sent[number]["options"]) { sent.push({ message, options }); },
+	} as unknown as ExtensionAPI;
+	const controller = new AbortController();
+	const ctx = { sessionManager, signal: controller.signal, hasPendingMessages: () => false, ui: { notify() {} } } as unknown as ExtensionContext;
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => { release = resolve; });
+	const lifecycle = registerResetLifecycle(api, {
+		isEnabled: () => true,
+		budget: { automaticResetEnabled: () => false, hardReserveDue: () => false, consumeTurnEnd: () => [], clear() {} },
+		async buildReset() { await gate; return []; },
+	});
+	const windowId = `pcw:${sessionManager.getSessionId().slice(0, 8)}:root`;
+	lifecycle.command(windowId, false);
+	const building = handlers.get("agent_before_settle")!({ ...fakeBoundaryEvent(), type: "agent_before_settle" }, ctx);
+	assert.deepEqual(await handlers.get("input")!({ source: "rpc", text: "cancelled during construction" }, ctx), { action: "handled" });
+	controller.abort();
+	release();
+	assert.equal(await building, undefined, "aborted construction must not commit a reset");
+	await handlers.get("agent_settled")!({}, ctx);
+	await handlers.get("agent_settled")!({}, ctx);
+	const restored = sent.filter((item) => item.message.customType === CARRIED_INPUT_TYPE);
+	assert.deepEqual(restored, [{ message: { type: "custom_message", customType: CARRIED_INPUT_TYPE, content: "cancelled during construction", display: true }, options: { triggerTurn: false } }]);
+	// A later command in the same window must not revive the cancelled command's steer.
+	lifecycle.command(windowId, false);
+	const stale = { role: "custom", ...sent[0]!.message };
+	assert.deepEqual(await handlers.get("context_with_system")!({ messages: [stale] }, ctx), { messages: [] });
 });
 
 test("reset construction failure preserves incoming and budget drafts without continuation", async () => {
@@ -583,6 +669,14 @@ test("reset-control: manual overflow keeps stop intent while queued work superse
 	assert.deepEqual(success.state.request, manual.request, "a successful queued turn clears only the overflow, not the manual wipe");
 	assert.equal(success.state.overflow, "idle");
 	assert.equal(reduceResetControl(success.state, { type: "before_settle", facts: beforeSettleFacts() }).effect, "commit-boundary-stop");
+	const prompted = reduceResetControl(manual, { type: "input", windowId, input: "answer after reset" }).state;
+	const called = reduceResetControl(prompted, { type: "tool_request", windowId, lastWord: "saved" }).state;
+	const failed = reduceResetControl(called, { type: "turn_end", facts: turnEndFacts({ overflow: true, failed: true, automaticResetEnabled: false }) }).state;
+	const retry = reduceResetControl(failed, { type: "before_settle", facts: beforeSettleFacts({ failed: true, automaticResetEnabled: false }) });
+	assert.equal(retry.effect, "commit-boundary", "manual input continues even when automatic reset is disabled");
+	assert.equal(retry.origin, "forced", "an overflowing close-out is forced even after a tool request");
+	assert.equal(retry.lastWord, "saved");
+	assert.equal(retry.state.overflow, "spent", "manual recovery spends the same bounded attempt");
 });
 
 test("reset-control: abort and lifecycle transitions clear every pending phase", () => {

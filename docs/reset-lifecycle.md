@@ -1,87 +1,71 @@
 # Reset lifecycle
 
-All lifecycle control flow is native Pi integration. `plugins/pi/reset/lifecycle.ts` owns actual tool requests, command settlement policy, bounded overflow recovery and scheduling. `plugins/pi/budget.ts` reads usage/settings and stages reminders; `src/budget/policy.ts` derives thresholds. `plugins/pi/reset/artifacts.ts` constructs ordered drafts and repairs incomplete suffixes; `plugins/pi/reset/committed.ts` confirms durable boundaries. `plugins/pi/window.ts` owns markers and provider projection. `plugins/pi/runtime.ts` wires commands, tools and public Pi hooks.
-
-Boot acquisition/rendering is shared: `src/boot/snapshot.ts` receives explicit identity, a captured time and an optional scope loader; `src/boot/render.ts` receives the snapshot and logical tool bindings. Pi supplies its existing names. Shared history is an addressed query projection, never an inference transcript or reset scheduler. There is no generic HostEvent or Harness reducer, and no second commit database.
+Pi reset control lives in `plugins/pi/reset/lifecycle.ts`: the pure `reduceResetControl` selects effects; `registerResetLifecycle` adapts public Pi events and constructs boundaries. `budget.ts` stages reminders and checks settings; `reset/artifacts.ts` builds and repairs ordered artifacts; `reset/committed.ts` confirms durable boundaries. `window.ts` owns identities and provider projection; `runtime.ts` wires commands and tools. No Pi source patches, native summarization requests, or second commit database are used.
 
 ## Lifecycle at a glance
 
+**Human input not yet answered must survive a reset and be answered afterward. Only a bare `/empty` with no later human input stops after resetting.**
+
 | Trigger | Behavior |
 | --- | --- |
-| `empty_brain` tool | Record an actual tool request for the current window, including any last word. Without command policy it commits at `turn_end` after the complete tool batch and continues. Under command policy the request remains recorded but waits for settlement. |
-| `/fresh-window` or `/empty` | Store command policy and send a hidden warning (start a turn when idle, steer when running). Wait for successful settlement after queued messages drain, then reset and stop for a bare command or continue for a command with text. Model tool calls remain actual requests; they do not change settlement policy. The text reaches the closing model only, never the new window directly. |
-| Budget warning | Inject a warning at reserve plus runway when automatic reset is enabled. This creates no lifecycle state. A warning alone never authorizes a reset; a tool call or the independent hard-reserve check does. |
-| Hard reserve | Independent safety path: if automatic resets are enabled and completed-turn usage reaches Pi's reserve, commit a boundary at `turn_end`. A pending manual stop survives in a run-scoped `stop-pending` phase; empty automatic follow-up is cancelled before provider work, while real queued user input is answered before stopping. |
-| Abort or error | Never count as successful close-out. Abort clears lifecycle state. An ordinary close-out error is dropped without reset. Manual overflow clears and stops without retry, even with automatic reset disabled; automatic provider-overflow recovery remains separately bounded. |
-| `/compact` while active | Cancel native compaction, which could otherwise summarize pre-reset history back into the active window. A manual attempt receives an actionable `/fresh-window` notice. |
+| `empty_brain` tool | Record the actual call and optional last word. Without command policy, reset after the whole tool batch at `turn_end` and continue. Under command policy, wait for settlement. |
+| `/empty <text>` or `/fresh-window <text>` | Send a hidden close-out warning (trigger when idle, steer when busy), then reset and continue. Carry the argument text verbatim as the next window's human message; it is not merely a notes hint. |
+| Bare `/empty` or `/fresh-window` | Close out, reset, and stop, unless more human input arrives while close-out is pending. |
+| Human input during command close-out | Intercept public `input` events except source `extension`, return `handled`, and stash text/images in command state. Also hidden-steer the bare `<notesoup:next_window_prompt>` block plus original images to the closing model. The originals are carried even if that steer never arrives; any carried input makes the reset continue. |
+| Passive provider overflow / recoverable length | With automatic reset enabled, force a retain-none reset and continue once. Carry the failed logical run's human messages: starting prompt and delivered steering/follow-ups. A run started by our own continuation has no human input to carry. |
+| Command close-out overflow | Force a reset even if automatic reset is disabled. Apply command policy: continue with text/carried input, otherwise stop. The recovery attempt is spent, so an oversized carried prompt cannot loop. |
+| Budget warning | Stage reminders when automatic reset is enabled. Warnings alone never authorize reset. |
+| Hard reserve | Independently reset at `turn_end` when automatic reset is enabled. A bare-command stop latch cancels empty tool follow-ups, but never real queued or carried human input. |
+| Abort / ordinary error | Restore stashed originals as visible user-content custom messages before clearing command state. Explicit abort stays stopped; ordinary close-out errors do not force reset. |
+| `/compact` while active | Cancel native compaction; manual attempts receive a `/fresh-window` notice. |
 
-A new boundary is ordered as:
+Switching to a smaller model does not proactively reset or select another model. If its request overflows, the same bounded automatic recovery carries the unanswered prompt into a fresh window on the selected model. Disabling automatic reset disables passive overflow recovery.
 
-1. A native `compaction` entry with `summary: ""` and `firstKeptEntryId` set to its own ID. This is Pi's retain-none canonical checkpoint; it is not a generated summary request.
+## Boundary order and handoff
+
+One public boundary draft contains, in order:
+
+1. A native `compaction` with `summary: ""` and `firstKeptEntryId: null` (Pi materializes its own ID: retain none).
 2. A `notesoup/reset-marker` custom entry with `{ windowId, origin }`.
 3. A hidden `notesoup/boot` custom message with matching `details.windowId`.
-4. A hidden continuation message carrying the paragraph drawn for that boundary.
-5. If the closing window passed a `last_word`, a visible `notesoup/reset-last-word` message carrying it. Pi boundary drafts do not support ordinary user entries, so the parting line is committed with the reset instead of queued separately.
+4. One hidden continuation paragraph, selected once when the artifact is built.
+5. An optional visible `notesoup/reset-last-word` sticky note.
+6. One visible `notesoup/carried-input` custom message per carried human input, preserving original text/image content and order.
 
-## Handoff origin and the continuation pools
+Boundary drafts cannot contain ordinary user entries. Pi's public custom-message conversion supplies role `user` to the provider, including text/image arrays. Carried inputs are appended atomically with the reset artifacts, not queued as separate prompts; any carried input returns `continue: true`.
 
-The continuation is one randomly selected, complete paragraph from an approved pool, drawn when a new boundary artifact is created and persisted verbatim in the continuation entry; the marker's `origin` field records which pool was used. Rendering, history reads, and reloads never draw again, so a window keeps the handoff it was opened with.
+The origin is `normal` for an actual tool request, otherwise `forced`; overflow recovery is always forced. Each origin has an approved complete-paragraph pool. Construction draws once and persists the paragraph verbatim; rendering, reads, reloads and repair never redraw an existing continuation. Legacy markers without a valid origin default to normal. Other hosts retain their own scheduling: dsh shares one draw across checkpoint and continuation; Claude caches its forced handoff per window.
 
-The origin comes directly from the recorded tool request: with a call it is `normal`, without one it is `forced`. Command policy affects timing and continuation, never origin. A hard-reserve stop latch retains the tool request for construction retry. No separate acknowledgement flag or warning-source inference is needed. Legacy markers without a valid origin default to normal.
+Raw session history remains available. The retain-none checkpoint excludes old conversational context while preserving Pi's empty summary wrapper and system/tool state. Marker-only legacy sessions use boot slicing as a compatibility fallback. A marker is checkpoint-backed only if it directly follows a self-retaining, empty native compaction.
 
-Each host draws once per artifact and shares that value across every representation of it: Pi persists one entry, dsh writes the same paragraph into its checkpoint text and its steered continuation, and Claude — which has no model-facing reset tool, so every Claude reset is forced — caches one line per window so a retried compaction cannot redraw it. A generic read-only text endpoint never draws.
+## Reducer and run state
 
-A manual `/empty <prompt>` command line is not persisted after the reset: it reaches the closing window inside the warning, and the closing model records what the next window needs in notes.
+`ResetControlState` combines a request and a bounded overflow phase:
 
-The raw session branch is preserved for history. New checkpoint-backed branches use Pi's canonical retain-none projection, which preserves the empty summary wrapper and system/tool state while excluding earlier conversational context. Older marker-only sessions use marker slicing as a narrow compatibility fallback. A marker is trusted as checkpoint-backed only when it directly follows an empty native compaction whose `firstKeptEntryId` is the compaction's own ID; a generic preceding compaction is not enough.
-
-`turn_end` preserves incoming entries, consumes budget drafts and appends a reset only for a tool-only request or hard reserve. `agent_before_settle` executes command policy after queued work drains, or performs bounded overflow recovery. Pi owns ensuing continuation and scheduling. Async reset construction captures session/window generations and rechecks them, enabled state and abort status before returning drafts. Stale results are discarded without losing incoming/budget entries; construction failures notify only while current and do not claim a continuation.
-
-## Reducer state
-
-`reduceResetControl` is pure: the adapter supplies all lifecycle facts, and the reducer returns the next state plus a named effect. Its state combines a request phase with a bounded overflow phase:
-
-| State | Meaning |
+| Request | Meaning |
 | --- | --- |
-| `{ phase: "none" }` | No request or command policy is pending. |
-| `{ phase: "pending", windowId, command?, tool? }` | `command: { continueAfterReset }` is settlement policy. `tool: { lastWord? }` records an actual model call, even without a last word. Either or both may exist; neither overwrites the other. No warning source or raw prompt is stored. |
-| `{ phase: "stop-pending", windowId, tool? }` | A manual hard-reserve reset was proposed for the given old window. The stop survives a committed window change; settlement stops without a second wipe (or retries construction if the old window is still active). New wipe requests only acknowledge it. |
+| `none` | No command or tool request. |
+| `pending` | Current `windowId`, optional `tool: { lastWord? }`, and optional `command: { continueAfterReset, inputs? }`. Command inputs retain originals, not prompt-block wrappers. Duplicate commands retain the first policy/text; tool calls do not overwrite command policy. |
+| `stop-pending` | A bare-command hard-reserve reset's stop intent survives the window change. It retains the tool request for construction retry, but stops without a second wipe after commit. |
 
-| `overflow: "idle"` | No overflow recovery is pending. |
-| `overflow: "pending"` | An overflow failure may recover once at pre-settlement. |
-| `overflow: "pending-spent"` | Recovery was already spent in this failure chain. |
-| `overflow: "spent"` | The one recovery has been used until the chain settles. |
+Overflow phases are `idle`, `pending`, `spent`, and `pending-spent`. `turn_end` arms enabled recovery; `agent_before_settle` waits for queued work and spends at most one attempt. A successful queued turn supersedes the failure. Command overflow also spends the attempt before continuing. Abort, final settlement, session start/tree/shutdown and `/notesoup off` clear transient state.
 
-### Transition rules
+The adapter collects actual user `message_end` content until settlement or a successful reset boundary. Low-level `agent_start` events do not clear it: Pi can start additional loops while draining follow-ups/recovering. Custom boot/warning/continuation messages are never mistaken for human input. Successful boundary construction clears this run collection, so an automatic continuation does not replay old input.
 
-- `command(windowId, continueAfterReset)` stores settlement policy. Duplicate same-window commands retain the first policy; a pending tool request is retained.
-- `tool_request(windowId, lastWord?)` records an actual call without changing command policy. Tool-only duplicates keep the first request; under command policy, repeated calls may supply the first nonempty last word.
-- `turn_end` clears on abort. Overflow preserves command policy and its tool request; otherwise automatic recovery is armed only when enabled and unqueued. Other errors drop pending requests. Success commits a tool-only request or hard-reserve reset. Hard reserve under a bare command retains the cross-window `stop-pending` latch; a continuing command needs no stop latch.
-- `agent_before_settle` waits for queued work. Command overflow resets even with automatic recovery disabled, honoring command continuation policy. Other overflow recovery gets one attempt. A committed stop latch stops without a second wipe; an uncommitted one can retry construction. Otherwise a successful command settles and resets. No command means no ordinary settle reset.
-- `agent_settled`, session start/tree navigation/shutdown, `/notesoup off`, and abort clear transient request state. Durable checkpoint/marker history remains authoritative after transient state is gone.
+Command state remains live during asynchronous notes acquisition. Inputs arriving during construction join that same boundary and override a proposed stop. Hidden steers carry window/command identity; provider projection excludes them once that command ends, including steers Pi delivers only after the reset. Originals remain available exactly once as carried input. Construction captures session/window generations and rechecks identity, enabled state and abort status before returning drafts. Stale work preserves incoming/budget entries but discards reset drafts; construction failures notify only while current and do not claim continuation. If close-out cannot commit, stashed originals are restored with public `sendMessage(..., { triggerTurn: false })`, including cancellation during construction; clearing command state must not erase input already reported as handled.
 
-After a manual safety reset, `context_with_system` verifies the committed checkpoint/marker/boot/continuation before using public `ctx.abort()` to cancel Pi's otherwise unavoidable tool-batch follow-up, returning a system-only safe context. Pending messages or a real user message after the reset marker bypass cancellation so queued work is not swallowed. A follow-up queue may require Pi's ordinary tool follow-up to finish before delivery; the stop intent remains armed until that work settles. Abort/settlement clears the run-scoped latch, so later user prompts work normally.
+After a manual safety reset, `context_with_system` checks the committed boundary before using public `ctx.abort()` to cancel an unavoidable empty tool follow-up with system-only context. Pending messages, ordinary user entries or carried inputs after the marker bypass cancellation. Later user prompts are not affected by the run-scoped stop latch.
 
-Budget warnings need no rearming or consumption in the lifecycle. Direct tool calls remain valid without a warning. Actual abort, synthetic assistant abort and generic provider failure keep their existing cleanup semantics.
+## Warnings, projection and repair
 
-## Budget staging and notifications
+Budget reminders are staged once per window at reserve plus reminder margin, then reserve plus warning runway. Hard reserve remains independent. Budget and command warnings use different types. The final budget warning notifies at first provider injection, not durability; early guidance stays UI-silent. Budget drafts are instance-local and discarded on abort, failed turn, transition or window mismatch. Active-window usage and the exact public `SettingsManager` authority determine thresholds.
 
-The early reminder is staged once per window at `reserve + reminderMarginTokens`; the final warning at `reserve + WARNING_RUNWAY_TOKENS`, only when automatic compaction is enabled. Hard reserve remains independent. Budget and command warnings have distinct message types, so an aborted command cannot suppress a later budget warning. Durable warning deduplication concerns only injection; no transient automatic close-out is armed or rearmed.
+Manual warnings begin with the `/empty` notice inside `<notesoup:budget_notice>`, followed by `WARNING_BODY`, the last-word hint and countdown. Optional command text sits after the closing tag in `<notesoup:next_window_prompt>`. They omit budget timing hints. Pi's boot protocol and budget warnings explain that reset erases the human's view and leave timing to the model unless directed otherwise; other hosts do not inherit that Pi-only claim.
 
-Pi's boot protocol and second-tier warning include pre-reset hints: the reset clears the human's chat view, so long explanations belong after it; the model manages reset timing unless directed otherwise. Those hints are Pi-only. Dsh's second-tier notice ends with the same countdown as Pi and Claude.
+`context_with_system` selects the boot by durable window identity, using Pi's canonical checkpoint projection or legacy slicing. Missing boot aborts safely instead of exposing raw history. Usage estimates use the same projection decision. `/tree` summaries are suppressed when crossing reset branches because native branch summarization bypasses this projection.
 
-Budget drafts are instance-local and are consumed at turn end. They are discarded on abort, failed turn, transition, or window mismatch. The final warning notifies the UI when first injected into a model request, before the response or tool execution, rather than waiting for durability. Aborting the request does not retract the notice or repeat it on retry in the same window; early guidance remains UI-silent. Active-window usage and the exact `SettingsManager` authority drive threshold checks; default file-backed policy is cached per extension instance, while injected managers are read through their public API.
+`resetBoundaryCommitted` validates checkpoint -> marker -> matching hidden boot -> hidden continuation; trailing last words, carried input or later conversation cannot undo that committed prefix. `inspectResetTail` checks the entire repairable suffix: optional last word and carried inputs must follow the continuation, with no duplicate/misordered artifacts or later conversation. A carried input before boot/continuation blocks repair rather than allowing metadata to be appended after human content. Startup/tree repair only fills missing boot/continuation when safe, rechecking lifecycle identity after notes acquisition. UI success notices use committed confirmation, not repairability.
 
-## Projection, repair, and history
+## Validation
 
-`context_with_system` selects the active boot by durable `details.windowId`. For a verified native checkpoint, Pi's canonical projection is used directly; for a legacy marker-only reset, the compatibility projection slices at the matching boot. The projection preserves system/tool state and later prompt patches. If the boot is absent, the runtime aborts safely instead of sending raw history. Usage estimation uses the same checkpoint-aware projection decision.
-
-Commit confirmation and repair are different native facts. `resetBoundaryCommitted` validates a checkpoint-backed marker followed by its matching hidden boot and hidden continuation; later conversation does not undo that commit. `inspectResetTail` instead asks whether the entire suffix remains safe to repair, refusing later conversation, foreign messages, later markers or misordered/duplicate artifacts. UI success notices use confirmation, not the repair predicate, and remain committed-only.
-
-Startup/tree repair is narrow: it may complete a repairable marker tail when later conversation does not make the missing metadata ambiguous. It awaits the notes snapshot and rechecks lifecycle/window identity before sending a repaired boot or continuation. A missing continuation is drawn from the pool its marker's `origin` names; an existing continuation is never replaced, never redrawn, and its marker is never rewritten. Legacy marker-only tails remain supported; repair never moves a boundary or promotes an arbitrary compaction to a retain-none checkpoint. `/tree` summary generation is suppressed with an empty summary when either branch crosses a reset, because the raw summary generator bypasses the provider projection.
-
-## Validation and known limits
-
-The test suite combines isolated reducer tests with scripted SDK tests executing Pi's real agent loop without model/network calls. The retained scripted AgentSession tests cover idle and streaming manual commands whose close-outs commit at settlement and stop without a fresh-window continuation, direct wipe without warning, budget close-out, same-window concurrent command deduplication, actual and synthetic abort/error cleanup, queued steering/follow-up delivery before the stop, hard-reserve and bounded-overflow recovery, successive resets, and real SessionManager file reopen after two retain-none checkpoints. It also checks raw-history preservation, canonical projection, empty-summary retention, system/tool state, warning/marker order, and fresh-window continuation.
-
-Focused regression tests distinguish committed-boundary confirmation from safe suffix repair even after later work. Resolved-AST dependency tests reject shared imports of native adapters and SDKs, including indirect type/re-export/dynamic paths. Retained behavioral cases are representative rather than exhaustive. Tree-summary suppression has no dedicated retained test, and external-provider behavior, every malformed persisted shape, and every filesystem failure mode are not established by this suite.
+Scripted SDK tests run Pi's real agent loop without network calls: smaller-model overflow and prompt replay, command text, bare stop, intercepted text/images, hard-reserve handling, overflowing close-out and bounded retry. They also cover passive tool-loop steering/follow-ups and input-free automatic continuations. Focused tests check late input during asynchronous construction, stale queued steer exclusion, abort/error restoration, ordered carry artifacts, commit confirmation, safe repair, canonical projection and persisted history. External-provider behavior and every malformed persisted/filesystem case are not established by this suite.

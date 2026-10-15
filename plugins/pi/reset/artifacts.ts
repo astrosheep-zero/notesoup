@@ -1,11 +1,22 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext, SessionBoundaryDraft, SessionEntry } from "@earendil-works/pi-coding-agent";
-import { BOOT_TYPE, CONTINUATION_TYPE, RESET_LAST_WORD_TYPE, RESET_MARKER_TYPE } from "../entries.js";
+import { BOOT_TYPE, CARRIED_INPUT_TYPE, CONTINUATION_TYPE, RESET_LAST_WORD_TYPE, RESET_MARKER_TYPE } from "../entries.js";
 import { selectContinuation, type ResetOrigin } from "../../../src/budget/text.js";
 import { isForeignResetTailEntry, isWindowBootEntry, isWindowMarker, markerResetOrigin, type WindowMarker } from "../window.js";
 import { buildBootMessage, sendBoot, type IncompleteNotesNotifier } from "../boot.js";
 
 export type ResetTailState = { readonly boot: boolean; readonly continuation: boolean };
+
+/** Original user content, including images; custom boundary messages become LLM user messages. */
+export type CarriedInput = Extract<SessionBoundaryDraft, { type: "custom_message" }>["content"];
+
+export function carriedInputDrafts(inputs: readonly CarriedInput[]): SessionBoundaryDraft[] {
+	return inputs.map((content) => ({ type: "custom_message", customType: CARRIED_INPUT_TYPE, content, display: true }));
+}
+
+export function isCarriedInputEntry(entry: SessionEntry): boolean {
+	return entry.type === "custom_message" && entry.customType === CARRIED_INPUT_TYPE && entry.display === true;
+}
 
 /** A sticky note, not a letter: over this, empty_brain refuses instead of truncating. */
 export const MAX_LAST_WORD_CHARS = 250;
@@ -33,8 +44,8 @@ function sendContinuation(pi: ExtensionAPI, content: string): void {
 
 /**
  * The closed, ordered reset shape: retain-none native checkpoint, marker, matching boot,
- * continuation, then an optional parting line. The prompt is not persisted here — it reached the
- * closing window inside the warning. The boot snapshot is acquired asynchronously after capturing
+ * continuation, then an optional parting line. The lifecycle appends carried inputs in the same
+ * boundary after these artifacts. The boot snapshot is acquired asynchronously after capturing
  * this identity. The continuation is drawn from the pool its origin names, here, once: the caller
  * persists the returned text and no read, render, or repair draws it again. The origin defaults to
  * `normal`, the same reading a legacy marker with no origin gets.
@@ -77,6 +88,8 @@ export function inspectResetTail(ctx: ExtensionContext, markerId: string, window
 	if (markerIndex < 0) return undefined;
 	let boot = false;
 	let continuation = false;
+	let lastWord = false;
+	let carried = false;
 	for (const entry of branch.slice(markerIndex + 1)) {
 		if (isWindowBootEntry(entry, windowId)) {
 			// The boot is unique and must precede the continuation; a repeat or a late
@@ -90,9 +103,17 @@ export function inspectResetTail(ctx: ExtensionContext, markerId: string, window
 			continuation = true;
 			continue;
 		}
-		if (isForeignResetTailEntry(entry)) {
-			return undefined;
+		if (entry.type === "custom_message" && entry.customType === RESET_LAST_WORD_TYPE) {
+			if (!continuation || lastWord || carried || entry.display !== true) return undefined;
+			lastWord = true;
+			continue;
 		}
+		if (isCarriedInputEntry(entry)) {
+			if (!continuation) return undefined;
+			carried = true;
+			continue;
+		}
+		if (isForeignResetTailEntry(entry)) return undefined;
 	}
 	return { boot, continuation };
 }

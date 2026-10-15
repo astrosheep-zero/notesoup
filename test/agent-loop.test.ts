@@ -14,15 +14,19 @@ import {
 	SettingsManager,
 	type AgentSession,
 	type ExtensionAPI,
+	type ExtensionFactory,
 	type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import notesoup, { createNotesoup } from "../plugins/pi/extension.js";
-import { BOOT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, MANUAL_WIPE_TYPE, RESET_MARKER_TYPE, WARNING_TYPE } from "../plugins/pi/entries.js";
+import { BOOT_TYPE, CARRIED_INPUT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, MANUAL_WIPE_TYPE, NEXT_WINDOW_PROMPT_TYPE, RESET_MARKER_TYPE, WARNING_TYPE } from "../plugins/pi/entries.js";
 import { historyFromSession } from "../plugins/pi/history.js";
 import { assertBootHistory } from "./helpers/extension.js";
 import { NOTES_PROTOCOL_OPEN_TAG, WINDOW_IDENTITY_OPEN_TAG } from "../src/boot/text.js";
 import { FORCED_CONTINUATIONS, GUIDANCE_OPEN_TAG, NORMAL_CONTINUATIONS, warningPrompt } from "../src/budget/text.js";
-import { warningContent } from "../plugins/pi/text.js";
+import { commandWarningContent, promptBlock } from "../plugins/pi/text.js";
+import { registerResetLifecycle } from "../plugins/pi/reset/lifecycle.js";
+import { buildResetDrafts } from "../plugins/pi/reset/artifacts.js";
+import { currentWindowId } from "../plugins/pi/window.js";
 
 type StreamScript = (request: number, context: AgentContext) => AssistantMessage | Promise<AssistantMessage>;
 type Hook = (pi: ExtensionAPI, getSession: () => AgentSession, requests: AgentContext[]) => void;
@@ -64,6 +68,7 @@ async function openFixture(options: {
 	sessionManager?: SessionManager;
 	seed?: (sessionManager: SessionManager) => void;
 	script: StreamScript;
+	extensionFactory?: ExtensionFactory;
 	hook?: Hook;
 }): Promise<Fixture> {
 	const dir = options.cwd ?? mkdtempSync(join(tmpdir(), "notesoup-agent-loop-"));
@@ -128,7 +133,7 @@ async function openFixture(options: {
 		noPromptTemplates: true,
 		systemPromptOverride: () => options.systemPrompt ?? "Use the tools as requested.",
 		agentsFilesOverride: () => ({ agentsFiles: [] }),
-		extensionFactories: [...(options.codemode ? [createCodemodeExtension({ models: false })] : []), options.settingsManager ? createNotesoup({ settingsManager }) : notesoup, (pi) => {
+		extensionFactories: [...(options.codemode ? [createCodemodeExtension({ models: false })] : []), options.extensionFactory ?? (options.settingsManager ? createNotesoup({ settingsManager }) : notesoup), (pi) => {
 		options.hook?.(pi, () => session, requests);
 	}],
 	});
@@ -253,6 +258,11 @@ function continuationLinesIn(body: string): string[] {
 	return CONTINUATION_JSON_LINES.filter((line) => body.includes(line));
 }
 const WARNING_JSON = JSON.stringify(warningPrompt()).slice(1, -1);
+const COMMAND_WARNING_JSON = JSON.stringify(commandWarningContent()).slice(1, -1);
+
+function assertUserContent(context: AgentContext | undefined, content: unknown): void {
+	assert.ok(context?.messages.some((message) => message.role === "user" && JSON.stringify(message.content) === JSON.stringify(content)), "carried input reaches the provider verbatim as user content");
+}
 
 /** The committed-reset success notice: fresh wording for the model's own wipe, forced for system resets. */
 const isResetSuccessNotice = (notice: string) => notice.includes("🥣 Fresh brain") || notice.includes("🥣 Brain forcibly emptied");
@@ -512,7 +522,7 @@ test("real AgentSession: manual command spans its tool batch and stops at settle
 		script: (request, context) => {
 			if (request === 1) return assistant(fixture, [{ type: "text", text: "before manual reset" }]);
 			if (request === 2) {
-				assert.ok(text(context).includes(WARNING_JSON), "idle /empty sends the shared checkpoint prompt");
+				assert.ok(text(context).includes(COMMAND_WARNING_JSON), "idle /empty sends the manual close-out notice");
 				return assistant(fixture, [{ type: "toolCall", id: "manual-note", name: "notes_write", arguments: { address: "manual-a.md", content: "MANUAL_NOTE_ALPHA" } }], "toolUse");
 			}
 			assert.equal(request, 3, "the close-out turn finishes in the old window");
@@ -527,6 +537,7 @@ test("real AgentSession: manual command spans its tool batch and stops at settle
 		await fixture.session.waitForIdle();
 		assert.equal(fixture.requests.length, 3, "the run stops at settlement instead of continuing in the fresh window");
 		assert.equal(resetMarkers(fixture).length, 1);
+		assert.equal(fixture.sessionManager.getBranch().some((entry) => entry.type === "custom_message" && entry.customType === CARRIED_INPUT_TYPE), false, "a bare command with no later human input carries nothing");
 		const branch = fixture.sessionManager.getBranch();
 		const warningIndex = branch.findIndex((entry) => entry.type === "custom_message" && entry.customType === MANUAL_WIPE_TYPE);
 		const checkpointIndex = branch.findIndex((entry) => entry.type === "compaction");
@@ -534,7 +545,7 @@ test("real AgentSession: manual command spans its tool batch and stops at settle
 		assert.ok(warningIndex >= 0 && warningIndex < checkpointIndex, "the idle warning is durable before the checkpoint");
 		const warning = branch[warningIndex];
 		assert.ok(warning?.type === "custom_message");
-		assert.equal(warning.content, warningContent());
+		assert.equal(warning.content, commandWarningContent());
 		assert.equal(branch[markerIndex - 1]?.id, branch[checkpointIndex]?.id);
 		assert.ok(branch.slice(0, checkpointIndex).some((entry) => entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "notes_write"), "note write finishes before the checkpoint");
 		const marker = resetMarkers(fixture)[0]!;
@@ -551,45 +562,34 @@ test("real AgentSession: manual command spans its tool batch and stops at settle
 	}
 });
 
-test("real AgentSession: a clear command keeps its prompt out of the fresh window and resumes once", async () => {
-	for (const mode of ["empty", "fresh-window", "hard-reserve", "overflow"] as const) {
-		let fixture!: Fixture;
-		const prompt = 'AFTER_CLEAR_PROMPT_SENTINEL /cm "literal text"';
-		// `text()` serializes to JSON, so a quoted argument reaches the provider in its escaped form.
-		const promptJson = JSON.stringify(prompt).slice(1, -1);
-		fixture = await openFixture({
-			compactionEnabled: mode === "hard-reserve",
-			script: (request, context) => {
-				if (request === 1) return assistant(fixture, [{ type: "text", text: "initial work" }]);
-				if (request === 2) {
-					assert.ok(text(context).includes(promptJson), "the closing window sees the human's command line verbatim");
-					if (mode === "overflow") return assistant(fixture, [], "error", { errorMessage: "Prompt too long: context exceeds maximum context length" });
-					return mode === "hard-reserve"
-						? assistant(fixture, [{ type: "toolCall", id: "prompt-note", name: "notes_write", arguments: { address: "prompt-note.md", content: "saved" } }], "toolUse", { usage: usage(80_000) })
-						: assistant(fixture, [{ type: "text", text: "notes complete" }]);
-				}
-				assert.equal(request, 3, "exactly one fresh-window request");
-				assert.equal(text(context).includes("PROMPT_RESET_OLD_SENTINEL"), false);
-				assert.equal(text(context).includes("AFTER_CLEAR_PROMPT_SENTINEL"), false, "the fresh window is not handed the prompt");
-				assert.equal(text(context).includes("literal text"), false, "not even the quoted argument survives the reset");
-				assert.deepEqual(continuationLinesIn(text(context)).length, 1, "wake-up prose opens the fresh window, once");
-				return assistant(fixture, [{ type: "text", text: "prompt handled" }]);
-			},
-		});
-		try {
-			await fixture.session.prompt("PROMPT_RESET_OLD_SENTINEL");
-			await fixture.session.prompt(`/${mode === "empty" ? "empty" : "fresh-window"}   ${prompt}  `);
-			await fixture.session.waitForIdle();
-			assert.equal(fixture.requests.length, 3);
-			assert.equal(resetMarkers(fixture).length, 1);
-			const branch = fixture.sessionManager.getBranch();
-			const continuationIndex = branch.findIndex((entry) => entry.type === "custom_message" && entry.customType === CONTINUATION_TYPE);
-			assert.equal(branch.slice(continuationIndex + 1).filter((entry) => entry.type === "custom_message").length, 0, "nothing is injected after the continuation");
-			assert.ok(fixture.notices.some(isResetSuccessNotice));
-		} finally {
-			fixture.close();
-		}
-	}
+test("real AgentSession: /empty text is carried verbatim and answered after close-out", async () => {
+	let fixture!: Fixture;
+	const prompt = 'AFTER_CLEAR_PROMPT_SENTINEL /cm "literal text"  \nsecond line';
+	fixture = await openFixture({
+		compactionEnabled: false,
+		script: (request, context) => {
+			if (request === 1) return assistant(fixture, [{ type: "text", text: "initial work" }]);
+			if (request === 2) {
+				assert.ok(text(context).includes(JSON.stringify(promptBlock(`/empty ${prompt}`)).slice(1, -1)));
+				return assistant(fixture, [{ type: "toolCall", id: "prompt-wipe", name: "empty_brain", arguments: { last_word: "saved" } }], "toolUse");
+			}
+			assert.equal(request, 3);
+			assertFreshRequest(fixture, 2, "PROMPT_RESET_OLD_SENTINEL");
+			assertUserContent(context, [{ type: "text", text: prompt }]);
+			return assistant(fixture, [{ type: "text", text: "prompt handled" }]);
+		},
+	});
+	try {
+		await fixture.session.prompt("PROMPT_RESET_OLD_SENTINEL");
+		await fixture.session.prompt(`/empty ${prompt}`);
+		await fixture.session.waitForIdle();
+		assert.equal(fixture.requests.length, 3);
+		assert.equal(resetMarkers(fixture).length, 1);
+		const branch = fixture.sessionManager.getBranch();
+		const continuationIndex = branch.findIndex((entry) => entry.type === "custom_message" && entry.customType === CONTINUATION_TYPE);
+		assert.deepEqual(branch.slice(continuationIndex + 1, continuationIndex + 3).map((entry) => entry.type === "custom_message" ? entry.customType : entry.type), ["notesoup/reset-last-word", CARRIED_INPUT_TYPE]);
+		assert.ok(fixture.notices.some(isResetSuccessNotice));
+	} finally { fixture.close(); }
 });
 
 test("real AgentSession: whitespace-only /fresh-window clears and stops", async () => {
@@ -689,58 +689,26 @@ test("real AgentSession: manual hard-reserve reset stops clean and mixed-tool tu
 	}
 });
 
-test("real AgentSession: manual safety reset answers queued user input once before stopping", async () => {
+test("real AgentSession: overflowing /empty close-out forces a reset and retries its text only once", async () => {
 	let fixture!: Fixture;
 	fixture = await openFixture({
-		hook: (pi, getSession) => pi.on("tool_call", async (event) => {
-			if (event.toolName === "notes_write") await getSession().followUp("PRESSURE_QUEUED_USER_INPUT");
-		}),
 		script: (request, context) => {
-			if (request === 1) return assistant(fixture, [{ type: "text", text: "before wipe" }]);
-			if (request === 2) return assistant(fixture, [{ type: "toolCall", id: "queued-pressure-note", name: "notes_write", arguments: { address: "queued-pressure.md", content: "checkpoint" } }], "toolUse", { usage: usage(80_000) });
-			assert.equal(text(context).includes("QUEUED_SAFETY_OLD_SENTINEL"), false);
-			if (request === 3) {
-				assert.equal(text(context).includes("PRESSURE_QUEUED_USER_INPUT"), false, "Pi's tool follow-up precedes followUp queue delivery");
-				return assistant(fixture, [{ type: "text", text: "wipe complete; waiting for queued input" }]);
-			}
-			assert.equal(request, 4);
-			assert.equal(text(context).split("PRESSURE_QUEUED_USER_INPUT").length - 1, 1);
-			return assistant(fixture, [{ type: "text", text: "queued user input handled" }]);
-		},
-	});
-	try {
-		await fixture.session.prompt("QUEUED_SAFETY_OLD_SENTINEL");
-		await fixture.session.prompt("/empty");
-		await fixture.session.waitForIdle();
-		assert.equal(fixture.requests.length, 4, "queued input is answered once after Pi's tool follow-up, then the stop lands");
-		assert.equal(resetMarkers(fixture).length, 1);
-		assert.equal(fixture.streamSignals.at(-1), false, "real user input must not be cancelled as an automatic follow-up");
-	} finally {
-		fixture.close();
-	}
-});
-
-test("real AgentSession: manual overflow wipes and stops even with automatic reset disabled", async () => {
-	let fixture!: Fixture;
-	fixture = await openFixture({
-		compactionEnabled: false,
-		script: (request) => {
 			if (request === 1) return assistant(fixture, [{ type: "text", text: "before overflow" }]);
-			assert.equal(request, 2, "manual overflow must not trigger a recovery request");
+			assert.ok(request <= 3, "an oversized carried prompt cannot loop");
+			if (request === 3) assertUserContent(context, [{ type: "text", text: "OVERSIZED_MANUAL_PROMPT" }]);
 			return assistant(fixture, [], "error", { errorMessage: "Prompt too long: context exceeds maximum context length" });
 		},
 	});
 	try {
 		await fixture.session.prompt("MANUAL_OVERFLOW_OLD_SENTINEL");
-		await fixture.session.prompt("/empty");
+		await fixture.session.prompt("/empty OVERSIZED_MANUAL_PROMPT");
 		await fixture.session.waitForIdle();
-		assert.equal(fixture.requests.length, 2);
+		assert.equal(fixture.requests.length, 3);
 		assert.equal(resetMarkers(fixture).length, 1);
-		assert.equal(JSON.stringify(fixture.sessionManager.buildSessionProjection().messages).includes("MANUAL_OVERFLOW_OLD_SENTINEL"), false);
+		assertFreshRequest(fixture, 2, "MANUAL_OVERFLOW_OLD_SENTINEL");
+		assert.equal((resetMarkers(fixture)[0] as { data: { origin: string } }).data.origin, "forced");
 		assert.ok(fixture.notices.some(isResetSuccessNotice));
-	} finally {
-		fixture.close();
-	}
+	} finally { fixture.close(); }
 });
 
 test("real AgentSession: streaming /empty steers a close-out and stops at settlement", async () => {
@@ -758,7 +726,7 @@ test("real AgentSession: streaming /empty steers a close-out and stops at settle
 				return assistant(fixture, [{ type: "text", text: "current response finished" }]);
 			}
 			assert.equal(request, 2, "the steered warning gets exactly one close-out turn before the run stops");
-			assert.ok(text(context).includes(WARNING_JSON), "the busy warning is delivered to the running agent");
+			assert.ok(text(context).includes(COMMAND_WARNING_JSON), "the busy warning is delivered to the running agent");
 			return assistant(fixture, [{ type: "text", text: "close-out complete" }]);
 		},
 	});
@@ -858,44 +826,163 @@ test("real AgentSession: user abort, synthetic aborted response, and generic err
 	}
 });
 
-test("real AgentSession: steering and follow-up queued during a manual reset are answered before the stop", async () => {
-	for (const delivery of ["steer", "followUp"] as const) {
-		let fixture!: Fixture;
-		let announceStarted!: () => void;
-		let releaseResponse!: () => void;
-		const started = new Promise<void>((resolve) => { announceStarted = resolve; });
-		const gate = new Promise<void>((resolve) => { releaseResponse = resolve; });
-		fixture = await openFixture({
-			compactionEnabled: false,
-			script: async (request, context) => {
-				if (request === 1) {
-					assert.ok(text(context).includes(WARNING_JSON));
-					announceStarted();
-					await gate;
-				}
-				if (request === 2) {
-					assert.ok(text(context).includes(WARNING_JSON), `${delivery} is answered in the old window before the reset commits`);
-					assert.equal(text(context).split("QUEUED_DURING_FALLBACK").length - 1, 1, `${delivery} is delivered once`);
-				}
-				return assistant(fixture, [{ type: "text", text: `response ${request}` }]);
-			},
-		});
-		try {
-			const command = fixture.session.prompt("/empty");
-			await started;
-			if (delivery === "steer") fixture.session.steer("QUEUED_DURING_FALLBACK");
-			else fixture.session.followUp("QUEUED_DURING_FALLBACK");
-			releaseResponse();
-			await command;
-			await fixture.session.waitForIdle();
-			assert.equal(fixture.requests.length, 2, `${delivery} is answered, then the reset commits at settlement with no continuation`);
-			assert.equal(resetMarkers(fixture).length, 1, `${delivery} does not duplicate the reset`);
-			assert.equal(fixture.sessionManager.getBranch().filter((entry) => entry.type === "message" && JSON.stringify(entry.message).includes("QUEUED_DURING_FALLBACK")).length, 1);
-		} finally {
-			releaseResponse();
-			fixture.close();
-		}
-	}
+test("real AgentSession: input during bare /empty is hidden-steered, carried with images, and answered after a safety reset", async () => {
+	let fixture!: Fixture;
+	let started!: () => void;
+	let release!: () => void;
+	const ready = new Promise<void>((resolve) => { started = resolve; });
+	const gate = new Promise<void>((resolve) => { release = resolve; });
+	const input = "DEFERRED_HUMAN_INPUT\n  verbatim";
+	const image = { type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" };
+	fixture = await openFixture({
+		script: async (request, context) => {
+			if (request === 1) {
+				started(); await gate;
+				return assistant(fixture, [{ type: "text", text: "saving notes" }]);
+			}
+			if (request === 2) {
+				assertUserContent(context, [{ type: "text", text: promptBlock(input) }, image]);
+				return assistant(fixture, [{ type: "toolCall", id: "deferred-pressure", name: "notes_write", arguments: { address: "deferred.md", content: "saved" } }], "toolUse", { usage: usage(80_000) });
+			}
+			assert.equal(request, 3, "carried input continues instead of taking the bare-command stop");
+			assertFreshRequest(fixture, 2, "saving notes");
+			assertUserContent(context, [{ type: "text", text: input }, image]);
+			return assistant(fixture, [{ type: "text", text: "deferred input answered" }]);
+		},
+	});
+	try {
+		const command = fixture.session.prompt("/empty");
+		await ready;
+		await fixture.session.prompt(input, { images: [image], streamingBehavior: "followUp" });
+		release();
+		await command;
+		await fixture.session.waitForIdle();
+		assert.equal(fixture.requests.length, 3);
+		assert.equal(resetMarkers(fixture).length, 1);
+		const branch = fixture.sessionManager.getBranch();
+		const steer = branch.find((entry) => entry.type === "custom_message" && entry.customType === NEXT_WINDOW_PROMPT_TYPE);
+		assert.ok(steer?.type === "custom_message");
+		assert.equal(steer.display, false);
+		assert.deepEqual(steer.content, [{ type: "text", text: promptBlock(input) }, image], "the bare block and original images reach the closing model");
+		assert.equal(branch.filter((entry) => entry.type === "custom_message" && entry.customType === CARRIED_INPUT_TYPE).length, 1);
+		assert.equal(fixture.streamSignals.at(-1), false, "the stop-pending safeguard cannot swallow carried input");
+	} finally { release(); fixture.close(); }
+});
+
+test("real AgentSession: a hidden steer queued during reset construction is not replayed beside carried input", async () => {
+	let fixture!: Fixture;
+	let started!: () => void;
+	let release!: () => void;
+	const building = new Promise<void>((resolve) => { started = resolve; });
+	const gate = new Promise<void>((resolve) => { release = resolve; });
+	const input = "LATE_BUILD_INPUT";
+	fixture = await openFixture({
+		tools: [],
+		extensionFactory: (pi) => {
+			const lifecycle = registerResetLifecycle(pi, {
+				isEnabled: () => true,
+				budget: { automaticResetEnabled: () => false, hardReserveDue: () => false, consumeTurnEnd: () => [], clear() {} },
+				async buildReset(ctx, isCurrent, lastWord, firstSeq, origin) {
+					started(); await gate;
+					return buildResetDrafts(ctx, undefined, isCurrent, lastWord, firstSeq, origin);
+				},
+			});
+			pi.on("before_agent_start", (_event, ctx) => { lifecycle.command(currentWindowId(ctx), false); });
+		},
+		script: (request, context) => {
+			if (request === 1) return assistant(fixture, [{ type: "text", text: "closing old window" }]);
+			assert.equal(request, 2);
+			assertUserContent(context, [{ type: "text", text: input }]);
+			assert.equal(text(context).includes("notesoup:next_window_prompt"), false, "the stale queued steer must not duplicate the carried input");
+			return assistant(fixture, [{ type: "text", text: "late input answered" }]);
+		},
+	});
+	try {
+		const closing = fixture.session.prompt("close out");
+		await building;
+		await fixture.session.prompt(input, { streamingBehavior: "steer" });
+		release();
+		await closing;
+		await fixture.session.waitForIdle();
+		assert.equal(fixture.requests.length, 2);
+		assert.equal(text(fixture.requests[1]).includes("notesoup:next_window_prompt"), false);
+		const branch = fixture.sessionManager.getBranch();
+		const markerIndex = branch.findIndex((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE);
+		assert.ok(branch.slice(markerIndex + 1).some((entry) => entry.type === "custom_message" && entry.customType === NEXT_WINDOW_PROMPT_TYPE), "Pi really delivered the queued steer after committing the boundary");
+	} finally { release(); fixture.close(); }
+});
+
+test("real AgentSession: abort after handled input preserves originals without forcing a continuation", async () => {
+	let fixture!: Fixture;
+	let started!: () => void;
+	let release!: () => void;
+	const ready = new Promise<void>((resolve) => { started = resolve; });
+	const gate = new Promise<void>((resolve) => { release = resolve; });
+	const image = { type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" };
+	const original = [{ type: "text" as const, text: "ABORTED_HANDLED_INPUT" }, image];
+	fixture = await openFixture({
+		compactionEnabled: false,
+		script: async (request, context) => {
+			if (request === 1) {
+				started(); await gate;
+				return assistant(fixture, [], "aborted");
+			}
+			assert.equal(request, 2);
+			assertUserContent(context, original);
+			assert.equal(text(context).includes("notesoup:next_window_prompt"), false);
+			return assistant(fixture, [{ type: "text", text: "resumed after abort" }]);
+		},
+	});
+	try {
+		const closing = fixture.session.prompt("/empty");
+		await ready;
+		await fixture.session.prompt("ABORTED_HANDLED_INPUT", { images: [image], streamingBehavior: "steer" });
+		const aborted = fixture.session.abort();
+		release();
+		await Promise.all([closing, aborted]);
+		assert.equal(fixture.requests.length, 1, "an explicit abort must stay stopped");
+		const originals = fixture.sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === CARRIED_INPUT_TYPE);
+		assert.equal(originals.length, 1, "handled input is durable even though close-out was cancelled");
+		assert.deepEqual(originals[0]!.type === "custom_message" ? originals[0]!.content : undefined, original);
+		await fixture.session.prompt("Resume after cancellation.");
+		await fixture.session.waitForIdle();
+		assert.equal(fixture.requests.length, 2);
+		assert.equal(resetMarkers(fixture).length, 0);
+	} finally { release(); fixture.close(); }
+});
+
+test("real AgentSession: a close-out error does not discard handled input", async () => {
+	let fixture!: Fixture;
+	let started!: () => void;
+	let release!: () => void;
+	const ready = new Promise<void>((resolve) => { started = resolve; });
+	const gate = new Promise<void>((resolve) => { release = resolve; });
+	fixture = await openFixture({
+		compactionEnabled: false,
+		script: async (request, context) => {
+			if (request === 1) {
+				started(); await gate;
+				return assistant(fixture, [], "error", { errorMessage: "ordinary close-out failure" });
+			}
+			assert.equal(request, 2);
+			assertUserContent(context, [{ type: "text", text: "ERROR_HANDLED_INPUT" }]);
+			assert.equal(text(context).includes("notesoup:next_window_prompt"), false);
+			return assistant(fixture, [{ type: "text", text: "handled input answered without reset" }]);
+		},
+	});
+	try {
+		const closing = fixture.session.prompt("/empty");
+		await ready;
+		await fixture.session.prompt("ERROR_HANDLED_INPUT", { streamingBehavior: "steer" });
+		release();
+		await closing;
+		await fixture.session.waitForIdle();
+		const originals = fixture.sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === CARRIED_INPUT_TYPE);
+		assert.equal(originals.length, 1);
+		assert.equal(fixture.requests.length, 2);
+		assertUserContent(fixture.requests[1], [{ type: "text", text: "ERROR_HANDLED_INPUT" }]);
+		assert.equal(resetMarkers(fixture).length, 0, "ordinary errors still do not force a reset");
+	} finally { release(); fixture.close(); }
 });
 
 test("real AgentSession: a reset survives all notes-home read failures with an incomplete boot", async () => {
@@ -1198,9 +1285,19 @@ test("real AgentSession: overflow and recoverable length reset and retry once; r
 	for (const failure of ["overflow", "length"] as const) {
 		let fixture!: Fixture;
 		fixture = await openFixture({
-			script: (request) => {
-				if (request === 1 && failure === "overflow") return assistant(fixture, [{ type: "text", text: "overflow response" }], "error", { errorMessage: "Prompt too long: context exceeds maximum context length" });
-				if (request === 1) return assistant(fixture, [{ type: "text", text: "truncated" }], "length", { usage: usage(99_000, 1) });
+			hook: failure === "overflow" ? (pi, getSession) => pi.on("tool_call", async () => {
+				await getSession().steer("PASSIVE_STEERED_INPUT");
+				await getSession().followUp("PASSIVE_FOLLOWUP_INPUT");
+			}) : undefined,
+			script: (request, context) => {
+				if (failure === "overflow") {
+					if (request === 1) return assistant(fixture, [{ type: "toolCall", id: "passive-probe", name: "get_context_remaining", arguments: {} }], "toolUse");
+					if (request === 2) return assistant(fixture, [{ type: "text", text: "tool loop checkpoint" }]);
+					if (request === 3) return assistant(fixture, [], "error", { errorMessage: "Prompt too long: context exceeds maximum context length" });
+					assert.equal(request, 4);
+					assertUserContent(context, [{ type: "text", text: "PASSIVE_STEERED_INPUT" }]);
+					assertUserContent(context, [{ type: "text", text: "PASSIVE_FOLLOWUP_INPUT" }]);
+				} else if (request === 1) return assistant(fixture, [{ type: "text", text: "truncated" }], "length", { usage: usage(99_000, 1) });
 				return assistant(fixture, [{ type: "text", text: "recovered" }]);
 			},
 		});
@@ -1209,8 +1306,8 @@ test("real AgentSession: overflow and recoverable length reset and retry once; r
 			await fixture.session.waitForIdle();
 			assert.equal(resetMarkers(fixture).length, 1, `${failure} performs one reset`);
 			assert.equal(fixture.sessionManager.getBranch().filter((entry) => entry.type === "compaction").length, 1, `${failure} commits one native reset checkpoint`);
-			assert.equal(fixture.requests.length, 2, `${failure} resumes once`);
-			assertFreshRequest(fixture, 1, `RECOVER_${failure}_SENTINEL`);
+			assert.equal(fixture.requests.length, failure === "overflow" ? 4 : 2, `${failure} resumes once after queued work drains`);
+			assertUserContent(fixture.requests.at(-1), [{ type: "text", text: `RECOVER_${failure}_SENTINEL` }]);
 		} finally {
 			fixture.close();
 		}
@@ -1218,26 +1315,32 @@ test("real AgentSession: overflow and recoverable length reset and retry once; r
 
 	let repeated!: Fixture;
 	repeated = await openFixture({
-		script: (request) => assistant(repeated, [{ type: "text", text: `overflow-${request}` }], "error", { errorMessage: "Prompt too long: context exceeds maximum context length" }),
+		script: (request) => request === 1
+			? assistant(repeated, [{ type: "toolCall", id: "automatic-start", name: "empty_brain", arguments: {} }], "toolUse")
+			: assistant(repeated, [{ type: "text", text: `overflow-${request}` }], "error", { errorMessage: "Prompt too long: context exceeds maximum context length" }),
 	});
 	try {
 		await repeated.session.prompt("REPEATED_OVERFLOW_SENTINEL");
 		await repeated.session.waitForIdle();
-		assert.equal(resetMarkers(repeated).length, 1, "repeated overflow does not create repeated windows");
-		assert.equal(repeated.sessionManager.getBranch().filter((entry) => entry.type === "compaction").length, 1, "bounded overflow recovery commits one retain-none checkpoint");
-		assert.equal(repeated.requests.length, 2, "repeated overflow stops after one recovery request");
+		assert.equal(resetMarkers(repeated).length, 2, "the tool reset is followed by exactly one overflow recovery");
+		assert.equal(repeated.sessionManager.getBranch().filter((entry) => entry.type === "compaction").length, 2);
+		assert.equal(repeated.requests.length, 3, "an automatic continuation still gets only one recovery request");
+		assertFreshRequest(repeated, 2, "REPEATED_OVERFLOW_SENTINEL");
+		assert.equal(repeated.sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === CARRIED_INPUT_TYPE).length, 0, "our own automatic continuation has no human input to carry");
 	} finally {
 		repeated.close();
 	}
 });
 
-test("real AgentSession: switching to a smaller model recovers through the existing overflow path", async () => {
+test("real AgentSession: a smaller-model overflow carries the failed run's human input and stays on that model", async () => {
 	let fixture!: Fixture;
 	fixture = await openFixture({
 		contextWindow: 200_000,
-		script: (request) => {
+		script: (request, context) => {
 			if (request === 1) return assistant(fixture, [{ type: "text", text: "LARGE_MODEL_HISTORY" }], "stop", { usage: usage(150_000) });
 			if (request === 2) return assistant(fixture, [], "error", { errorMessage: "Prompt too long: context exceeds maximum context length" });
+			assert.equal(request, 3);
+			assertUserContent(context, [{ type: "text", text: "CONTINUE_AFTER_MODEL_SWITCH" }]);
 			return assistant(fixture, [{ type: "text", text: "continued on smaller model" }]);
 		},
 	});
