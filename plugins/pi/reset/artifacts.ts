@@ -18,8 +18,11 @@ export function isCarriedInputEntry(entry: SessionEntry): boolean {
 	return entry.type === "custom_message" && entry.customType === CARRIED_INPUT_TYPE && entry.display === true;
 }
 
+/** Advertised size: the description quotes this softer limit so sloppy character counts still fit. */
+export const LAST_WORD_ADVERTISED_CHARS = 250;
+
 /** A sticky note, not a letter: over this, empty_brain refuses instead of truncating. */
-export const MAX_LAST_WORD_CHARS = 250;
+export const MAX_LAST_WORD_CHARS = 300;
 
 /** How the next window finds the note. */
 export const LAST_WORD_PREFIX = "*You peel a sticky note off your forehead.*\n";
