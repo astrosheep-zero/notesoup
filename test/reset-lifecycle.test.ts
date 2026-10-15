@@ -25,11 +25,12 @@ import { historyFromSession, nextHistorySeq } from "../plugins/pi/history.js";
 import { buildResetDrafts, inspectResetTail, LAST_WORD_PREFIX, MAX_LAST_WORD_CHARS, repairResetTail, sanitizeLastWord } from "../plugins/pi/reset/artifacts.js";
 import { resetBoundaryCommitted } from "../plugins/pi/reset/committed.js";
 import {
+	finalizeResetBoundary,
 	initialResetControl,
 	reduceResetControl,
 	registerResetLifecycle,
 	type ResetBeforeSettleFacts,
-	type ResetControlState,
+	type ResetControlResult,
 	type ResetTurnEndFacts,
 } from "../plugins/pi/reset/lifecycle.js";
 
@@ -131,6 +132,16 @@ function appendDrafts(sessionManager: SessionManager, entries: SessionBoundaryDr
 			case "compaction": sessionManager.appendCompaction(entry.summary, entry.firstKeptEntryId, 0, entry.details, true, entry.usage); break;
 		}
 	}
+}
+
+function boundaryIntent(decision: ResetControlResult) {
+	assert.ok(decision.effect === "build-boundary", "expected construction intent, not a state transition");
+	return decision;
+}
+
+function controlState(decision: ResetControlResult) {
+	assert.ok(decision.effect !== "build-boundary", "expected a state transition, not construction intent");
+	return decision.state;
 }
 
 function turnEndFacts(overrides: Partial<ResetTurnEndFacts> = {}): ResetTurnEndFacts {
@@ -338,6 +349,49 @@ test("input arriving during reset construction survives even when the hidden ste
 	sessionManager.appendCustomMessageEntry(CARRIED_INPUT_TYPE, "too early", true);
 	assert.equal(inspectResetTail(ctx, partialMarker, "partial"), undefined, "repair cannot append a continuation after human content");
 	assert.equal(resetBoundaryCommitted(ctx, partialMarker, "partial"), false);
+});
+
+test("overflow construction reads live run inputs and clear invalidates an unfinished build", async () => {
+	const sessionManager = Manager.inMemory("/private/tmp/notesoup-live-passive-input-test");
+	const handlers = new Map<string, Handler>();
+	const api = { on(name: string, handler: Handler) { handlers.set(name, handler); } } as unknown as ExtensionAPI;
+	const ctx = { sessionManager, model: undefined, hasPendingMessages: () => false, ui: { notify() {} } } as unknown as ExtensionContext;
+	let release!: (drafts: SessionBoundaryDraft[]) => void;
+	let readyCount = 0;
+	const lifecycle = registerResetLifecycle(api, {
+		isEnabled: () => true,
+		budget: { automaticResetEnabled: () => true, hardReserveDue: () => false, consumeTurnEnd: () => [], clear() {} },
+		buildReset: () => new Promise<SessionBoundaryDraft[]>((resolve) => { release = resolve; }),
+		onResetReady: () => { readyCount++; },
+	});
+	const user = (content: string) => handlers.get("message_end")!({ message: { role: "user", content } }, ctx);
+	const failed = { ...fakeBoundaryEvent(), outcome: "error", message: { role: "assistant", stopReason: "error", errorMessage: "Prompt too long: context exceeds maximum context length" } };
+	const recover = async () => {
+		await handlers.get("turn_end")!(failed, ctx);
+		return handlers.get("agent_before_settle")!({ ...failed, type: "agent_before_settle" }, ctx);
+	};
+	await user("starting input");
+	const building = recover();
+	await Promise.resolve();
+	await user("delivered during construction");
+	release([]);
+	const result = resultEntries([await building]);
+	assert.equal(result.continue, true);
+	assert.deepEqual(result.entries.map((entry) => entry.type === "custom_message" ? entry.content : null), ["starting input", "delivered during construction"]);
+	lifecycle.clear();
+	await user("old run");
+	const stale = recover();
+	await Promise.resolve();
+	lifecycle.clear();
+	await user("new run");
+	release([{ type: "custom_message", customType: BOOT_TYPE, content: "stale", display: false }]);
+	assert.equal(await stale, undefined, "clearing the run invalidates construction before it can consume new inputs");
+	assert.equal(readyCount, 1);
+	const current = recover();
+	await Promise.resolve();
+	release([]);
+	const fresh = resultEntries([await current]);
+	assert.deepEqual(fresh.entries.map((entry) => entry.type === "custom_message" ? entry.content : null), ["new run"]);
 });
 
 test("abort during reset construction restores handled input at settlement, once", async () => {
@@ -565,12 +619,14 @@ test("reset-control: command policy deduplicates, spans turns, and retains a rea
 	assert.equal(duplicate.effect, "already-pending");
 	const noteTurn = reduceResetControl(first.state, { type: "turn_end", facts: turnEndFacts() });
 	assert.equal(noteTurn.effect, "none");
-	assert.deepEqual(noteTurn.state.request, first.state.request, "note/tool turns do not consume close-out");
-	const tool = reduceResetControl(noteTurn.state, { type: "tool_request", windowId });
+	assert.deepEqual(controlState(noteTurn).request, first.state.request, "note/tool turns do not consume close-out");
+	const tool = reduceResetControl(controlState(noteTurn), { type: "tool_request", windowId });
 	assert.equal(tool.effect, "close-out-armed", "the first tool call is recorded without changing settlement policy");
 	assert.deepEqual(tool.state.request, { phase: "pending", windowId, command: { continueAfterReset: false }, tool: {} });
-	const commit = reduceResetControl(tool.state, { type: "before_settle", facts: beforeSettleFacts() });
-	assert.equal(commit.effect, "commit-boundary-stop", "a manual close-out commits at settlement and stops");
+	const decision = reduceResetControl(tool.state, { type: "before_settle", facts: beforeSettleFacts() });
+	assert.equal(decision.effect, "build-boundary", "construction intent has no final state to install");
+	const commit = finalizeResetBoundary(boundaryIntent(decision), tool.state.request);
+	assert.equal(commit.resumeModel, false, "a manual close-out commits at settlement and stops");
 	assert.deepEqual(commit.state, initialResetControl());
 });
 
@@ -581,7 +637,8 @@ test("reset-control: command settlement policy preserves a pending tool request"
 	assert.equal(manual.effect, "close-out-armed", "the user's stop intent outranks the pending rollover");
 	assert.deepEqual(manual.state.request, { phase: "pending", windowId, command: { continueAfterReset: false }, tool: {} });
 	assert.equal(reduceResetControl(manual.state, { type: "turn_end", facts: turnEndFacts() }).effect, "none", "the converted request no longer commits at turn end");
-	assert.equal(reduceResetControl(manual.state, { type: "before_settle", facts: beforeSettleFacts() }).effect, "commit-boundary-stop");
+	const intent = boundaryIntent(reduceResetControl(manual.state, { type: "before_settle", facts: beforeSettleFacts() }));
+	assert.equal(finalizeResetBoundary(intent, manual.state.request).resumeModel, false);
 });
 
 test("reset-control: duplicate commands preserve policy and both call orders retain the tool's last word", () => {
@@ -599,9 +656,11 @@ test("reset-control: duplicate commands preserve policy and both call orders ret
 	assert.equal(repeated.effect, "already-pending");
 	assert.deepEqual(repeated.state, commandThenTool.state);
 	assert.equal(reduceResetControl(repeated.state, { type: "turn_end", facts: turnEndFacts() }).effect, "none");
-	const commit = reduceResetControl(repeated.state, { type: "before_settle", facts: beforeSettleFacts() });
-	assert.equal(commit.effect, "commit-boundary");
-	assert.equal(commit.lastWord, "pick up here");
+	const intent = boundaryIntent(reduceResetControl(repeated.state, { type: "before_settle", facts: beforeSettleFacts() }));
+	assert.equal(intent.tool?.lastWord, "pick up here");
+	const commit = finalizeResetBoundary(intent, repeated.state.request);
+	assert.equal(commit.resumeModel, true, "explicit continue policy does not require delivery contents");
+	assert.deepEqual(commit.inputs, []);
 });
 
 test("reset-control: a tool request needs no prior budget warning", () => {
@@ -609,72 +668,108 @@ test("reset-control: a tool request needs no prior budget warning", () => {
 	const requested = reduceResetControl(initialResetControl(), { type: "tool_request", windowId });
 	assert.equal(requested.effect, "close-out-armed");
 	assert.deepEqual(requested.state.request, { phase: "pending", windowId, tool: {} });
-	assert.equal(reduceResetControl(requested.state, { type: "turn_end", facts: turnEndFacts() }).effect, "commit-boundary");
+	const intent = boundaryIntent(reduceResetControl(requested.state, { type: "turn_end", facts: turnEndFacts() }));
+	assert.equal(finalizeResetBoundary(intent, requested.state.request).resumeModel, true);
 });
 
 test("reset-control: fallback is normal-stop only; hard reserve remains safety", () => {
 	const windowId = "pcw:test:window";
 	const manual = reduceResetControl(initialResetControl(), { type: "command", windowId, continueAfterReset: false }).state;
-	const fallback = reduceResetControl(manual, { type: "before_settle", facts: beforeSettleFacts() });
-	assert.equal(fallback.effect, "commit-boundary-stop", "manual close-out stops after the reset is committed");
+	const intent = boundaryIntent(reduceResetControl(manual, { type: "before_settle", facts: beforeSettleFacts() }));
+	const fallback = finalizeResetBoundary(intent, manual.request);
+	assert.equal(fallback.resumeModel, false, "manual close-out stops after the reset is committed");
 	assert.deepEqual(fallback.state, initialResetControl());
 
 	const automatic = initialResetControl();
 	const normalStop = reduceResetControl(automatic, { type: "before_settle", facts: beforeSettleFacts() });
 	assert.equal(normalStop.effect, "none", "ignoring a budget warning and answering normally must not wipe memory");
-	assert.deepEqual(normalStop.state, initialResetControl());
+	assert.deepEqual(controlState(normalStop), initialResetControl());
 	const disabledAuto = reduceResetControl(automatic, { type: "before_settle", facts: beforeSettleFacts({ automaticResetEnabled: false }) });
 	assert.equal(disabledAuto.effect, "none");
-	assert.deepEqual(disabledAuto.state, initialResetControl());
+	assert.deepEqual(controlState(disabledAuto), initialResetControl());
 
 	const safety = reduceResetControl(initialResetControl(), { type: "turn_end", facts: turnEndFacts({ hardReserveDue: true }) });
-	assert.equal(safety.effect, "commit-boundary");
+	assert.equal(finalizeResetBoundary(boundaryIntent(safety), automatic.request).resumeModel, true);
 	for (const outcome of [{ failed: true }, { aborted: true }]) {
 		const notNormalStop = reduceResetControl(manual, { type: "before_settle", facts: beforeSettleFacts(outcome) });
 		assert.equal(notNormalStop.effect, "none");
-		assert.deepEqual(notNormalStop.state, initialResetControl());
+		assert.deepEqual(controlState(notNormalStop), initialResetControl());
 	}
 });
 
 test("reset-control: manual stop survives a hard-reserve reset across windows without a second wipe", () => {
 	const windowId = "pcw:test:window";
 	const manual = reduceResetControl(initialResetControl(), { type: "command", windowId, continueAfterReset: false }).state;
-	const safety = reduceResetControl(manual, { type: "turn_end", facts: turnEndFacts({ hardReserveDue: true }) });
-	assert.equal(safety.effect, "commit-boundary-stop");
-	assert.deepEqual(safety.state.request, { phase: "stop-pending", windowId });
+	const decision = reduceResetControl(manual, { type: "turn_end", facts: turnEndFacts({ hardReserveDue: true }) });
+	assert.equal(decision.effect, "build-boundary", "construction does not install the stop latch");
+	const safety = finalizeResetBoundary(boundaryIntent(decision), manual.request);
+	assert.equal(safety.resumeModel, false);
+	assert.deepEqual(safety.state.request, { phase: "none" });
+	assert.deepEqual(safety.state.stopAfterReset, decision);
 	const freshWindowId = "pcw:test:fresh";
 	assert.equal(reduceResetControl(safety.state, { type: "tool_request", windowId: freshWindowId }).effect, "already-pending");
 	assert.equal(reduceResetControl(safety.state, { type: "command", windowId: freshWindowId, continueAfterReset: false }).effect, "already-pending");
 	const queued = reduceResetControl(safety.state, { type: "before_settle", facts: beforeSettleFacts({ windowId: freshWindowId, queued: true }) });
-	assert.deepEqual(queued.state, safety.state);
-	const freshTurn = reduceResetControl(queued.state, { type: "turn_end", facts: turnEndFacts({ windowId: freshWindowId, hardReserveDue: true }) });
+	assert.deepEqual(controlState(queued), safety.state);
+	const freshTurn = reduceResetControl(controlState(queued), { type: "turn_end", facts: turnEndFacts({ windowId: freshWindowId, hardReserveDue: true }) });
 	assert.equal(freshTurn.effect, "none");
-	const stop = reduceResetControl(freshTurn.state, { type: "before_settle", facts: beforeSettleFacts({ windowId: freshWindowId }) });
+	const stop = reduceResetControl(controlState(freshTurn), { type: "before_settle", facts: beforeSettleFacts({ windowId: freshWindowId }) });
 	assert.equal(stop.effect, "stop", "the safety boundary already wiped; settlement must only stop");
-	assert.deepEqual(stop.state, initialResetControl());
-	assert.equal(reduceResetControl(safety.state, { type: "before_settle", facts: beforeSettleFacts() }).effect, "commit-boundary-stop", "a failed safety construction may be retried before settlement");
-	assert.deepEqual(reduceResetControl(safety.state, { type: "before_settle", facts: beforeSettleFacts({ windowId: freshWindowId, aborted: true }) }).state, initialResetControl());
+	assert.deepEqual(controlState(stop), initialResetControl());
+	const uncommitted = boundaryIntent(reduceResetControl(safety.state, { type: "before_settle", facts: beforeSettleFacts() }));
+	assert.equal(uncommitted.continueAfterReset, false, "same-window retry retains the stop policy");
+	const retried = finalizeResetBoundary(uncommitted, safety.state.request);
+	assert.equal(retried.resumeModel, false);
+	assert.deepEqual(retried.state, initialResetControl(), "settle retry consumes the stop latch");
+	const retry = boundaryIntent(reduceResetControl(manual, { type: "before_settle", facts: beforeSettleFacts() }));
+	assert.equal(finalizeResetBoundary(retry, manual.request).resumeModel, false, "a failed safety construction leaves the command available for settlement retry");
+	assert.deepEqual(controlState(reduceResetControl(safety.state, { type: "before_settle", facts: beforeSettleFacts({ windowId: freshWindowId, aborted: true }) })), initialResetControl());
+});
+
+test("reset-control: one safety intent finalizes stop or continuation from live command originals", () => {
+	const windowId = "pcw:test:window";
+	const pending = reduceResetControl(initialResetControl(), { type: "command", windowId, continueAfterReset: false }).state;
+	const intent = boundaryIntent(reduceResetControl(pending, { type: "turn_end", facts: turnEndFacts({ hardReserveDue: true }) }));
+	assert.deepEqual(pending.request, { phase: "pending", windowId, command: { continueAfterReset: false } });
+	const stopped = finalizeResetBoundary(intent, pending.request, ["passive run input"]);
+	assert.equal(stopped.resumeModel, false);
+	assert.deepEqual(stopped.inputs, [], "a command boundary never replays passive run input");
+	assert.deepEqual(stopped.state.stopAfterReset, intent);
+
+	const live = reduceResetControl(pending, { type: "input", windowId, input: "late original" }).state;
+	const continued = finalizeResetBoundary(intent, live.request, ["passive run input"]);
+	assert.equal(continued.resumeModel, true);
+	assert.deepEqual(continued.inputs, ["late original"]);
+	assert.deepEqual(continued.state, initialResetControl(), "late originals prevent installing the stop latch");
+	assert.equal(intent.continueAfterReset, false, "delivery does not rewrite explicit command policy");
+	assert.deepEqual(live.request, { phase: "pending", windowId, command: { continueAfterReset: false, inputs: ["late original"] } }, "finalization is pure");
 });
 
 test("reset-control: manual overflow keeps stop intent while queued work supersedes the failure", () => {
 	const windowId = "pcw:test:window";
 	const manual = reduceResetControl(initialResetControl(), { type: "command", windowId, continueAfterReset: false }).state;
-	const overflow = reduceResetControl(manual, { type: "turn_end", facts: turnEndFacts({ overflow: true, failed: true, queued: true, automaticResetEnabled: false }) });
-	assert.deepEqual(overflow.state.request, manual.request);
-	const deferred = reduceResetControl(overflow.state, { type: "before_settle", facts: beforeSettleFacts({ failed: true, queued: true, automaticResetEnabled: false }) });
-	assert.deepEqual(deferred.state, overflow.state);
-	assert.equal(reduceResetControl(overflow.state, { type: "before_settle", facts: beforeSettleFacts({ failed: true, automaticResetEnabled: false }) }).effect, "commit-boundary-stop", "manual overflow resets but does not retry the model");
-	const success = reduceResetControl(deferred.state, { type: "turn_end", facts: turnEndFacts() });
-	assert.deepEqual(success.state.request, manual.request, "a successful queued turn clears only the overflow, not the manual wipe");
-	assert.equal(success.state.overflow, "idle");
-	assert.equal(reduceResetControl(success.state, { type: "before_settle", facts: beforeSettleFacts() }).effect, "commit-boundary-stop");
+	const overflow = controlState(reduceResetControl(manual, { type: "turn_end", facts: turnEndFacts({ overflow: true, failed: true, queued: true, automaticResetEnabled: false }) }));
+	assert.deepEqual(overflow.request, manual.request);
+	const deferred = controlState(reduceResetControl(overflow, { type: "before_settle", facts: beforeSettleFacts({ failed: true, queued: true, automaticResetEnabled: false }) }));
+	assert.deepEqual(deferred, overflow);
+	const stopIntent = boundaryIntent(reduceResetControl(overflow, { type: "before_settle", facts: beforeSettleFacts({ failed: true, automaticResetEnabled: false }) }));
+	assert.equal(finalizeResetBoundary(stopIntent, overflow.request).resumeModel, false, "manual overflow resets but does not retry the model");
+	const success = controlState(reduceResetControl(deferred, { type: "turn_end", facts: turnEndFacts() }));
+	assert.deepEqual(success.request, manual.request, "a successful queued turn clears only the overflow, not the manual wipe");
+	assert.equal(success.overflow, "idle");
+	const successIntent = boundaryIntent(reduceResetControl(success, { type: "before_settle", facts: beforeSettleFacts() }));
+	assert.equal(finalizeResetBoundary(successIntent, success.request).resumeModel, false);
 	const prompted = reduceResetControl(manual, { type: "input", windowId, input: "answer after reset" }).state;
 	const called = reduceResetControl(prompted, { type: "tool_request", windowId, lastWord: "saved" }).state;
-	const failed = reduceResetControl(called, { type: "turn_end", facts: turnEndFacts({ overflow: true, failed: true, automaticResetEnabled: false }) }).state;
-	const retry = reduceResetControl(failed, { type: "before_settle", facts: beforeSettleFacts({ failed: true, automaticResetEnabled: false }) });
-	assert.equal(retry.effect, "commit-boundary", "manual input continues even when automatic reset is disabled");
-	assert.equal(retry.origin, "forced", "an overflowing close-out is forced even after a tool request");
-	assert.equal(retry.lastWord, "saved");
+	const failed = controlState(reduceResetControl(called, { type: "turn_end", facts: turnEndFacts({ overflow: true, failed: true, automaticResetEnabled: false }) }));
+	const decision = reduceResetControl(failed, { type: "before_settle", facts: beforeSettleFacts({ failed: true, automaticResetEnabled: false }) });
+	assert.equal(failed.overflow, "pending", "construction alone does not spend overflow recovery");
+	const retryIntent = boundaryIntent(decision);
+	assert.equal(retryIntent.origin, "forced", "an overflowing close-out is forced even after a tool request");
+	assert.equal(retryIntent.tool?.lastWord, "saved");
+	const retry = finalizeResetBoundary(retryIntent, failed.request, ["passive input is not command-owned"]);
+	assert.equal(retry.resumeModel, true, "manual input continues even when automatic reset is disabled");
+	assert.deepEqual(retry.inputs, ["answer after reset"]);
 	assert.equal(retry.state.overflow, "spent", "manual recovery spends the same bounded attempt");
 });
 
@@ -683,52 +778,56 @@ test("reset-control: explicit abort clears a pending request at turn end or sett
 	const pending = reduceResetControl(initialResetControl(), { type: "command", windowId, continueAfterReset: false }).state;
 	const aborted = reduceResetControl(pending, { type: "turn_end", facts: turnEndFacts({ aborted: true }) });
 	assert.equal(aborted.effect, "none");
-	assert.deepEqual(aborted.state, initialResetControl());
-	assert.deepEqual(reduceResetControl(pending, { type: "before_settle", facts: beforeSettleFacts({ aborted: true }) }).state, initialResetControl());
+	assert.deepEqual(controlState(aborted), initialResetControl());
+	assert.deepEqual(controlState(reduceResetControl(pending, { type: "before_settle", facts: beforeSettleFacts({ aborted: true }) })), initialResetControl());
 });
 
 test("reset-control: overflow recovery is armed at turn_end and spent exactly once at settle", () => {
-	const armed = reduceResetControl(initialResetControl(), { type: "turn_end", facts: turnEndFacts({ overflow: true, failed: true }) });
-	assert.deepEqual(armed.state, { request: { phase: "none" }, overflow: "pending" });
+	const armed = controlState(reduceResetControl(initialResetControl(), { type: "turn_end", facts: turnEndFacts({ overflow: true, failed: true }) }));
+	assert.deepEqual(armed, { request: { phase: "none" }, overflow: "pending" });
 
-	const recovered = reduceResetControl(armed.state, { type: "before_settle", facts: beforeSettleFacts() });
-	assert.equal(recovered.effect, "recover-overflow", "the first settle commits the bounded recovery");
+	const intent = boundaryIntent(reduceResetControl(armed, { type: "before_settle", facts: beforeSettleFacts() }));
+	assert.equal(armed.overflow, "pending", "failed construction would leave recovery unspent");
+	assert.equal(intent.boundary, "overflow-recovery");
+	const recovered = finalizeResetBoundary(intent, armed.request, ["failed run's user input"]);
+	assert.equal(recovered.resumeModel, true);
+	assert.deepEqual(recovered.inputs, ["failed run's user input"]);
 	assert.deepEqual(recovered.state, { request: { phase: "none" }, overflow: "spent" });
 
 	const repeated = reduceResetControl(recovered.state, { type: "before_settle", facts: beforeSettleFacts() });
 	assert.equal(repeated.effect, "none", "a spent recovery is never retried");
 
-	const rearmed = reduceResetControl(recovered.state, { type: "turn_end", facts: turnEndFacts({ overflow: true, failed: true }) });
-	assert.deepEqual(rearmed.state, { request: { phase: "none" }, overflow: "pending-spent" });
-	const bounded = reduceResetControl(rearmed.state, { type: "before_settle", facts: beforeSettleFacts() });
+	const rearmed = controlState(reduceResetControl(recovered.state, { type: "turn_end", facts: turnEndFacts({ overflow: true, failed: true }) }));
+	assert.deepEqual(rearmed, { request: { phase: "none" }, overflow: "pending-spent" });
+	const bounded = reduceResetControl(rearmed, { type: "before_settle", facts: beforeSettleFacts() });
 	assert.equal(bounded.effect, "none", "a second failure chain stays bounded to the spent attempt");
-	assert.deepEqual(bounded.state, { request: { phase: "none" }, overflow: "spent" });
+	assert.deepEqual(controlState(bounded), { request: { phase: "none" }, overflow: "spent" });
 });
 
 test("reset-control: a queued turn defers recovery and its success supersedes the failure", () => {
-	const armed = reduceResetControl(initialResetControl(), { type: "turn_end", facts: turnEndFacts({ overflow: true, failed: true }) }).state;
+	const armed = controlState(reduceResetControl(initialResetControl(), { type: "turn_end", facts: turnEndFacts({ overflow: true, failed: true }) }));
 	const deferred = reduceResetControl(armed, { type: "before_settle", facts: beforeSettleFacts({ queued: true }) });
 	assert.equal(deferred.effect, "none");
-	assert.deepEqual(deferred.state, armed, "a queued message leaves the overflow chain armed");
+	assert.deepEqual(controlState(deferred), armed, "a queued message leaves the overflow chain armed");
 
 	const success = reduceResetControl(armed, { type: "turn_end", facts: turnEndFacts() });
-	assert.deepEqual(success.state, initialResetControl(), "a successful queued turn clears the stale failure");
+	assert.deepEqual(controlState(success), initialResetControl(), "a successful queued turn clears the stale failure");
 });
 
 test("reset-control: disabled mode and explicit aborts disarm overflow without a recovery", () => {
-	const armed = reduceResetControl(initialResetControl(), { type: "turn_end", facts: turnEndFacts({ overflow: true, failed: true }) }).state;
+	const armed = controlState(reduceResetControl(initialResetControl(), { type: "turn_end", facts: turnEndFacts({ overflow: true, failed: true }) }));
 
 	const disabled = reduceResetControl(armed, { type: "before_settle", facts: beforeSettleFacts({ enabled: false }) });
 	assert.equal(disabled.effect, "none");
-	assert.deepEqual(disabled.state, { request: { phase: "none" }, overflow: "idle" });
+	assert.deepEqual(controlState(disabled), { request: { phase: "none" }, overflow: "idle" });
 
 	const automaticOff = reduceResetControl(armed, { type: "before_settle", facts: beforeSettleFacts({ automaticResetEnabled: false }) });
 	assert.equal(automaticOff.effect, "none");
-	assert.deepEqual(automaticOff.state, { request: { phase: "none" }, overflow: "idle" });
+	assert.deepEqual(controlState(automaticOff), { request: { phase: "none" }, overflow: "idle" });
 
 	const aborted = reduceResetControl(armed, { type: "before_settle", facts: beforeSettleFacts({ aborted: true }) });
 	assert.equal(aborted.effect, "none");
-	assert.deepEqual(aborted.state, { request: { phase: "none" }, overflow: "idle" });
+	assert.deepEqual(controlState(aborted), { request: { phase: "none" }, overflow: "idle" });
 });
 
 test("reset-control: lazy guards preserve overflow policy ordering", () => {
@@ -755,7 +854,7 @@ test("reset-control: lazy guards preserve overflow policy ordering", () => {
 		aborted: false,
 		failed: false,
 	};
-	const pendingOverflow = reduceResetControl(initialResetControl(), { type: "turn_end", facts: turnEndFacts({ overflow: true, failed: true }) }).state;
+	const pendingOverflow = controlState(reduceResetControl(initialResetControl(), { type: "turn_end", facts: turnEndFacts({ overflow: true, failed: true }) }));
 	reduceResetControl(pendingOverflow, { type: "before_settle", facts: settleFacts });
 	assert.deepEqual(settleCalls, { queued: 1, enabled: 0, automatic: 0 }, "queued settle checks no further overflow policy");
 });
@@ -883,9 +982,9 @@ test("reset-control: a tool request carries its last word to the turn-end commit
 	const armed = reduceResetControl(initialResetControl(), { type: "tool_request", windowId, lastWord: "the shoes were loyal" });
 	assert.equal(armed.effect, "close-out-armed");
 	assert.deepEqual(armed.state.request, { phase: "pending", windowId, tool: { lastWord: "the shoes were loyal" } });
-	const commit = reduceResetControl(armed.state, { type: "turn_end", facts: turnEndFacts() });
-	assert.equal(commit.effect, "commit-boundary");
-	assert.equal(commit.lastWord, "the shoes were loyal");
+	const intent = boundaryIntent(reduceResetControl(armed.state, { type: "turn_end", facts: turnEndFacts() }));
+	assert.equal(intent.tool?.lastWord, "the shoes were loyal");
+	assert.equal(finalizeResetBoundary(intent, armed.state.request).resumeModel, true);
 });
 
 test("reset-control: a call and a command keep their facts in either order", () => {
@@ -895,41 +994,42 @@ test("reset-control: a call and a command keep their facts in either order", () 
 	const converted = reduceResetControl(toolFirst.state, { type: "command", windowId, continueAfterReset: false });
 	assert.equal(converted.effect, "close-out-armed");
 	assert.deepEqual(converted.state.request, { phase: "pending", windowId, command: { continueAfterReset: false }, tool: { lastWord: "the shoes were loyal" } });
-	const stop = reduceResetControl(converted.state, { type: "before_settle", facts: beforeSettleFacts() });
-	assert.equal(stop.effect, "commit-boundary-stop");
+	const stop = boundaryIntent(reduceResetControl(converted.state, { type: "before_settle", facts: beforeSettleFacts() }));
+	assert.equal(finalizeResetBoundary(stop, converted.state.request).resumeModel, false);
 	assert.equal(stop.origin, "normal", "a command arriving after a model wipe does not rewrite it as forced");
-	assert.equal(stop.lastWord, "the shoes were loyal", "the call's parting line survives the conversion");
+	assert.equal(stop.tool?.lastWord, "the shoes were loyal", "the call's parting line survives the conversion");
 
 	// The command first, then the call: the acknowledgement records the call and keeps stopping.
 	const commandFirst = reduceResetControl(initialResetControl(), { type: "command", windowId, continueAfterReset: false });
 	const acknowledged = reduceResetControl(commandFirst.state, { type: "tool_request", windowId, lastWord: "tell them I was funny" });
 	assert.equal(acknowledged.effect, "close-out-armed");
 	assert.deepEqual(acknowledged.state.request, { phase: "pending", windowId, command: { continueAfterReset: false }, tool: { lastWord: "tell them I was funny" } });
-	const settled = reduceResetControl(acknowledged.state, { type: "before_settle", facts: beforeSettleFacts() });
-	assert.equal(settled.effect, "commit-boundary-stop");
+	const settled = boundaryIntent(reduceResetControl(acknowledged.state, { type: "before_settle", facts: beforeSettleFacts() }));
+	assert.equal(finalizeResetBoundary(settled, acknowledged.state.request).resumeModel, false);
 	assert.equal(settled.origin, "normal", "the command-first order records the same origin");
-	assert.equal(settled.lastWord, "tell them I was funny");
+	assert.equal(settled.tool?.lastWord, "tell them I was funny");
 });
 
 test("reset-control: the origin is the empty_brain call, independent of command policy", () => {
 	const windowId = "pcw:test:window";
 	const tool = reduceResetControl(initialResetControl(), { type: "tool_request", windowId });
-	assert.equal(reduceResetControl(tool.state, { type: "turn_end", facts: turnEndFacts() }).origin, "normal", "the model's own call is a normal reset");
+	assert.equal(boundaryIntent(reduceResetControl(tool.state, { type: "turn_end", facts: turnEndFacts() })).origin, "normal", "the model's own call is a normal reset");
 
 
 	const manual = reduceResetControl(initialResetControl(), { type: "command", windowId, continueAfterReset: false }).state;
-	assert.equal(reduceResetControl(manual, { type: "before_settle", facts: beforeSettleFacts() }).origin, "forced", "a command close-out with no call is a system reset");
+	assert.equal(boundaryIntent(reduceResetControl(manual, { type: "before_settle", facts: beforeSettleFacts() })).origin, "forced", "a command close-out with no call is a system reset");
 	const acknowledged = reduceResetControl(manual, { type: "tool_request", windowId }).state;
-	assert.equal(reduceResetControl(acknowledged, { type: "before_settle", facts: beforeSettleFacts() }).origin, "normal", "a manual close-out the model actually wipes is normal but still stops");
+	assert.equal(boundaryIntent(reduceResetControl(acknowledged, { type: "before_settle", facts: beforeSettleFacts() })).origin, "normal", "a manual close-out the model actually wipes is normal but still stops");
 
-	assert.equal(reduceResetControl(initialResetControl(), { type: "turn_end", facts: turnEndFacts({ hardReserveDue: true }) }).origin, "forced", "the hard cutoff happens without a call");
-	const safety = reduceResetControl(acknowledged, { type: "turn_end", facts: turnEndFacts({ hardReserveDue: true }) });
-	assert.equal(safety.origin, "normal", "an acknowledged call survives the hard cutoff it was armed against");
-	assert.deepEqual(safety.state.request, { phase: "stop-pending", windowId, tool: {} }, "the recorded call survives into the run-scoped stop latch");
-	assert.equal(reduceResetControl(safety.state, { type: "before_settle", facts: beforeSettleFacts() }).origin, "normal", "a retried safety construction keeps the recorded origin");
+	assert.equal(boundaryIntent(reduceResetControl(initialResetControl(), { type: "turn_end", facts: turnEndFacts({ hardReserveDue: true }) })).origin, "forced", "the hard cutoff happens without a call");
+	const intent = boundaryIntent(reduceResetControl(acknowledged, { type: "turn_end", facts: turnEndFacts({ hardReserveDue: true }) }));
+	assert.equal(intent.origin, "normal", "an acknowledged call survives the hard cutoff it was armed against");
+	const safety = finalizeResetBoundary(intent, acknowledged.request);
+	assert.deepEqual(safety.state.stopAfterReset?.tool, {}, "the recorded call survives into the run-scoped stop latch");
+	assert.equal(boundaryIntent(reduceResetControl(safety.state, { type: "before_settle", facts: beforeSettleFacts() })).origin, "normal", "a retried safety construction keeps the recorded origin");
 
-	const overflow = reduceResetControl(initialResetControl(), { type: "turn_end", facts: turnEndFacts({ overflow: true, failed: true }) }).state;
-	assert.equal(reduceResetControl(overflow, { type: "before_settle", facts: beforeSettleFacts() }).origin, "forced", "overflow recovery has no call behind it");
+	const overflow = controlState(reduceResetControl(initialResetControl(), { type: "turn_end", facts: turnEndFacts({ overflow: true, failed: true }) }));
+	assert.equal(boundaryIntent(reduceResetControl(overflow, { type: "before_settle", facts: beforeSettleFacts() })).origin, "forced", "overflow recovery has no call behind it");
 });
 
 test("a committed reset records its origin and draws that pool exactly once", async () => {
@@ -974,7 +1074,7 @@ test("reset-control: a command retains tool calls with or without a last word an
 	assert.deepEqual(ack.state.request, { phase: "pending", windowId, command: { continueAfterReset: false }, tool: { lastWord: "tell them I was funny" } });
 	const silentAck = reduceResetControl(reduceResetControl(initialResetControl(), { type: "command", windowId, continueAfterReset: false }).state, { type: "tool_request", windowId });
 	assert.deepEqual(silentAck.state.request, { phase: "pending", windowId, command: { continueAfterReset: false }, tool: {} }, "a call with no last word is still a real tool request");
-	const commit = reduceResetControl(ack.state, { type: "before_settle", facts: beforeSettleFacts() });
-	assert.equal(commit.effect, "commit-boundary-stop");
-	assert.equal(commit.lastWord, "tell them I was funny");
+	const intent = boundaryIntent(reduceResetControl(ack.state, { type: "before_settle", facts: beforeSettleFacts() }));
+	assert.equal(finalizeResetBoundary(intent, ack.state.request).resumeModel, false);
+	assert.equal(intent.tool?.lastWord, "tell them I was funny");
 });
