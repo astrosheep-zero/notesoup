@@ -42,7 +42,7 @@ test("already-pending is an outcome, not an error", () => {
 
 test("a failed transport call without a payload still fails", () => {
   const result = transform({ status: "failed", error: { message: "boom" }, detail: { type: "unknown", input: {}, output: null } });
-  assert.deepEqual(brainEmptySchema.parse(result!.items[0]!.data), { status: "failed", error: "failed" });
+  assert.deepEqual(brainEmptySchema.parse(result!.items[0]!.data), { status: "failed", error: "boom" });
 });
 
 test("other tools and non-tool items stay untouched", () => {

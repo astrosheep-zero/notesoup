@@ -950,6 +950,7 @@ test("empty_brain trims the last word, refuses an oversized one, and a blank per
 	const over = harness();
 	over.sessionManager.appendMessage({ role: "user", content: [{ type: "text", text: "before reset" }], timestamp: Date.now() });
 	const refused = await over.callTool("empty_brain", { last_word: "x".repeat(MAX_LAST_WORD_CHARS + 1) });
+	assert.equal(refused.isError, true, "an oversized note fails the tool call so the host flags it");
 	assert.match(JSON.stringify(refused), /error/, "an oversized note is refused, not truncated");
 	assert.match(JSON.stringify(refused), new RegExp(`${MAX_LAST_WORD_CHARS + 1} characters`), "the refusal names the actual size and the limit");
 	const refusedAstral = await over.callTool("empty_brain", { last_word: "\u{1F41F}".repeat(MAX_LAST_WORD_CHARS + 1) });

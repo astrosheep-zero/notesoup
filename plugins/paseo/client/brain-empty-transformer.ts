@@ -27,7 +27,10 @@ function brainEmptyData(item: ToolCallItem): BrainEmpty | undefined {
   if (item.status === "running") return { status: "running" };
   const wire = resultJson(item.detail.output);
   if (wire && typeof wire.error === "string") return { status: item.status === "failed" ? "failed" : "completed", error: wire.error };
-  if (item.status === "failed") return { status: "failed", error: wire === undefined ? "failed" : undefined };
+  if (item.status === "failed") {
+    const hostError = isRecord(item.error) && typeof item.error.message === "string" ? item.error.message : undefined;
+    return { status: "failed", error: hostError ?? "failed" };
+  }
   if (wire && typeof wire.status === "string") return { status: "completed", outcome: wire.status };
   return { status: "completed" };
 }

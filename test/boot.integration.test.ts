@@ -399,7 +399,9 @@ test("notesoup command toggles future work, /empty schedules a turn-end reset, a
 	assert.equal(sentOf(captured, GUIDANCE_TYPE).length, 0, "no guidance persisted while off");
 	await runHandlers(captured, "session_start", { reason: "startup" }, low);
 	assert.equal(captured.sent.length, 1, "no new boot block is persisted while off");
-	const offResult = resultJson<{ error?: string }>(await call(captured, "empty_brain", {}, low));
+	const offResultRaw = await call(captured, "empty_brain", {}, low);
+	assert.equal(offResultRaw.isError, true, "a refusal is a failed tool call, not a successful answer");
+	const offResult = resultJson<{ error?: string }>(offResultRaw);
 	assert.match(offResult.error ?? "", /off/, "empty_brain refuses while off");
 
 	notices = await runCommand(captured, "notesoup", "on", low);

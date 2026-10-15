@@ -7,7 +7,9 @@ import { wireResult, type Operation, type Outcome, type Renderer } from "../../s
 
 /** Pi's JSON envelope for reset and budget tools; details carry only log/UI metadata. */
 export function output(value: unknown, details?: unknown, terminate = false) {
-	return { content: [{ type: "text" as const, text: JSON.stringify(value) }], details, terminate };
+	// A refusal is a failed tool call, not a successful answer carrying an error string: the host UI only flags isError.
+	const refused = typeof value === "object" && value !== null && typeof (value as { error?: unknown }).error === "string";
+	return { content: [{ type: "text" as const, text: JSON.stringify(value) }], details, terminate, ...(refused ? { isError: true } : {}) };
 }
 
 /** Operation data is schema-derived JSON; only the unresolved generic needs a JsonValue assertion. */
