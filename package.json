@@ -62,7 +62,7 @@
 	"scripts": {
 		"build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json && node scripts/build-extension.mjs && node -e \"require('node:fs').chmodSync('dist/plugins/pi/dream/cli.js', 0o755)\"",
 		"typecheck": "tsc -p tsconfig.json --noEmit && tsc -p plugins/claude/tsconfig.json",
-		"test": "npm run build && node --test --test-concurrency=4 dist/test/*.test.js",
+		"test": "npm run build && node --test --test-concurrency=4 $(ls dist/test/*.test.js | grep -v dist/test/claude-validation.test.js) && node --test dist/test/claude-validation.test.js",
 		"prepublishOnly": "npm run typecheck",
 		"prepack": "npm run build"
 	},
