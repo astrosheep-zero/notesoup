@@ -10,7 +10,7 @@ export type ResetTailState = { readonly boot: boolean; readonly continuation: bo
 /** Original user content, including images; custom boundary messages become LLM user messages. */
 export type CarriedInput = Extract<SessionBoundaryDraft, { type: "custom_message" }>["content"];
 
-export function carriedInputDrafts(inputs: readonly CarriedInput[]): SessionBoundaryDraft[] {
+export function carriedInputDrafts(inputs: readonly CarriedInput[]): Extract<SessionBoundaryDraft, { type: "custom_message" }>[] {
 	return inputs.map((content) => ({ type: "custom_message", customType: CARRIED_INPUT_TYPE, content, display: true }));
 }
 

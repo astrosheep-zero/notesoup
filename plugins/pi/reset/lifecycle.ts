@@ -83,10 +83,7 @@ export type ResetControlEvent =
 	| { readonly type: "input"; readonly windowId: string; readonly input: CarriedInput }
 	| { readonly type: "tool_request"; readonly windowId: string; readonly lastWord?: string }
 	| { readonly type: "turn_end"; readonly facts: ResetTurnEndFacts }
-	| { readonly type: "before_settle"; readonly facts: ResetBeforeSettleFacts }
-	| { readonly type: "settled" }
-	| { readonly type: "abort" }
-	| { readonly type: "clear" };
+	| { readonly type: "before_settle"; readonly facts: ResetBeforeSettleFacts };
 
 export type ResetControlEffect =
 	| "none"
@@ -209,11 +206,6 @@ export function reduceResetControl(state: ResetControlState, event: ResetControl
 			if (facts.queued) return { state: { ...state, request }, effect: "none" };
 			return commandCommit(request);
 		}
-		case "settled":
-			return { state: initialResetControl(), effect: "none" };
-		case "abort":
-		case "clear":
-			return { state: initialResetControl(), effect: "none" };
 	}
 }
 
@@ -237,13 +229,13 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 		const inputs = request.command.inputs;
 		control = { ...control, request: { ...request, command: { ...request.command, inputs: [] } } };
 		for (const draft of carriedInputDrafts(inputs)) {
-			if (draft.type === "custom_message") pi.sendMessage(draft, { triggerTurn: false });
+			pi.sendMessage(draft, { triggerTurn: false });
 		}
 		runInputs.push(...inputs);
 	};
 	const clear = (preserveInputs = true) => {
 		if (preserveInputs) restoreCommandInputs();
-		control = reduceResetControl(control, { type: "clear" }).state;
+		control = initialResetControl();
 		runInputs = [];
 		commandId = undefined;
 	};

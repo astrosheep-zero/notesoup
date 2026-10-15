@@ -634,7 +634,6 @@ test("reset-control: fallback is normal-stop only; hard reserve remains safety",
 		assert.equal(notNormalStop.effect, "none");
 		assert.deepEqual(notNormalStop.state, initialResetControl());
 	}
-	assert.deepEqual(reduceResetControl(manual, { type: "settled" }).state, initialResetControl());
 });
 
 test("reset-control: manual stop survives a hard-reserve reset across windows without a second wipe", () => {
@@ -654,7 +653,7 @@ test("reset-control: manual stop survives a hard-reserve reset across windows wi
 	assert.equal(stop.effect, "stop", "the safety boundary already wiped; settlement must only stop");
 	assert.deepEqual(stop.state, initialResetControl());
 	assert.equal(reduceResetControl(safety.state, { type: "before_settle", facts: beforeSettleFacts() }).effect, "commit-boundary-stop", "a failed safety construction may be retried before settlement");
-	assert.deepEqual(reduceResetControl(safety.state, { type: "abort" }).state, initialResetControl());
+	assert.deepEqual(reduceResetControl(safety.state, { type: "before_settle", facts: beforeSettleFacts({ windowId: freshWindowId, aborted: true }) }).state, initialResetControl());
 });
 
 test("reset-control: manual overflow keeps stop intent while queued work supersedes the failure", () => {
@@ -679,14 +678,13 @@ test("reset-control: manual overflow keeps stop intent while queued work superse
 	assert.equal(retry.state.overflow, "spent", "manual recovery spends the same bounded attempt");
 });
 
-test("reset-control: abort and lifecycle transitions clear every pending phase", () => {
+test("reset-control: explicit abort clears a pending request at turn end or settlement", () => {
 	const windowId = "pcw:test:window";
 	const pending = reduceResetControl(initialResetControl(), { type: "command", windowId, continueAfterReset: false }).state;
 	const aborted = reduceResetControl(pending, { type: "turn_end", facts: turnEndFacts({ aborted: true }) });
 	assert.equal(aborted.effect, "none");
 	assert.deepEqual(aborted.state, initialResetControl());
-	assert.deepEqual(reduceResetControl(pending, { type: "clear" }).state, initialResetControl());
-	assert.deepEqual(reduceResetControl(pending, { type: "settled" }).state, initialResetControl());
+	assert.deepEqual(reduceResetControl(pending, { type: "before_settle", facts: beforeSettleFacts({ aborted: true }) }).state, initialResetControl());
 });
 
 test("reset-control: overflow recovery is armed at turn_end and spent exactly once at settle", () => {
