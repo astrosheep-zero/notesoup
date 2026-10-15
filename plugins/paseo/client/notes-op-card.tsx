@@ -3,21 +3,11 @@ import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import type { NotesOp } from "../shared/notes-op.ts";
+import { PAPER, PaperCard } from "./paper-card.tsx";
 
 const OP_LABEL: Record<NotesOp["op"], string> = { read: "READ NOTE", write: "WROTE NOTE", update: "UPDATED NOTE" };
 const OP_LABEL_RUNNING: Record<NotesOp["op"], string> = { read: "READING NOTE", write: "WRITING NOTE", update: "UPDATING NOTE" };
 const CHANGE_LABEL: Record<string, string> = { body: "edited", metadata: "metadata", moved: "renamed", none: "unchanged" };
-
-/** Paper palette: pale note paper, readable regardless of the host theme. */
-const PAPER = {
-  background: "#f7f2df",
-  border: "#d9cdaa",
-  tape: "#d8c98f",
-  ink: "#33301f",
-  inkMuted: "#867c63",
-  added: "#357a44",
-  removed: "#b0493e",
-};
 
 function DiffBody({ diff }: { diff: string }) {
   return (
@@ -46,21 +36,7 @@ export function NotesOpCard({ item, layout }: PluginTimelineItemProps<NotesOp>) 
   const showEllipsis = data.truncated && data.diff === undefined;
   const hasBody = Boolean(data.text || data.preview || data.diff || footnotes.length);
   return (
-    <View style={{ paddingTop: 6 }}>
-      <View style={{
-        alignSelf: "flex-start", width: 84, height: 14, marginLeft: 28, marginBottom: -9, zIndex: 1,
-        backgroundColor: PAPER.tape, opacity: 0.9, borderRadius: 2,
-        transform: [{ rotate: "-2deg" }],
-      }} />
-      <View style={{
-        padding: layout.compact ? 10 : 12,
-        gap: 5,
-        minWidth: 0,
-        borderRadius: 4,
-        borderWidth: 1,
-        borderColor: PAPER.border,
-        backgroundColor: PAPER.background,
-      }}>
+    <PaperCard compact={layout.compact}>
         <View style={{ gap: 3 }}>
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
             <Text style={{ color: PAPER.inkMuted, fontSize: 11, letterSpacing: 0.5 }}>
@@ -103,7 +79,6 @@ export function NotesOpCard({ item, layout }: PluginTimelineItemProps<NotesOp>) 
         >
           <Icon name="ChevronUp" size={18} color={PAPER.inkMuted} />
         </Pressable>}
-      </View>
-    </View>
+    </PaperCard>
   );
 }
