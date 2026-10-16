@@ -1,6 +1,6 @@
 {
   "name": "notesoup",
-  "version": "0.52.1",
+  "version": "0.52.2",
   "description": "Durable notes and a host-scoped notes boot section for Claude Code.",
   "author": {
     "name": "AstroSheep"
