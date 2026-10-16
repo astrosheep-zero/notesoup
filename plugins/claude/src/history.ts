@@ -7,10 +7,6 @@ type Row = Record<string, unknown>;
 type Version = { row: Row; ancestorUuid?: string; ancestor?: Version; ordinal?: number };
 type Node = { first: Version; latest: Version; items: DecodedHistoryItem[] };
 export type ClaudeHistorySource = { sessionId: string; transcriptPath: string; headUuid?: string };
-const METADATA = new Set([
-	"queue-operation", "last-prompt", "atis-latch", "mode", "permission-mode", "file-history-snapshot", "cost-state",
-	"summary", "custom-title", "agent-name", "agent-color", "tag", "session-title", "progress",
-]);
 const MESSAGE_TYPES = new Set(["user", "assistant", "system", "attachment"]);
 const NON_TEXT_BLOCKS = new Set(["thinking", "redacted_thinking", "image", "document", "audio", "video", "server_tool_use", "web_search_tool_result", "tool_reference"]);
 function object(value: unknown): value is Row { return typeof value === "object" && value !== null && !Array.isArray(value); }
@@ -119,8 +115,9 @@ export function claudeHistoryFromJsonl(text: string, source: Omit<ClaudeHistoryS
 	const nodes = new Map<string, Node>();
 	let nextSeq = 1;
 	for (const row of rowsOf(text)) {
-		if (METADATA.has(row.type as string)) continue;
-		if (!MESSAGE_TYPES.has(row.type as string)) throw new Error(`unsupported Claude transcript record type: ${row.type}`);
+		// Ignore non-message records, including future metadata. A skipped UUID that
+		// the selected branch actually requires still fails ancestry resolution below.
+		if (!MESSAGE_TYPES.has(row.type as string)) continue;
 		const uuid = requiredString(row.uuid, "uuid");
 		parent(row);
 		if (row.sessionId !== source.sessionId) throw new Error("Claude transcript belongs to a different session");

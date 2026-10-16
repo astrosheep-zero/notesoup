@@ -57,6 +57,22 @@ test("Claude append and result arrival preserve call addresses and use the share
 	assert.deepEqual(search.data.items.map((item) => "seq" in item ? item.seq : -1), [3]);
 });
 
+test("Claude file-history deltas do not become events or change history addresses", () => {
+	const rows = [user("u", null, "hello"), assistant("a", "u", [{ type: "text", text: "reply" }])];
+	const delta = { type: "file-history-delta", messageId: "u", snapshotMessageId: "u", trackingPath: "private-file.txt",
+		backup: { backupFileName: "private-backup", version: 1, backupTime: "2026-01-01T00:00:00Z", realParentDir: "/private" }, timestamp: "2026-01-01T00:00:00Z" };
+	const baseline = project(rows, "a");
+	assert.deepEqual(project([delta, rows[0]!, delta, rows[1]!, delta], "a"), baseline);
+	assert.equal(baseline.highestSeq, 2);
+});
+
+test("Claude skips unknown record types unless selected ancestry requires them", () => {
+	const u = user("u", null, "hello"), a = assistant("a", "u", [{ type: "text", text: "reply" }]);
+	const unknown = { type: "future-record", uuid: "future", parentUuid: "not-on-disk", content: "private metadata" };
+	assert.deepEqual(project([unknown, u, unknown, a, unknown], "a"), project([u, a], "a"));
+	assert.throws(() => project([u, unknown, { ...a, parentUuid: "future" }], "a"), /missing Claude transcript ancestor: future/);
+});
+
 test("Claude duplicate UUID records do not allocate again or move addresses on reload", () => {
 	const u = user("u", null, "hello"), a = assistant("a", "u", [call("one")]);
 	const original = project([u, a], "a");
@@ -166,7 +182,6 @@ test("Claude tolerates only the uncommitted JSONL tail, not malformed committed 
 	assert.deepEqual(claudeHistoryFromJsonl(`${text}{\"type\":\"user\"`, { sessionId, headUuid: "u" }), project([user("u", null, "first")], "u"));
 	assert.equal(claudeHistoryFromJsonl(text.trimEnd(), { sessionId, headUuid: "u" }).highestSeq, 1);
 	assert.throws(() => claudeHistoryFromJsonl(`${text}{broken}\n`, { sessionId, headUuid: "u" }), /malformed.*line 2/);
-	assert.throws(() => project([user("u", null, "first"), { type: "new-message-schema", uuid: "unknown" }], "u"), /unsupported.*record type/);
 	assert.throws(() => project([row("u", null, "user", [{ type: "new-block-schema" }])], "u"), /unsupported.*content block/);
 	assert.throws(() => project([row("u", null, "user", { type: "text", text: "not an array" })], "u"), /message content/);
 	assert.throws(() => project([user("u", null, "first"), user("u", null, "conflict")], "u"), /conflicting.*duplicate UUID/);
@@ -178,7 +193,10 @@ test("Claude helper history tools reuse shared schemas, outcomes and text render
 	const root = mkdtempSync(join(tmpdir(), "claude-history-"));
 	t.after(() => rmSync(root, { recursive: true, force: true }));
 	const transcriptPath = join(root, "transcript.jsonl"), rows = [user("u", null, "remember this"), assistant("a", "u", [call("one")]), row("r", "a", "user", [result("one", "recorded output")])];
-	writeFileSync(transcriptPath, jsonl(rows));
+	writeFileSync(transcriptPath, jsonl([...rows,
+		{ type: "file-history-delta", messageId: "r", snapshotMessageId: "u", trackingPath: "file.txt", backup: null, timestamp: "2026-01-01T00:00:00Z" },
+		{ type: "future-record", content: "private metadata" },
+	]));
 	const identity = { home: join(root, "notes"), sessionId, cwd: root, agent: "claude", model: "claude" };
 	const history = { sessionId, transcriptPath, headUuid: "r" };
 	const projection = await readClaudeHistory(history);
