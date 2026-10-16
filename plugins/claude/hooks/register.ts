@@ -469,7 +469,11 @@ export function register(on: On) {
     // The reset already retained its boot as the sole conversation message.
     // Prompt context still recomputes, but must not inject a duplicate snapshot.
     const retained = state.retainedBoot !== undefined
-    let blocks = retained ? result.blocks.filter((block) => block.name !== "notesoup:boot") : [...result.blocks]
+    let blocks = result.blocks.filter((block) => {
+      if (block.name !== "notesoup:boot" || !identity) return true
+      const marker = bootWindow(block.text)
+      return !retained && (!marker || (marker.sessionId === identity.sessionId && marker.window === state.window))
+    })
     if (!retained && !blocks.some((block) => block.name === "notesoup:boot") && identity) {
       const texts = await loadTexts($, state)
       const boot = await buildBoot($, identity, state.window, texts, state.history)
@@ -532,22 +536,23 @@ async function withWarning<T extends { context?: readonly string[]; drop?: strin
 /** The boot's identity line; `context_window` is the pre-rename tag still in old transcripts. */
 const BOOT_IDENTITY = /<(?:notesoup:window_identity|context_window)>\nAgent name: claude /
 
-/**
- * A retained boot carries the window ordinal in a trailing id line. Old and new tag spellings
- * both count: a transcript written before the rename must not lose its window numbering.
- */
+/** Old and new tag spellings, including a boot copied into a fork. */
+function bootWindow(text: string): { sessionId: string; window: number } | undefined {
+  if (!BOOT_IDENTITY.test(text)) return undefined
+  const marker = /^Current context window id: claude:([^\n]+):(\d+)$/m.exec(text)
+  if (!marker) return undefined
+  const window = Number(marker[2])
+  return Number.isSafeInteger(window) ? { sessionId: marker[1]!, window } : undefined
+}
+/** Keep the copied boot ordinal, but rebuild its snapshot and identity for the new session. */
 function restoreWindow(state: ResetState, messages: readonly { role: string; text: string }[]) {
   if (!state.identity) return
-  const prefix = `Current context window id: claude:${state.identity.sessionId}:`
   for (const message of messages) {
-    if (message.role !== "user" || !BOOT_IDENTITY.test(message.text)) continue
-    const line = message.text.split("\n").find((value) => value.startsWith(prefix))
-    if (!line) continue
-    const suffix = line.slice(prefix.length)
-    const window = Number(suffix)
-    if (!/^\d+$/.test(suffix) || !Number.isSafeInteger(window) || window <= state.window) continue
-    state.window = window
-    state.retainedBoot = message.text
+    if (message.role !== "user") continue
+    const marker = bootWindow(message.text)
+    if (!marker || marker.window <= state.window) continue
+    state.window = marker.window
+    state.retainedBoot = marker.sessionId === state.identity.sessionId ? message.text : undefined
   }
 }
 

@@ -108,7 +108,8 @@ function prepareSelection(projection: HistoryProjection, params: HistorySelectio
 			run.push(event);
 			continue;
 		}
-		if (folds && eventDocument(event) === "") continue;
+		// Tool/thinking-only envelopes are not dialogue, even with explicit roles.
+		if ((event.role === "user" || event.role === "assistant") && eventDocument(event) === "") continue;
 		const matchOffset = params.query === undefined ? undefined : earliestMatchOffsetChars(eventDocument(event), params.query as string[]);
 		if (matchOffset !== undefined && matchOffset < 0) continue;
 		candidates.push({ event, matchOffset, before: foldedRun(run) });

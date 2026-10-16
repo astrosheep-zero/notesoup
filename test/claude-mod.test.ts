@@ -370,6 +370,28 @@ test("Claude Mod appends boot once and reuses persisted blocks after re-registra
   assert.deepEqual(notifications, [], "successful boot never notifies");
 });
 
+test("Claude fork replaces a copied boot with the current identity without resetting the window ordinal", async (t) => {
+  const home = mkdtempSync(join(tmpdir(), "claude-fork-boot-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const { host } = fakeEngine(home);
+  const copied = "<notesoup:window_identity>\nAgent name: claude (brain: claude)\n\nclaude:parent-session\n</notesoup:window_identity>\n\n<notesoup:notes_protocol>\nParent protocol\n</notesoup:notes_protocol>\nCurrent context window id: claude:parent-session:3";
+  host.session.messages = async () => [{ role: "user", text: copied }];
+  const handlers = new Map<string, HookHandler>();
+  (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
+  const invoke = (name: string, event: Record<string, unknown> = {}, result: unknown = {}) => handlers.get(name)!(host, event, async () => result);
+  await invoke("session.start", { cwd: home, isInteractive: true });
+  const upstream = { blocks: [{ name: "other", text: "keep me" }, { name: "notesoup:boot", text: copied }], sentinel: "kept" };
+  const current = await invoke("prompt.context", {}, upstream) as typeof upstream;
+  assert.equal(current.sentinel, "kept");
+  assert.deepEqual(current.blocks[0], upstream.blocks[0]);
+  assert.equal(current.blocks.length, 2, "replace the copied context block rather than adding another");
+  assert.match(current.blocks[1]!.text, /Current context window id: claude:hook-session:3/);
+  assert.doesNotMatch(current.blocks[1]!.text, /claude:parent-session/);
+  assert.deepEqual(await invoke("prompt.context", {}, current), current, "reuse the now-current block on reload");
+  const compacted = await invoke("session.compact", { trigger: "auto", messages: [] }) as { messages: Array<{ text: string }> };
+  assert.match(compacted.messages[0]!.text, /Current context window id: claude:hook-session:4/);
+});
+
 test("Claude Mod with NOTESOUP_DISABLED registers nothing and passes every event through", async (t) => {
   const home = mkdtempSync(join(tmpdir(), "claude-hook-disabled-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));

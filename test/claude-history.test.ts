@@ -57,6 +57,31 @@ test("Claude append and result arrival preserve call addresses and use the share
 	assert.deepEqual(search.data.items.map((item) => "seq" in item ? item.seq : -1), [3]);
 });
 
+test("Claude dialogue paging skips tool/thinking envelopes without losing array text or changing addresses", async () => {
+	const rows = [row("u", null, "user", [{ type: "text", text: "human question" }]),
+		assistant("reply", "u", [{ type: "text", text: "assistant answer" }]),
+		assistant("thinking", "reply", [{ type: "thinking", thinking: "private thought" }]),
+		assistant("call", "thinking", [call("one")]), row("result", "call", "user", [result("one", "tool output")]),
+		row("last", "result", "user", [{ type: "text", text: "human followup" }]),
+		compact("boundary", "last"), row("boot", "boundary", "user", bootText(1))];
+	const projection = project(rows, "boot");
+	assert.equal(projection.highestSeq, 10);
+	const listed = await historyList.execute({ window_id: "@previous", roles: ["user", "assistant"], limit: 3 }, projection);
+	assert.ok(listed.ok);
+	assert.deepEqual(listed.data.items.map((item) => "seq" in item ? [item.seq, item.content] : []), [[1, "human question"], [2, "assistant answer"], [8, "human followup"]]);
+	const read = await historyRead.execute({ seq: 2 }, projection);
+	assert.ok(read.ok);
+	assert.equal(read.data.text, "assistant answer");
+	const envelope = await historyRead.execute({ seq: 6 }, projection);
+	assert.ok(envelope.ok);
+	assert.equal(envelope.data.text, "", "a tool-result envelope has no dialogue text to invent");
+	assert.match(historyRead.render(envelope), /No visible text recorded/);
+	const tool = await historyRead.execute({ seq: 5 }, projection);
+	assert.ok(tool.ok);
+	assert.match(tool.data.text, /tool output/);
+	assert.doesNotMatch(historyList.render(listed), /private thought|tool output/);
+});
+
 test("Claude file-history deltas do not become events or change history addresses", () => {
 	const rows = [user("u", null, "hello"), assistant("a", "u", [{ type: "text", text: "reply" }])];
 	const delta = { type: "file-history-delta", messageId: "u", snapshotMessageId: "u", trackingPath: "private-file.txt",
@@ -115,6 +140,14 @@ test("a persisted boot yields its ordinal under both tag spellings", () => {
 	assert.deepEqual(real.windows.map((window) => window.windowId), current.windows.map((window) => window.windowId));
 	const partial = `<notesoup:window_identity>\nAgent name: claude (brain: claude)\n\nclaude:${sessionId}\n</notesoup:window_identity>\nCurrent context window id: claude:${sessionId}:3`;
 	assert.equal(allItems(project(rowsFor(partial), "after")).find((event) => event.text === "after reset")?.windowId, `claude:${sessionId}:1`, "an identity line without the protocol block is not a trusted boot");
+});
+
+test("Claude forked transcripts retain copied boot ordinals but use the new session's window ids", () => {
+	const rows = [user("u", null, "old request"), compact("boundary", "u"), row("boot", "boundary", "user", bootText(3)), user("after", "boot", "after fork")];
+	const forkId = "forked-session";
+	const projection = claudeHistoryFromJsonl(jsonl(rows.map((row) => ({ ...row, sessionId: forkId }))), { sessionId: forkId, headUuid: "after" });
+	assert.equal(allItems(projection).find((event) => event.text === "after fork")?.windowId, `claude:${forkId}:3`);
+	assert.ok(projection.windows.every((window) => window.windowId.startsWith(`claude:${forkId}:`)));
 });
 
 test("Claude native compaction and reset keep pre-reset history, preserved rewrites and matching boot windows", async () => {

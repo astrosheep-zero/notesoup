@@ -99,13 +99,14 @@ const BOOT_PROTOCOL_OPEN = /\n<(?:notesoup:notes_protocol|context_window_protoco
 const BOOT_PROTOCOL_CLOSE = /\n<\/(?:notesoup:notes_protocol|context_window_protocol)>/;
 
 /** Match the complete retained notesoup boot, not a casually quoted window-id line. */
-function bootOrdinal(row: Row, sessionId: string, retained: boolean): number | undefined {
+function bootOrdinal(row: Row, retained: boolean): number | undefined {
 	if (!retained || row.type !== "user" || !object(row.message)) return undefined;
 	const text = contentText(row.message.content);
 	if (!BOOT_IDENTITY.test(text) || !BOOT_PROTOCOL_OPEN.test(text) || !BOOT_PROTOCOL_CLOSE.test(text)) return undefined;
-	const prefix = `Current context window id: claude:${sessionId}:`;
-	const suffix = text.split("\n").find((line) => line.startsWith(prefix))?.slice(prefix.length);
-	if (suffix === undefined || !/^\d+$/.test(suffix)) return undefined;
+	// A fork copies the retained boot verbatim. Its ordinal survives, while
+	// public window ids below always belong to the current transcript session.
+	const suffix = /^Current context window id: claude:[^\n]+:(\d+)$/m.exec(text)?.[1];
+	if (suffix === undefined) return undefined;
 	const ordinal = Number(suffix);
 	return Number.isSafeInteger(ordinal) ? ordinal : undefined;
 }
@@ -158,7 +159,7 @@ export function claudeHistoryFromJsonl(text: string, source: Omit<ClaudeHistoryS
 		let before = cursor.ordinal ?? 0;
 		for (const current of chain.reverse()) {
 			const retained = current.row.isCompactSummary === true || (current.ancestor !== undefined && boundary(current.ancestor.row));
-			const marked = bootOrdinal(current.row, source.sessionId, retained);
+			const marked = bootOrdinal(current.row, retained);
 			current.ordinal = marked === undefined ? before + (boundary(current.row) ? 1 : 0) : Math.max(before, marked);
 			before = current.ordinal;
 		}

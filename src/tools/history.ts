@@ -75,7 +75,7 @@ function renderRead(data: HistoryReadData): string {
 	const tool = toolHeader(data);
 	const afterSeq = data.seq - 10;
 	const neighborhood = `neighborhood → \`history_list\`(${JSON.stringify({ ...(afterSeq >= 1 ? { after_seq: afterSeq } : {}), before_seq: data.seq + 10 })})`;
-	return [header(data), ...(tool ? [tool] : []), neighborhood, "", renderTextWindow(data)].join("\n");
+	return [header(data), ...(tool ? [tool] : []), neighborhood, "", data.total_chars === 0 ? "No visible text recorded for this event." : renderTextWindow(data)].join("\n");
 }
 
 /* ------------------------------------------------------------------ shared bounding */
