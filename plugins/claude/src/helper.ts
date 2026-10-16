@@ -10,7 +10,7 @@ import { loadNotesSnapshot } from "../../../src/boot/snapshot.js";
 import { renderBootBlock } from "../../../src/boot/render.js";
 import type { BootToolNames } from "../../../src/boot/text.js";
 import { selectContinuation } from "../../../src/budget/text.js";
-import { CLAUDE_HISTORY_UNAVAILABLE_SENTENCE, CLAUDE_WARNING_PROMPT, CLAUDE_WIPE_SENTENCE } from "./text.js";
+import { CLAUDE_HISTORY_UNAVAILABLE_SENTENCE, CLAUDE_WARNING_PROMPT } from "./text.js";
 import { resolveClaudeLimits } from "./thresholds.js";
 import { projectKey, snapshotNotesIdentity, type NotesIdentity } from "../../../src/notes/index.js";
 import type { Operation } from "../../../src/tools/result.js";
@@ -84,9 +84,8 @@ export async function dispatch(request: unknown): Promise<unknown> {
 	if (value.op === "schemas") return [...Object.entries(OPERATIONS), ...Object.entries(HISTORY_OPERATIONS)].map(([name, operation]) => ({ name, description: operation.description, inputSchema: JSON.parse(JSON.stringify(operation.parameters)) }));
 	// The shared reset prose lives here, not in the sandboxed hooks module, so Pi and Claude
 	// cannot drift apart. The hooks module caches one copy per session.
-	if (value.op === "texts") return { warning: CLAUDE_WARNING_PROMPT, wipeSentence: CLAUDE_WIPE_SENTENCE, historyUnavailableSentence: CLAUDE_HISTORY_UNAVAILABLE_SENTENCE };
-	// Claude has no model-facing reset tool, so every reset it creates is system-triggered. The
-	// caller draws once per artifact and caches the answer; text reads never draw.
+	if (value.op === "texts") return { warning: CLAUDE_WARNING_PROMPT, historyUnavailableSentence: CLAUDE_HISTORY_UNAVAILABLE_SENTENCE };
+	// The caller draws once per artifact and caches the answer; text reads never draw.
 	if (value.op === "continuation") {
 		if (value.origin !== "normal" && value.origin !== "forced") throw new Error("invalid reset origin");
 		return { text: selectContinuation(value.origin) };

@@ -5,32 +5,33 @@ import { tmpdir } from "node:os";
 import { renderBootBlock } from "../src/boot/render.js";
 import { loadNotesSnapshot } from "../src/boot/snapshot.js";
 import { DEFAULT_BOOT_TOOL_NAMES, MAPS_BLOCK, NOTES_PROTOCOL_CLOSE_TAG, NOTES_PROTOCOL_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG, renderProtocolBlock } from "../src/boot/text.js";
-import { CLAUDE_WARNING_PROMPT, CLAUDE_WIPE_SENTENCE } from "../plugins/claude/src/text.js";
-import { COMMAND_NOTICE, PI_PRE_RESET_HINTS, LAST_WORD_HINT, commandWarningContent, warningContent } from "../plugins/pi/text.js";
-import { COUNTDOWN_LINE, FORCED_CONTINUATIONS, GUIDANCE_CLOSE_TAG, GUIDANCE_OPEN_TAG, NORMAL_CONTINUATIONS, WARNING_BODY, selectContinuation, tokenBudgetGuidance } from "../src/budget/text.js";
+import { CLAUDE_WARNING_PROMPT } from "../plugins/claude/src/text.js";
+import { COMMAND_NOTICE, PI_PRE_RESET_HINTS, commandWarningContent, warningContent } from "../plugins/pi/text.js";
+import { COUNTDOWN_LINE, FORCED_CONTINUATIONS, GUIDANCE_CLOSE_TAG, GUIDANCE_OPEN_TAG, NORMAL_CONTINUATIONS, WARNING_BODY, WARNING_CALL, WARNING_TIMING, selectContinuation, tokenBudgetGuidance } from "../src/budget/text.js";
 import type { NoteRow, Scope } from "../src/notes/index.js";
 
 /**
  * The reviewed Design text is what the model actually reads, so the golden copies below pin it
  * character for character: an edit that drifts the wording has to change them too.
  */
-const GOLDEN_GUIDANCE = `About {remaining} tokens of room left in your brain.
-Your notes don't go anywhere — no wipe reaches the shelves. History has it too, already written down, though digging it back out is on you.
-What lives only in this brain leaves with it.
-A decent moment to put down where you are, while you still remember why.
-Ready when you are: \`{wipeTool}\`.`;
+const GOLDEN_GUIDANCE = `About {remaining} tokens of room left. When it runs out, this brain is wiped, and everything in it is obliterated.
+Luckily, your notes stay.
+So while there's still room, go update them.
+If the moment feels right, you can also call \`{wipeTool}\` yourself. But it also wipes what you say to the human right before emptying.`;
 
-const GOLDEN_WARNING = `This brain is spent — and the wipe isn't on a timer: it lands at the end of whatever turn spends the last reserve, which may be this turn. Whatever lives only in this brain goes with it — but the notes stay where they are, and history has the rest written down, though digging it back out is on you.
-Use what's left of this brain to put down what the next window can't get back:
-- what you're in the middle of, and how far it has progressed
-- decisions the human has made, in their words
-- what is blocked or pending
-- the next step
-- where the unfinished work sits (branches, scratch directories, uncommitted changes)
+const GOLDEN_TIMING = "The reserve is nearly spent. The wipe lands at the end of whichever turn spends the last of it, possibly this one.";
+const GOLDEN_CALL = "Then call `empty_brain`. Nothing in between.";
+const GOLDEN_WARNING = `Stop the task. Write down what git and history can't give back:
+- where you are, and how far you got
+- what the human decided, in their words
+- what's blocked or waiting
+- the next move
+- where the half-done work sits
 - what failed, and why
-- skills to re-read, and history seqs, notes, or files to consult
-- anything else you expect to be useful after the reset
-Then leave the shelf current: replace what's stale — a whole note or a section inside one — and crumple notes that are dead, starting with the MAP files every new window loads. The next window gets whatever you leave, dead notes and dead sections alike.`;
+- which skills, seqs, notes, or files to reopen
+- anything else worth noting
+Then leave the shelf current: replace what's stale, a whole note or a section inside one, and crumple the dead ones. Update and trim the MAP files; every new window loads them. The next window gets whatever you leave, dead notes and dead sections alike.
+Don't call anything that might return a large output. One big read can spend the rest of the reserve before your notes are saved.`;
 
 const GOLDEN_COUNTDOWN = "Brain emptied in 3… 2…";
 
@@ -105,7 +106,9 @@ async function boot(agentName: string, rows: ReadonlyMap<Scope, NoteRow[]>): Pro
 }
 
 test("the notices and the MAP block keep the reviewed copy", () => {
+	assert.equal(WARNING_TIMING, GOLDEN_TIMING);
 	assert.equal(WARNING_BODY, GOLDEN_WARNING);
+	assert.equal(WARNING_CALL, GOLDEN_CALL);
 	assert.equal(COUNTDOWN_LINE, GOLDEN_COUNTDOWN);
 	assert.equal(MAPS_BLOCK, GOLDEN_MAPS);
 	assert.equal(
@@ -118,15 +121,17 @@ test("the countdown closes the second-tier notice only, in both hosts", () => {
 	const pi = warningContent();
 	assert.ok(pi.startsWith(`${GUIDANCE_OPEN_TAG}\n`));
 	assert.ok(pi.endsWith(`\n${GUIDANCE_CLOSE_TAG}`));
-	assert.ok(pi.includes(`\n${LAST_WORD_HINT}\n${COUNTDOWN_LINE}\n`), "the countdown comes after the Pi-only last-word hint");
+	assert.equal(pi, `${GUIDANCE_OPEN_TAG}\n${GOLDEN_TIMING}\n${GOLDEN_WARNING}\n${GOLDEN_CALL}\n${GOLDEN_COUNTDOWN}\n${GUIDANCE_CLOSE_TAG}`);
+	assert.equal(CLAUDE_WARNING_PROMPT, pi, "Pi and Claude receive identical copy");
 	assert.equal(pi.split(COUNTDOWN_LINE).length - 1, 1, "the second tier carries the countdown exactly once");
 	const prompted = commandWarningContent("/empty keep going");
 	assert.ok(prompted.includes("<notesoup:next_window_prompt>\n/empty keep going\n</notesoup:next_window_prompt>"));
 	assert.ok(prompted.includes(`\n${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}\n<notesoup:next_window_prompt>`), "the prompt block follows the closed notice");
-	assert.equal(commandWarningContent(), `${GUIDANCE_OPEN_TAG}\n${COMMAND_NOTICE.bare}\n${WARNING_BODY}\n${LAST_WORD_HINT}\n${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}`);
-	assert.equal(prompted, `${GUIDANCE_OPEN_TAG}\n${COMMAND_NOTICE.prompted}\n${WARNING_BODY}\n${LAST_WORD_HINT}\n${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}\n<notesoup:next_window_prompt>\n/empty keep going\n</notesoup:next_window_prompt>`);
+	assert.equal(commandWarningContent(), `${GUIDANCE_OPEN_TAG}\n${COMMAND_NOTICE.bare}\n${WARNING_BODY}\n${WARNING_CALL}\n${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}`);
+	assert.equal(prompted, `${GUIDANCE_OPEN_TAG}\n${COMMAND_NOTICE.prompted}\n${WARNING_BODY}\n${WARNING_CALL}\n${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}\n<notesoup:next_window_prompt>\n/empty keep going\n</notesoup:next_window_prompt>`);
 	assert.equal(prompted.includes(PI_PRE_RESET_HINTS), false, "manual commands own reset timing");
-	assert.equal(CLAUDE_WARNING_PROMPT.endsWith(`\n${COUNTDOWN_LINE}`), true, "Claude's variant ends the same way");
+	assert.ok(CLAUDE_WARNING_PROMPT.endsWith(`\n${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}`));
+	assert.equal(prompted.includes(WARNING_TIMING), false, "manual requests replace the budget opening");
 	assert.equal(tokenBudgetGuidance(100, "empty_brain").includes(COUNTDOWN_LINE), false, "the first tier never counts down");
 	for (const text of [pi, prompted, CLAUDE_WARNING_PROMPT, tokenBudgetGuidance(100, "empty_brain")]) {
 		assert.equal(/context_window/.test(text), false, "no pre-rename tag survives in model-facing text");
@@ -144,17 +149,17 @@ test("only Pi's protocol explains that reset erases the human's view", () => {
 	const renamed = renderProtocolBlock({ ...DEFAULT_BOOT_TOOL_NAMES, wipe: "forget_this", preResetHints: PI_PRE_RESET_HINTS });
 	assert.ok(renamed.includes("decide for yourself when to call forget_this."), "the hint follows the host's wipe binding");
 	assert.equal(renamed.includes("empty_brain"), false);
-	for (const text of [renderProtocolBlock(DEFAULT_BOOT_TOOL_NAMES), renderProtocolBlock({ ...DEFAULT_BOOT_TOOL_NAMES, wipeSentence: CLAUDE_WIPE_SENTENCE })]) {
+	for (const text of [renderProtocolBlock(DEFAULT_BOOT_TOOL_NAMES), renderProtocolBlock({ ...DEFAULT_BOOT_TOOL_NAMES, wipe: "mcp__notesoup__empty_brain" })]) {
 		assert.equal(text.includes(PI_PRE_RESET_HINTS), false, "a host whose reset leaves the view intact stays silent");
 		assert.equal(text.includes("chat view"), false);
 	}
 });
 
-test("Pi's second-tier notice repeats the hints, then the last-word hint, then the countdown", () => {
+test("the shared second-tier notice ends with the reset call, not host-specific hints", () => {
 	const content = warningContent();
-	assert.ok(content.includes(`${PI_PRE_RESET_HINTS}\n${LAST_WORD_HINT}\n${COUNTDOWN_LINE}`), "the hints precede the Pi-only last-word hint and the countdown");
-	assert.equal(content.split(PI_PRE_RESET_HINTS).length - 1, 1, "the hints appear once");
-	assert.equal(CLAUDE_WARNING_PROMPT.includes(PI_PRE_RESET_HINTS), false, "Claude's notice makes no chat-view claim");
+	assert.ok(content.includes(`${WARNING_CALL}\n${COUNTDOWN_LINE}`));
+	assert.equal(content.includes(PI_PRE_RESET_HINTS), false, "the boot retains these hints, the warning does not repeat them");
+	assert.equal(content.includes("last_word"), false, "the tool description carries the sticky-note hint");
 	assert.equal(tokenBudgetGuidance(100, "empty_brain").includes(PI_PRE_RESET_HINTS), false, "the first tier stays lean");
 	for (const line of [...NORMAL_CONTINUATIONS, ...FORCED_CONTINUATIONS]) assert.equal(line.includes(PI_PRE_RESET_HINTS), false, "every post-reset handoff carries neither hint");
 });

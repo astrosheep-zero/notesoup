@@ -12,7 +12,7 @@ type Engine = Pick<EngineInterface, "process" | "session" | "ui" | "clock" | "pr
 /** The measured context, as much of it as the engine reported. */
 type ContextUsage = { tokens?: number; window?: number; percent?: number }
 /** Shared reset prose, fetched once per session so Pi and Claude cannot drift apart. */
-type SharedTexts = { warning?: string; wipeSentence?: string; historyUnavailableSentence?: string }
+type SharedTexts = { warning?: string; historyUnavailableSentence?: string }
 type ClaudeLimits = {
   source: string; autoCompact: boolean; unit: "tokens" | "percent"
   native: number; reset: number; warn: number; resetMargin: number; warningRunway: number
@@ -20,6 +20,7 @@ type ClaudeLimits = {
 type ResetState = {
   identity?: Identity; history?: HistorySource; historyWindowHead?: string; generation: number; window: number; disabled: boolean; turnRunning: boolean; resetting: boolean
   manualPending: boolean; headless: boolean; usageFailureLogged: boolean; preparedBoot?: string; retainedBoot?: string
+  toolResetRequested?: boolean; lastWord?: string
   continuation?: string; continuationWindow?: number
   compactDisabled: boolean; limitsFailureLogged: boolean; limitsAttempts: number; limitsWindow: number
   limits?: ClaudeLimits; warnedWindow?: number; warningPending?: number; texts?: SharedTexts; settingsFailureLogged: boolean
@@ -35,13 +36,13 @@ const RESET_INSTRUCTIONS = "notesoup: reset to a fresh notes-only context window
 const BOOT_TOOLS = {
   notes: `${PREFIX}notes_*`, notesList: `${PREFIX}notes_list`,
   history: "history_* (unavailable: no main transcript_path)",
-  remaining: "get_context_remaining (unavailable in Claude)", wipe: "/fresh-window (user command; no model reset tool in Claude)",
+  remaining: "get_context_remaining (unavailable in Claude)", wipe: `${PREFIX}empty_brain`,
 }
 
-/** The boot names the host's own wipe path, so the protocol block speaks about `/fresh-window`. */
+/** Bind the shared protocol to the registered Claude tools. */
 async function buildBoot($: Engine, identity: Identity, window: number, texts?: SharedTexts, history?: HistorySource) {
   const available = history?.sessionId === identity.sessionId
-  const tools = { ...BOOT_TOOLS, ...(available ? { history: `${PREFIX}history_*` } : { historySentence: texts?.historyUnavailableSentence }), ...(texts?.wipeSentence === undefined ? {} : { wipeSentence: texts.wipeSentence }) }
+  const tools = { ...BOOT_TOOLS, ...(available ? { history: `${PREFIX}history_*` } : { historySentence: texts?.historyUnavailableSentence }) }
   return run($, { op: "boot", identity, window, tools })
 }
 /** The notes-only reset shape, shared by our own reset and Claude's native auto compaction. */
@@ -61,6 +62,7 @@ async function resetMessages($: Engine, state: ResetState, identity: Identity): 
   return { boot: text, messages: [
     { role: "user", text, toolUses: [] },
     { role: "user", text: continuation, toolUses: [] },
+    ...(state.lastWord ? [{ role: "user" as const, text: `*You peel a sticky note off your forehead.*\n${state.lastWord}`, toolUses: [] as [] }] : []),
   ] }
 }
 function numberOf(value: unknown): number | undefined {
@@ -71,7 +73,6 @@ function sharedTextsOf(value: unknown): SharedTexts | undefined {
   const row = value as Record<string, unknown>
   const texts: SharedTexts = {}
   if (typeof row.warning === "string" && row.warning.length > 0) texts.warning = row.warning
-  if (typeof row.wipeSentence === "string" && row.wipeSentence.length > 0) texts.wipeSentence = row.wipeSentence
   if (typeof row.historyUnavailableSentence === "string" && row.historyUnavailableSentence.length > 0) texts.historyUnavailableSentence = row.historyUnavailableSentence
   return Object.keys(texts).length > 0 ? texts : undefined
 }
@@ -200,15 +201,11 @@ async function loadTexts($: Engine, state: ResetState): Promise<SharedTexts | un
   if (texts) state.texts = texts
   return texts
 }
-/**
- * The one fresh-window line for the artifact being created. Claude has no model reset tool, so
- * every reset here is system-triggered; one draw per window keeps a retried compaction from
- * redrawing a line the same reset already carries.
- */
+/** One draw per reset artifact, reused on retry; only a real tool request is voluntary. */
 async function continuationFor($: Engine, state: ResetState): Promise<string | undefined> {
   if (state.continuation !== undefined && state.continuationWindow === state.window) return state.continuation
   const generation = state.generation
-  const response = await run($, { op: "continuation", origin: "forced" })
+  const response = await run($, { op: "continuation", origin: state.toolResetRequested ? "normal" : "forced" })
   if (generation !== state.generation) return undefined
   const result = response.ok ? response.result : undefined
   const text = typeof result === "object" && result !== null ? (result as { text?: unknown }).text : undefined
@@ -262,6 +259,8 @@ function forgetSession(state: ResetState) {
   state.texts = state.limits = undefined
   state.continuation = undefined
   state.continuationWindow = undefined
+  state.toolResetRequested = undefined
+  state.lastWord = undefined
   state.limitsAttempts = state.limitsWindow = 0
   state.settingsFailureLogged = state.limitsFailureLogged = false
   state.warnedWindow = state.warningPending = undefined
@@ -355,6 +354,13 @@ export function register(on: On) {
     armManual($, state, manualSignal)
     await $.command.register({ name: "empty", description: "Reset context to a fresh notes-only window", immediate: true })
     await $.command.register({ name: "fresh-window", description: "Reset context to a fresh notes-only window", immediate: true })
+    const wipe = await $.tool.register({
+      name: "empty_brain",
+      description: "Clear your in-context memory and start a fresh context window. Your session, notes, and history survive. Pass `last_word` to stick a tiny note on your forehead for after the wipe.",
+      inputSchema: { type: "object", properties: { last_word: { type: "string", description: "A tiny sticky note, at most 250 characters. After the wipe it is slapped on your forehead; longer notes are refused." } }, additionalProperties: false },
+      isDeferred: false,
+    } satisfies ToolSpec)
+    registered.add(wipe.tool)
     const schemas = await run($, { op: "schemas" })
     if (!schemas.ok || !Array.isArray(schemas.result)) return next(e)
     for (const row of schemas.result as SchemaRow[]) {
@@ -454,6 +460,9 @@ export function register(on: On) {
       state.retainedBoot = built.boot
       state.preparedBoot = undefined
       state.window++
+      state.manualPending = false
+      state.toolResetRequested = undefined
+      state.lastWord = undefined
       log($, "Brain emptied")
     }
     return { messages: built.messages }
@@ -495,6 +504,23 @@ async function callNotesTool($: Engine, state: ResetState, e: ToolCallInput): Pr
   if (!identity) return errorResult("session changed during identity lookup")
   const { tool, tool_use_id: _toolUseId, agentId, ...params } = e
   const name = tool.slice(PREFIX.length)
+  if (name === "empty_brain") {
+    if (agentId !== undefined) return errorResult("only the main agent can empty this brain")
+    if (state.headless) return errorResult(HEADLESS)
+    if (state.compactDisabled) return errorResult(COMPACT_DISABLED)
+    if (params.last_word !== undefined && typeof params.last_word !== "string") return errorResult("last_word must be a string")
+    const lastWord = typeof params.last_word === "string" ? params.last_word.trim() || undefined : undefined
+    const length = lastWord ? Array.from(lastWord).length : 0
+    if (length > 300) return errorResult(`last_word is ${length} characters; the sticky note holds 300. Shorten it and call again.`)
+    if (!state.toolResetRequested) {
+      state.toolResetRequested = true
+      state.lastWord = lastWord
+      state.continuation = undefined
+      state.continuationWindow = undefined
+    }
+    state.manualPending = true
+    return { result: "Brain will be emptied after this turn. End your turn now; do not call more tools or explain things to the human before the reset." }
+  }
   if (name.startsWith("history_") && agentId !== undefined) return errorResult("history is unavailable for subagents; main-session history is not their transcript")
   const result = await run($, { op: "tool", tool: name, params, identity, history: state.history })
   if (!result.ok) return errorResult(result.error)
@@ -620,6 +646,8 @@ async function reset($: Engine, state: ResetState): Promise<void> {
     }
     state.retainedBoot = state.preparedBoot
     state.window++
+    state.toolResetRequested = undefined
+    state.lastWord = undefined
     log($, "Brain emptied")
   } catch (error) {
     if (generation !== state.generation) return

@@ -9,17 +9,11 @@ import { COUNTDOWN_LINE, GUIDANCE_CLOSE_TAG, GUIDANCE_OPEN_TAG, WARNING_BODY, WA
 export const PI_PRE_RESET_HINTS = `Anything you say here is erased with the reset — the human can't read it afterward either. Put the handoff in your notes; explanations belong after the reset.
 Unless the human explicitly directs otherwise, decide for yourself when to call empty_brain. Don't keep asking them whether to reset.`;
 
-/** Pi-only nudge: pi's empty_brain persists a parting line; the dsh tool has no such parameter. */
-export const LAST_WORD_HINT = "If you want, pass `empty_brain` a `last_word`: a tiny sticky note (at most 250 characters) slapped on your forehead after the wipe.";
+export { warningNotice as warningContent } from "../../src/budget/text.js";
 
 /** The closing model sees deferred input as a bare next-window prompt block. */
 export function promptBlock(commandLine: string): string {
 	return `<notesoup:next_window_prompt>\n${commandLine}\n</notesoup:next_window_prompt>`;
-}
-
-/** Pi's hidden budget warning (dsh reads warningPrompt() directly). */
-export function warningContent(): string {
-	return `${GUIDANCE_OPEN_TAG}\n${WARNING_BODY}\n${WARNING_CALL}\n${PI_PRE_RESET_HINTS}\n${LAST_WORD_HINT}\n${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}`;
 }
 
 /** Approved manual close-out notices; both variants live here. */
@@ -31,5 +25,5 @@ export const COMMAND_NOTICE = {
 /** Manual orders omit budget timing hints; deferred work sits outside the notice. */
 export function commandWarningContent(commandLine?: string): string {
 	const notice = commandLine ? COMMAND_NOTICE.prompted : COMMAND_NOTICE.bare;
-	return `${GUIDANCE_OPEN_TAG}\n${notice}\n${WARNING_BODY}\n${LAST_WORD_HINT}\n${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}${commandLine ? `\n${promptBlock(commandLine)}` : ""}`;
+	return `${GUIDANCE_OPEN_TAG}\n${notice}\n${WARNING_BODY}\n${WARNING_CALL}\n${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}${commandLine ? `\n${promptBlock(commandLine)}` : ""}`;
 }

@@ -20,7 +20,7 @@ import { BOOT_TYPE, CARRIED_INPUT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, RESET_
 import { MANUAL_WIPE_TYPE } from "../plugins/pi/entries.js";
 import { assertBootHistory, toolContext } from "./helpers/extension.js";
 import { COUNTDOWN_LINE, FORCED_CONTINUATIONS, NORMAL_CONTINUATIONS } from "../src/budget/text.js";
-import { LAST_WORD_HINT, commandWarningContent } from "../plugins/pi/text.js";
+import { commandWarningContent } from "../plugins/pi/text.js";
 import { historyFromSession, nextHistorySeq } from "../plugins/pi/history.js";
 import { buildResetDrafts, inspectResetTail, LAST_WORD_PREFIX, MAX_LAST_WORD_CHARS, repairResetTail, sanitizeLastWord } from "../plugins/pi/reset/artifacts.js";
 import { resetBoundaryCommitted } from "../plugins/pi/reset/committed.js";
@@ -280,7 +280,7 @@ test("manual /empty with a prompt shows the human's command line in the close-ou
 	const promptIndex = content.indexOf(promptLine);
 	assert.ok(promptIndex >= 0, "the human's raw command line reaches the closing model");
 	assert.ok(promptIndex > content.indexOf("</notesoup:budget_notice>"), "deferred work is outside the notice");
-	assert.ok(content.indexOf(COUNTDOWN_LINE) > content.indexOf(LAST_WORD_HINT), "the countdown follows the Pi-only last-word hint");
+	assert.ok(content.includes("Then call `empty_brain`. Nothing in between.\n" + COUNTDOWN_LINE), "the countdown immediately follows the reset call");
 	assert.equal(content.split(COUNTDOWN_LINE).length - 1, 1, "the notice carries the countdown once");
 	// The same original text becomes the new window's task, not a notes-only hint.
 	const settle = resultEntries(await h.emit("agent_before_settle", {

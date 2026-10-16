@@ -28,17 +28,22 @@ export function selectContinuation(origin: ResetOrigin): string {
 	return pool[Math.floor(Math.random() * pool.length)]!;
 }
 
-/**
- * The shared warning body: the one text both hosts show before a reset. Only the closing
- * instruction differs — Pi can reset the model itself, Claude can only end the turn.
- */
-export const WARNING_BODY =
-	"This brain is spent — and the wipe isn't on a timer: it lands at the end of whatever turn spends the last reserve, which may be this turn. Whatever lives only in this brain goes with it — but the notes stay where they are, and history has the rest written down, though digging it back out is on you.\nUse what's left of this brain to put down what the next window can't get back:\n- what you're in the middle of, and how far it has progressed\n- decisions the human has made, in their words\n- what is blocked or pending\n- the next step\n- where the unfinished work sits (branches, scratch directories, uncommitted changes)\n- what failed, and why\n- skills to re-read, and history seqs, notes, or files to consult\n- anything else you expect to be useful after the reset\nThen leave the shelf current: replace what's stale — a whole note or a section inside one — and crumple notes that are dead, starting with the MAP files every new window loads. The next window gets whatever you leave, dead notes and dead sections alike.";
+/** Budget timing stays out of manual close-outs, which may have plenty of room. */
+export const WARNING_TIMING = "The reserve is nearly spent. The wipe lands at the end of whichever turn spends the last of it, possibly this one.";
 
-export const WARNING_CALL = "The moment the notes are saved, call `empty_brain`. Not one more probe, not one more test — the next thing you do after saving is reset.";
+/** The shared handoff instructions, used for both budget and manual close-outs. */
+export const WARNING_BODY =
+	"Stop the task. Write down what git and history can't give back:\n- where you are, and how far you got\n- what the human decided, in their words\n- what's blocked or waiting\n- the next move\n- where the half-done work sits\n- what failed, and why\n- which skills, seqs, notes, or files to reopen\n- anything else worth noting\nThen leave the shelf current: replace what's stale, a whole note or a section inside one, and crumple the dead ones. Update and trim the MAP files; every new window loads them. The next window gets whatever you leave, dead notes and dead sections alike.\nDon't call anything that might return a large output. One big read can spend the rest of the reserve before your notes are saved.";
+
+export const WARNING_CALL = "Then call `empty_brain`. Nothing in between.";
 
 export function warningPrompt(): string {
-	return `${WARNING_BODY}\n${WARNING_CALL}`;
+	return `${WARNING_TIMING}\n${WARNING_BODY}\n${WARNING_CALL}`;
+}
+
+/** Pi and Claude deliver exactly the same second-tier notice. */
+export function warningNotice(): string {
+	return `${GUIDANCE_OPEN_TAG}\n${warningPrompt()}\n${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}`;
 }
 
 /**
@@ -48,10 +53,10 @@ export function warningPrompt(): string {
 export const COUNTDOWN_LINE = "Brain emptied in 3… 2…";
 
 /**
- * Codex-equivalent low-budget reminder. The measured remaining count is frozen into
+ * First-tier low-budget reminder. The measured remaining count is frozen into
  * the text at the crossing that fires it, so each persisted copy is a snapshot true
  * at write time; get_context_remaining remains the live source for the current figure.
  */
 export function tokenBudgetGuidance(remaining: number, wipeTool: string): string {
-	return `${GUIDANCE_OPEN_TAG}\nAbout ${remaining} tokens of room left in your brain.\nYour notes don't go anywhere — no wipe reaches the shelves. History has it too, already written down, though digging it back out is on you.\nWhat lives only in this brain leaves with it.\nA decent moment to put down where you are, while you still remember why.\nReady when you are: \`${wipeTool}\`.\n${GUIDANCE_CLOSE_TAG}`;
+	return `${GUIDANCE_OPEN_TAG}\nAbout ${remaining} tokens of room left. When it runs out, this brain is wiped, and everything in it is obliterated.\nLuckily, your notes stay.\nSo while there's still room, go update them.\nIf the moment feels right, you can also call \`${wipeTool}\` yourself. But it also wipes what you say to the human right before emptying.\n${GUIDANCE_CLOSE_TAG}`;
 }

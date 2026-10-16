@@ -10,8 +10,8 @@ import { dispatch, handleLine, type ClaudeToolResult } from "../plugins/claude/s
 import { DEFAULT_CLAUDE_RESET_MARGIN_TOKENS, resolveClaudeLimits } from "../plugins/claude/src/thresholds.js";
 import { WARNING_RUNWAY_TOKENS } from "../src/budget/constants.js";
 import { PROTOCOL_WIPE_SENTENCE, renderProtocolBlock } from "../src/boot/text.js";
-import { CLAUDE_WARNING_PROMPT, CLAUDE_WIPE_SENTENCE } from "../plugins/claude/src/text.js";
-import { COUNTDOWN_LINE, FORCED_CONTINUATIONS } from "../src/budget/text.js";
+import { CLAUDE_WARNING_PROMPT } from "../plugins/claude/src/text.js";
+import { COUNTDOWN_LINE, FORCED_CONTINUATIONS, GUIDANCE_CLOSE_TAG, NORMAL_CONTINUATIONS, warningNotice } from "../src/budget/text.js";
 import { createNotesStore } from "../src/notes/index.js";
 import { resolveProjectHome } from "../src/notes/project-home.js";
 import { notesIdentityFromPi } from "../plugins/pi/notes/adapter.js";
@@ -193,12 +193,11 @@ test("Claude helper boot uses actual Claude note tool bindings and a fresh snaps
   assert.equal(boot.includes("chat view"), false, "a Claude boot never claims a reset clears the human's view");
 });
 
-test("Claude helper serves the shared reset prose and the host's wipe sentence", async () => {
-  const texts = await dispatch({ op: "texts" }) as { warning: string; wipeSentence: string; continuation?: unknown };
+test("Claude helper serves the same reset notice as Pi", async () => {
+  const texts = await dispatch({ op: "texts" }) as { warning: string; continuation?: unknown };
   assert.equal(texts.warning, CLAUDE_WARNING_PROMPT, "the helper owns the one warning text the mod shows");
-  assert.equal(texts.wipeSentence, CLAUDE_WIPE_SENTENCE);
-  assert.match(texts.warning, /end your turn; the reset runs after it\./);
-  assert.equal(texts.warning.endsWith(COUNTDOWN_LINE), true, "the Claude notice also ends with the countdown");
+  assert.equal(texts.warning, warningNotice());
+  assert.equal(texts.warning.endsWith(`${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}`), true);
   assert.equal(texts.continuation, undefined, "a plain text read never draws the reset handoff");
   const random = Math.random;
   Math.random = () => 0;
@@ -289,16 +288,14 @@ test("Claude helper resolves limits across the boundary and never throws on nons
   assert.ok(nonsense.result.warn > 0 && nonsense.result.warn < 100);
 });
 
-test("Claude's wipe sentence replaces only that sentence in the shared protocol block", () => {
-  const piTools = { notes: "notes_*", notesList: "notes_list", history: "history_*", remaining: "get_context_remaining", wipe: "empty_brain" };
-  const pi = renderProtocolBlock(piTools);
-  assert.ok(pi.includes(PROTOCOL_WIPE_SENTENCE), "Pi keeps the default sentence, byte for byte");
-  const claude = renderProtocolBlock({ ...piTools, wipeSentence: CLAUDE_WIPE_SENTENCE });
-  assert.equal(claude, pi.replace(PROTOCOL_WIPE_SENTENCE, CLAUDE_WIPE_SENTENCE), "only that sentence changes");
-  assert.equal(claude.includes("erase yourself with dignity"), false);
-  assert.ok(claude.includes("end your turn and ask the human to run `/fresh-window`."));
+test("Claude binds the shared reset sentence to its model-facing tool", () => {
+  const tools = { notes: "notes_*", notesList: "notes_list", history: "history_*", remaining: "get_context_remaining", wipe: "empty_brain" };
+  const pi = renderProtocolBlock(tools);
+  assert.ok(pi.includes(PROTOCOL_WIPE_SENTENCE));
+  const claude = renderProtocolBlock({ ...tools, wipe: "mcp__notesoup__empty_brain" });
+  assert.equal(claude, pi.replaceAll("empty_brain", "mcp__notesoup__empty_brain"));
+  assert.doesNotMatch(claude, /ask the human to run/);
 });
-
 
 test("Claude Mod helper runs from a standalone copied plugin directory", () => {
   const fixture = mkdtempSync(join(tmpdir(), "claude-mod-install-"));
@@ -356,8 +353,7 @@ test("Claude Mod appends boot once and reuses persisted blocks after re-registra
   assert.equal(boot.name, "notesoup:boot");
   assert.ok(boot.text.length > 0, "the boot block carries real boot text");
   assert.match(boot.text, /mcp__notesoup__notes_\*/, "the boot text names the actual Claude note tool binding");
-  assert.ok(boot.text.includes(CLAUDE_WIPE_SENTENCE), "the boot speaks the Claude wipe path");
-  assert.equal(boot.text.includes("erase yourself with dignity"), false);
+  assert.ok(boot.text.includes("call `mcp__notesoup__empty_brain` and erase yourself with dignity."), "the boot names the registered reset tool");
   assert.equal(boot.text.includes("chat view"), false, "the Claude boot block carries no Pi-only pre-reset hints");
   assert.equal(first.sentinel, "kept", "unrelated result fields survive");
   assert.equal(bootRequests, 1, "the first prompt makes exactly one boot helper request");
@@ -521,7 +517,7 @@ test("Claude Mod hook delivers the helper's shared text, and marks only a refusa
   const handlers = new Map<string, HookHandler>();
   hooks.register((event, handler) => handlers.set(event, handler));
   await handlers.get("session.start")!(host, { cwd: home, isInteractive: true }, async (event: unknown) => event);
-  assert.deepEqual(registered.map((spec) => spec.name), ["notes_write", "notes_update", "notes_read", "notes_list", "notes_search", "history_list", "history_read", "history_windows"]);
+  assert.deepEqual(registered.map((spec) => spec.name), ["empty_brain", "notes_write", "notes_update", "notes_read", "notes_list", "notes_search", "history_list", "history_read", "history_windows"]);
   for (const spec of registered) {
     assert.equal(spec.isDeferred, false, `${spec.name} is available from the start without tool search`);
     assert.ok(spec.description.length > 20);
@@ -573,7 +569,7 @@ test("Claude Mod resets at Claude's resolved point after the turn, retains one f
     return result;
   };
   await invoke("session.start", { cwd: home, isInteractive: true });
-  assert.equal(registered.length, 8);
+  assert.equal(registered.length, 9);
   const initial = await handlers.get("prompt.context")!(host, {}, async () => ({ blocks: [] })) as { blocks: Array<{ name: string; text: string }> };
   assert.equal(initial.blocks.length, 1, "below the warn point no warning joins the boot");
   assert.match(initial.blocks[0]!.text, /Current context window id: claude:hook-session:0/);
@@ -635,6 +631,9 @@ test("Claude Mod headless detection skips compaction and logs once", async (t) =
   assert.deepEqual(notifications, ["🥣 No brain when headless"]);
   const manual = await invoke("command.run", { command: "empty" }) as { text: string };
   assert.match(manual.text, /No brain when headless/);
+  const tool = await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "headless" }) as { result: string; isError?: boolean };
+  assert.equal(tool.isError, true);
+  assert.match(tool.result, /No brain when headless/);
   assert.equal(notifications.length, 1);
   const boot = await handlers.get("prompt.context")!(host, {}, async () => ({ blocks: [] })) as { blocks: Array<{ text: string }> };
   assert.match(boot.blocks[0]!.text, /Current context window id: claude:hook-session:0/);
@@ -847,6 +846,9 @@ test("Claude Mod stops the automatic reset and the manual command under DISABLE_
   assert.match(notifications[0]!, /DISABLE_COMPACT/);
   const manual = await invoke("command.run", { command: "empty" }) as { text: string };
   assert.match(manual.text, /DISABLE_COMPACT/);
+  const tool = await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "disabled-compact" }) as { result: string; isError?: boolean };
+  assert.equal(tool.isError, true);
+  assert.match(tool.result, /DISABLE_COMPACT/);
   assert.equal(timers.length, 0, "no close-out turn is queued");
   await invoke("turn.start");
   await invoke("session.measure");
@@ -982,6 +984,61 @@ async function retainedFixture(t: test.TestContext) {
   return { home, host, invoke, context, boot };
 }
 
+test("Claude empty_brain defers until main turn completion, carries last_word, and clears the request", async (t) => {
+  const { host, invoke } = await retainedFixture(t);
+  host.session.usage = async () => ({ context: { tokens: 100, window: 200_000 } });
+  const resets: Array<{ messages: Array<{ role: string; text: string }> }> = [];
+  const origins: string[] = [];
+  const run = host.process.run;
+  host.process.run = async (argv, init) => {
+    const request = JSON.parse(init!.stdin!) as { op: string; origin?: string };
+    if (request.op === "continuation") origins.push(request.origin!);
+    return run(argv, init);
+  };
+  host.session.compact = async () => {
+    const result = await invoke("session.compact", { trigger: "plugin" }) as { messages: Array<{ role: string; text: string }> };
+    resets.push(result);
+    return result;
+  };
+  await invoke("turn.start");
+  const call = (params: Record<string, unknown> = {}) => invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "wipe", ...params }) as Promise<{ result: string; isError?: boolean }>;
+  const accepted = await call({ last_word: "  next move: test  " });
+  assert.equal(accepted.isError, undefined);
+  assert.match(accepted.result, /End your turn now/);
+  await call({ last_word: "must not replace the first request" });
+  await invoke("session.measure");
+  await invoke("turn.complete", { agentId: "child" });
+  assert.equal(resets.length, 0, "neither tool execution nor a child completion resets a running main turn");
+  await invoke("turn.complete");
+  assert.equal(resets.length, 1, "the tool requests a reset even far below the budget threshold");
+  assert.deepEqual(origins, ["normal"]);
+  assert.ok(NORMAL_CONTINUATIONS.includes(resets[0]!.messages[1]!.text));
+  assert.deepEqual(resets[0]!.messages.slice(2).map((row) => row.text), ["*You peel a sticky note off your forehead.*\nnext move: test"]);
+  assert.match(resets[0]!.messages[0]!.text, /mcp__notesoup__empty_brain/);
+  await invoke("turn.start");
+  await invoke("turn.complete");
+  assert.equal(resets.length, 1, "the successful tool request does not leak into the next window");
+  const forced = await invoke("session.compact", { trigger: "auto" }) as { messages: Array<{ role: string; text: string }> };
+  assert.deepEqual(origins, ["normal", "forced"]);
+  assert.equal(forced.messages.length, 2, "the sticky note does not leak into the next reset");
+  assert.ok(FORCED_CONTINUATIONS.includes(forced.messages[1]!.text));
+});
+
+test("Claude empty_brain refuses unsupported calls without queuing a reset", async (t) => {
+  const { host, invoke } = await retainedFixture(t);
+  let resets = 0;
+  host.session.compact = async () => { resets++; return {}; };
+  await invoke("turn.start");
+  const call = (params: Record<string, unknown>) => invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "bad-wipe", ...params }) as Promise<{ result: string; isError?: boolean }>;
+  for (const [params, reason] of [[{ agentId: "child" }, /only the main agent/], [{ last_word: "x".repeat(301) }, /Shorten it/], [{ last_word: 7 }, /must be a string/]] as const) {
+    const refused = await call(params);
+    assert.equal(refused.isError, true);
+    assert.match(refused.result, reason);
+  }
+  await invoke("turn.complete");
+  assert.equal(resets, 0);
+});
+
 test("Claude asks for one handoff per compaction and reuses it when the same window retries", async (t) => {
   const { host, invoke } = await retainedFixture(t);
   const run = host.process.run;
@@ -1017,7 +1074,7 @@ test("Claude asks for one handoff per compaction and reuses it when the same win
   assert.equal(draws.length, 1, "a retried compaction adds no second draw");
   assert.equal(lines.length, 2, "both attempts returned a handoff");
   assert.equal(lines[0], lines[1], "both attempts carry the same artifact's paragraph");
-  assert.ok(FORCED_CONTINUATIONS.includes(lines[0]!), "Claude has no model reset tool, so its pool is always the forced one");
+  assert.ok(FORCED_CONTINUATIONS.includes(lines[0]!), "a command without a model tool request still uses the forced pool");
 });
 
 test("Claude session.end gives /clear, /resume and /branch a fresh boot and identity", async (t) => {
@@ -1236,7 +1293,7 @@ test("Claude history keeps classic transcript_path across startup, confirms appe
   // Real order: classic -> startup attachment appends -> typed session.start.
   await invoke("session.append", { uuid: "startup" }, { uuid: "startup", message: {} });
   await invoke("session.start", { cwd: home, isInteractive: true });
-  assert.equal(registered.length, 8);
+  assert.equal(registered.length, 9);
   const listed = await call("history_list", { roles: ["user", "context"] });
   assert.equal(listed.isError, undefined, listed.result);
   assert.match(listed.result, /old request/);

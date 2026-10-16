@@ -31,7 +31,7 @@ test("low-budget guidance and warning persist at turn_end, once per active windo
 	const low = context(sessionManager, undefined, { tokens: 165_000, percent: 82.5, contextWindow: 200_000 });
 	const guidance = await runContextHook(captured, low);
 	assert.deepEqual(guidance?.messages.map((message) => (message as { customType?: string }).customType), [GUIDANCE_TYPE], "guidance reaches the crossing request");
-	assert.match(String((guidance?.messages[0] as { content?: string }).content), /About 18616 tokens of room left in your brain\./, "the reminder reports room to the reserve, not to the warning");
+	assert.match(String((guidance?.messages[0] as { content?: string }).content), /About 18616 tokens of room left\./, "the reminder reports room to the reserve, not to the warning");
 	assert.equal(captured.sent.length, 0, "guidance does not trigger a detached turn");
 	const guidanceBoundary = await commitTurnEndBoundary(captured, sessionManager, low);
 	assert.equal(guidanceBoundary.entries.filter((entry) => entry.type === "custom_message" && entry.customType === GUIDANCE_TYPE).length, 1);
