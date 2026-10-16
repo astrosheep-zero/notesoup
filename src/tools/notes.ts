@@ -22,7 +22,7 @@ const ADDRESS_DESCRIPTION = "Addresses: a bare path is this session's note; `@pr
  * Typed refusal. Every fact a caller needs is already in the message; there is no separate context.
  * Convert expected refusals; unexpected errors propagate unchanged.
  */
-function failureOf(error: unknown): Outcome<never> {
+export function failureOf(error: unknown): Outcome<never> {
 	if (error instanceof NoteError) return failure(error.code, error.message);
 	// Address, glob, and query guards raise declared types; nothing else is converted.
 	if (error instanceof InvalidQueryError) return failure("invalid_query", error.message);
@@ -169,7 +169,7 @@ export type NotesSearchData = Static<typeof NotesSearchDataSchema>;
 type Snapshot<T> = Omit<NotesListData, "files"> & { files: T[] };
 
 /** Keep identities intact. Only search previews may shrink to make the first row fit. */
-function snapshot<T extends { address: string }>(
+export function snapshot<T extends { address: string }>(
 	rows: T[],
 	limit: number | undefined,
 	status: NoteQueryStatus,
@@ -196,7 +196,7 @@ function snapshot<T extends { address: string }>(
 	return fitsResult(outcome, render) ? outcome : failure("output_too_large", `The list of unreachable homes is itself over ${TOOL_OUTPUT_LIMIT}; narrow \`glob\` to fewer homes.`);
 }
 
-function listedFile(row: Pick<NoteRow, "address" | "meta">, identity: NotesIdentity): NotesListData["files"][number] {
+export function listedFile(row: Pick<NoteRow, "address" | "meta">, identity: NotesIdentity): NotesListData["files"][number] {
 	return { ...noteIdentity(identity, row.address), updated_at: localIso(row.meta.updatedAt), ...(row.meta.crumpledAt === undefined ? {} : { crumpled_at: row.meta.crumpledAt }) };
 }
 
@@ -300,7 +300,7 @@ export const notesRead = {
 
 export const notesListParameters = Type.Object({ glob: GLOB_PARAMETER, limit: FILE_LIMIT_PARAMETER, crumpled: CRUMPLED_LIST_PARAMETER }, { additionalProperties: false });
 
-function renderListData(data: NotesListData): string {
+export function renderListData(data: NotesListData): string {
 	const lines = [`${data.files.length} ${data.files.length === 1 ? "note" : "notes"}`];
 	for (const file of data.files) {
 		lines.push(`- ${renderIdentity(file)} | updated ${file.updated_at}${file.crumpled_at === undefined ? "" : ` | crumpled ${file.crumpled_at}`}`);

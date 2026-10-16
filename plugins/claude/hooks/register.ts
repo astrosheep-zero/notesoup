@@ -1,4 +1,4 @@
-import type { EngineInterface, On, ProcessRunResult, ToolCallResult, ToolSpec } from "claude-code"
+import type { EngineInterface, On, ProcessRunResult, ToolCallInput, ToolCallResult, ToolSpec } from "claude-code"
 
 const PREFIX = "mcp__notesoup__"
 const HELPER = `${import.meta.dir}/../dist/claude/helper.js`
@@ -22,7 +22,7 @@ type ResetState = {
   manualPending: boolean; headless: boolean; usageFailureLogged: boolean; preparedBoot?: string; retainedBoot?: string
   continuation?: string; continuationWindow?: number
   compactDisabled: boolean; limitsFailureLogged: boolean; limitsAttempts: number; limitsWindow: number
-  limits?: ClaudeLimits; warnedWindow?: number; texts?: SharedTexts; settingsFailureLogged: boolean
+  limits?: ClaudeLimits; warnedWindow?: number; warningPending?: number; texts?: SharedTexts; settingsFailureLogged: boolean
 }
 const HEADLESS = "No brain when headless"
 const COMPACT_DISABLED = "Brain can't be emptied with DISABLE_COMPACT"
@@ -104,12 +104,9 @@ async function compactDisabled($: Engine): Promise<boolean> {
   // The same presence convention as the helper's flag parsing: "off"/"no" mean not disabled.
   return text !== "" && text !== "0" && text !== "false" && text !== "no" && text !== "off"
 }
-/** Presence-style kill switch for the whole mod; the same convention as DISABLE_COMPACT. */
-async function notesoupDisabled($: Engine): Promise<boolean> {
-  let value: string | undefined
-  try { value = await $.env.get("NOTESOUP_DISABLED") } catch { return false }
-  if (value === undefined) return false
-  const text = value.trim().toLowerCase()
+/** Presence-style env switch; the same convention as DISABLE_COMPACT. The loader requires literal env names. */
+function envFlag(value: string | undefined): boolean {
+  const text = value?.trim().toLowerCase() ?? ""
   return text !== "" && text !== "0" && text !== "false" && text !== "no" && text !== "off"
 }
 async function readSettings($: Engine, state: ResetState): Promise<unknown> {
@@ -267,7 +264,7 @@ function forgetSession(state: ResetState) {
   state.continuationWindow = undefined
   state.limitsAttempts = state.limitsWindow = 0
   state.settingsFailureLogged = state.limitsFailureLogged = false
-  state.warnedWindow = undefined
+  state.warnedWindow = state.warningPending = undefined
 }
 async function modelOf($: Engine): Promise<string> {
   // session.model() is the documented main-loop model API. Match the notes library's slug.
@@ -319,6 +316,7 @@ export function register(on: On) {
   const manualSignal: { wake?: () => void } = {}
   const state: ResetState = { generation: 0, window: 0, disabled: false, turnRunning: false, resetting: false, manualPending: false, headless: false, usageFailureLogged: false, compactDisabled: false, limitsFailureLogged: false, limitsAttempts: 0, limitsWindow: 0, settingsFailureLogged: false }
   const registered = new Set<string>()
+  let keepMemory = false
   // Classic SessionStart precedes typed session.start and startup appends. Keep this binding
   // across forgetSession; re-key it only against the actual session id, never a guessed path.
   on("classic.SessionStart", async ($, e, next) => {
@@ -339,12 +337,13 @@ export function register(on: On) {
   })
   on("session.start", async ($, e, next) => {
     forgetSession(state)
-    state.disabled = await notesoupDisabled($)
+    state.disabled = envFlag(await $.env.get("NOTESOUP_DISABLED").catch(() => undefined))
     if (state.disabled) {
       registered.clear()
       log($, NOTESOUP_DISABLED)
       return next(e)
     }
+    keepMemory = envFlag(await $.env.get("NOTESOUP_KEEP_MEMORY").catch(() => undefined))
     await refreshIdentity($, state)
     state.headless = !e.isInteractive
     if (state.headless) log($, HEADLESS)
@@ -371,19 +370,13 @@ export function register(on: On) {
   })
   on("tool.call", async ($, e, next) => {
     if (state.disabled) return next(e)
-    if (!registered.has(e.tool)) return next(e)
-    const identity = await refreshIdentity($, state)
-    if (!identity) return errorResult("session changed during identity lookup")
-    const { tool, tool_use_id: _toolUseId, agentId, ...params } = e
-    const name = tool.slice(PREFIX.length)
-    if (name.startsWith("history_") && agentId !== undefined) return errorResult("history is unavailable for subagents; main-session history is not their transcript")
-    const result = await run($, { op: "tool", tool: name, params, identity, history: state.history })
-    if (!result.ok) return errorResult(result.error)
-    // The outcome already decided success or refusal; Claude requires isError: true on errors and no discriminator on success.
-    const outcome = toolResultOf(result.result)
-    if (!outcome) return errorResult("helper returned an invalid tool result")
-    return outcome.ok ? { result: outcome.text } : { result: outcome.text, isError: true }
+    const generation = state.generation
+    const result = registered.has(e.tool) ? await callNotesTool($, state, e) : await next(e)
+    if (e.agentId !== undefined || result.deny !== undefined || generation !== state.generation) return result
+    return withWarning($, state, (warning) => warning === undefined ? result : { ...result, context: [...(result.context ?? []), warning] })
   })
+  on("prompt.submit", ($, e, next) => withWarning($, state, (warning) =>
+    next(warning === undefined ? e : { ...e, context: [...(e.context ?? []), warning] })))
   on("turn.start", async ($, e, next) => {
     // The documented turn.start is main-loop only. Guard tagged host events too:
     // only a main-agent turn.complete clears this latch.
@@ -465,6 +458,9 @@ export function register(on: On) {
     }
     return { messages: built.messages }
   })
+  // notesoup replaces Claude's summarization and auto-memory guidance; memory can be kept on request.
+  on("prompt.section", { name: "context_management" }, ($, e, next) => state.disabled ? next(e) : { text: null })
+  on("prompt.section", { name: "memory" }, ($, e, next) => state.disabled || keepMemory ? next(e) : { text: null })
   on("prompt.context", async ($, e, next) => {
     if (state.disabled) return next(e)
     const result = await next(e)
@@ -485,18 +481,27 @@ export function register(on: On) {
       }
       blocks = [...blocks, { name: "notesoup:boot", text: boot.ok ? String(boot.result) : `# notesoup\nYour notes didn't load this time (${boot.error}). Try \`${PREFIX}notes_list\`; if it fails too, tell the human.` }]
     }
-    const warning = await warningBlock($, state)
-    return { ...result, blocks: warning === undefined ? blocks : [...blocks, warning] }
+    return { ...result, blocks }
   })
 
 }
 
-/**
- * The one warning per window: injected only once the measured context crosses the resolved
- * warn point, and only until the window changes. The reset decision runs independently.
- */
-async function warningBlock($: Engine, state: ResetState): Promise<{ name: string; text: string } | undefined> {
-  if (state.headless || state.compactDisabled || !state.identity || state.warnedWindow === state.window) return undefined
+async function callNotesTool($: Engine, state: ResetState, e: ToolCallInput): Promise<ToolCallResult> {
+  const identity = await refreshIdentity($, state)
+  if (!identity) return errorResult("session changed during identity lookup")
+  const { tool, tool_use_id: _toolUseId, agentId, ...params } = e
+  const name = tool.slice(PREFIX.length)
+  if (name.startsWith("history_") && agentId !== undefined) return errorResult("history is unavailable for subagents; main-session history is not their transcript")
+  const result = await run($, { op: "tool", tool: name, params, identity, history: state.history })
+  if (!result.ok) return errorResult(result.error)
+  const outcome = toolResultOf(result.result)
+  if (!outcome) return errorResult("helper returned an invalid tool result")
+  return outcome.ok ? { result: outcome.text } : { result: outcome.text, isError: true }
+}
+
+/** Read the warning without consuming this window's delivery. */
+async function warningText($: Engine, state: ResetState): Promise<string | undefined> {
+  if (state.disabled || state.headless || state.compactDisabled || !state.identity || state.warnedWindow === state.window || state.warningPending === state.window) return undefined
   const generation = state.generation
   const usage = await contextUsage($, state)
   if (generation !== state.generation || usage === undefined) return undefined
@@ -505,9 +510,23 @@ async function warningBlock($: Engine, state: ResetState): Promise<{ name: strin
   const measured = measuredValue(limits, usage)
   if (measured === undefined || measured < limits.warn) return undefined
   const texts = await loadTexts($, state)
-  if (generation !== state.generation || texts?.warning === undefined) return undefined
-  state.warnedWindow = state.window
-  return { name: "notesoup:warning", text: texts.warning }
+  return generation === state.generation ? texts?.warning : undefined
+}
+
+/** Reserve across next(), but consume only context the chain actually accepted. */
+async function withWarning<T extends { context?: readonly string[]; drop?: string; deny?: string }>($: Engine, state: ResetState, deliver: (warning?: string) => T | Promise<T>): Promise<T> {
+  if (state.disabled || state.headless || state.compactDisabled || !await refreshIdentity($, state)) return deliver()
+  const generation = state.generation, window = state.window
+  const warning = await warningText($, state)
+  if (warning === undefined || generation !== state.generation || window !== state.window || state.warnedWindow === window || state.warningPending === window) return deliver()
+  state.warningPending = window
+  try {
+    const result = await deliver(warning)
+    if (generation === state.generation && window === state.window && result.drop === undefined && result.deny === undefined && result.context?.includes(warning)) state.warnedWindow = window
+    return result
+  } finally {
+    if (generation === state.generation && state.warningPending === window) state.warningPending = undefined
+  }
 }
 
 /** The boot's identity line; `context_window` is the pre-rename tag still in old transcripts. */

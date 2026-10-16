@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
-import { mkdir, readdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { earliestMatchOffsetChars } from "../text-match.js";
 import { assertAddress, assertGlobPattern, addressFor, canonicalAddressFor, globToRegExp, HOME_HEADS } from "./address.js";
@@ -59,6 +59,8 @@ export interface NotesStore {
 	read(address: string): Promise<NoteReadResult | undefined>;
 	update(address: string, edits?: EditOperation[], options?: EditOptions): Promise<NoteEditResult>;
 	rename(fromAddress: string, toAddress: string): Promise<NoteRenameResult>;
+	/** Physically delete one crumpled note; only a dreaming identity may call it. */
+	forget(address: string): Promise<NoteMeta>;
 	list(options?: NotesQuery): Promise<NoteRow[]>;
 	search(queries: string[], options?: NotesQuery): Promise<NoteSearchRow[]>;
 	listWithStatus(options?: NotesQuery): Promise<NoteQueryResult<NoteRow>>;
@@ -253,15 +255,26 @@ function frontmatterOf(meta: NoteMeta): string {
 	return serializeNote(meta, "").slice(0, -2);
 }
 
-/** Explicit session/project homes are always read-only; agent/model homes allow their owner. */
+/** Explicit session/project homes are read-only unless dreamed over; agent/model homes allow their owner. */
 function assertWritableHome(scope: Scope, who: string | undefined, identity: NotesIdentity): void {
 	if (who === undefined) return;
+	// A dreamed project is writable whole; its other sessions are checked per note by assertDreamSessionNote.
+	if (identity.dreaming !== undefined && (scope === "session" || (scope === "project" && who === identity.dreaming))) return;
 	if (scope === "session") throw new NoteError("invalid_scope", `@sessions/${who}/ is read-only; use a bare path to write to this session.`);
 	if (scope === "project") throw new NoteError("invalid_scope", `@projects/${who}/ is read-only; use @project/ to write to your own project.`);
 	const current = scope === "agent" ? identity.agent : identity.model;
 	if (who === current) return;
 	const home = scope === "agent" ? `@agents/${who}/` : `@models/${who}/`;
 	throw new NoteError("invalid_scope", `${home} is someone else's home; you can write to this session, @project/, @human/, @self/, or @model/.`);
+}
+
+/** A dream reaches another session's note only when that note was born in the dreamed project. */
+function assertDreamSessionNote(scope: Scope, who: string | undefined, identity: NotesIdentity, raw: string | undefined, address: string): void {
+	if (scope !== "session" || who === undefined || identity.dreaming === undefined) return;
+	if (raw !== undefined && parseNote(raw).meta.project === identity.dreaming) return;
+	throw new NoteError("invalid_scope", raw === undefined
+		? `${address}: a dream edits other sessions' existing notes, it doesn't create new ones there.`
+		: `${address} belongs to another project, not the one being dreamed over (${identity.dreaming}).`);
 }
 
 /** Create a store over one validated, immutable snapshot of the supplied explicit identity. */
@@ -282,6 +295,7 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 			const now = writeStamp();
 			const cleanBody = stripLeadingFrontmatter(content);
 			const existingRaw = await readFileIfExists(path);
+			assertDreamSessionNote(scope, destination.who, identity, existingRaw, address);
 			const existing = existingRaw === undefined ? undefined : parseNote(existingRaw, now).meta;
 			const outcome = existing === undefined ? "created" : existing.crumpledAt === undefined ? "overwrote" : "uncrumpled";
 			const meta: NoteMeta = existing ?? {
@@ -313,7 +327,8 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 			if (raw === undefined) return undefined;
 			const now = Date.now();
 			const parsed = parseNote(raw, now);
-			if ((scope === "project" || scope === "session") && destination.who !== undefined) return { meta: { ...parsed.meta, scope }, body: parsed.body, resolvedScope: scope };
+			// Named homes, and every read during a dream, leave no access stamp.
+			if (identity.dreaming !== undefined || ((scope === "project" || scope === "session") && destination.who !== undefined)) return { meta: { ...parsed.meta, scope }, body: parsed.body, resolvedScope: scope };
 			// A read records its own access, exactly as a write records an edit.
 			const meta: NoteMeta = { ...parsed.meta, scope, lastAccessed: now, accessCount: (typeof parsed.meta.accessCount === "number" ? parsed.meta.accessCount : 0) + 1 };
 			await atomicWrite(path, serializeNote(meta, parsed.body));
@@ -340,6 +355,8 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 			const raw = await readFileIfExists(fromPath);
 			if (raw === undefined) throw new NoteError("not_found", `No note at ${noteIdentity(identity, address).address}.`);
 			const targetRaw = differentPaths ? await readFileIfExists(path) : undefined;
+			assertDreamSessionNote(from.scope, from.who, identity, raw, address);
+			if (differentPaths) assertDreamSessionNote(scope, destination.who, identity, targetRaw, stableOptions.renameTo!);
 			// Case and symlink aliases must not turn write-then-remove into deleting the result.
 			const sourceReal = targetRaw === undefined ? undefined : await realpath(fromPath);
 			const sameFile = sourceReal !== undefined && sourceReal === await realpath(path);
@@ -402,6 +419,22 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 	async function rename(fromAddress: string, toAddress: string): Promise<NoteRenameResult> {
 		const { meta, replacedCrumpledTarget } = await update(fromAddress, undefined, { renameTo: toAddress });
 		return { meta, replacedCrumpledTarget };
+	}
+
+	async function forget(address: string): Promise<NoteMeta> {
+		if (identity.dreaming === undefined) throw new NoteError("invalid_scope", "Only a dream can delete notes; begin one first.");
+		const target = assertAddress(address);
+		assertWritableHome(target.scope, target.who, identity);
+		const path = physicalPath(target.scope, target.path, identity, target.who);
+		return withPathQueue(path, async () => {
+			const raw = await readFileIfExists(path);
+			if (raw === undefined) throw new NoteError("not_found", `No note at ${noteIdentity(identity, address).address}.`);
+			assertDreamSessionNote(target.scope, target.who, identity, raw, address);
+			const { meta } = parseNote(raw);
+			if (meta.crumpledAt === undefined) throw new NoteError("not_crumpled", `${noteIdentity(identity, address).address} isn't crumpled; crumple it before deleting.`);
+			await unlink(path);
+			return { ...meta, scope: target.scope };
+		});
 	}
 
 	async function* scan(options: NotesQuery, status?: NoteQueryStatus): AsyncGenerator<Omit<NoteRow, "sizeBytes">> {
@@ -496,5 +529,5 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 		return searchRows(queries, options, { homesUnavailable: [] });
 	}
 
-	return { write, read, update, rename, list, search, listWithStatus, searchWithStatus };
+	return { write, read, update, rename, forget, list, search, listWithStatus, searchWithStatus };
 }

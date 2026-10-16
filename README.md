@@ -62,17 +62,10 @@ The reminder threshold is Pi's compaction reserve plus a margin, configured unde
 }
 ```
 
-The dreamer model is configured under the same key; `--dreamer <model pattern>` on the `dream` CLI wins, then a non-empty `notesoup.dreamer` string, then the automatic model:
-
-```json
-{
-  "notesoup": { "reminderMarginTokens": 24576, "dreamer": "anthropic/claude-sonnet-4-5" }
-}
-```
-
 Environment variables:
 
 - `NOTESOUP_DISABLED` — presence-style kill switch: any value but an explicit no (`0`, `false`, `no`, `off`) turns notesoup off. On Pi the extension registers nothing at all; on Claude the mod passes every event through and native compaction behaves as if the mod were absent.
+- `NOTESOUP_KEEP_MEMORY` — Claude only: keep Claude Code's auto-memory guidance, which notesoup omits by default (its summarization guidance is always omitted). Enabled by any non-empty value except `0`, `false`, `no`, or `off` (case-insensitive); read at session startup.
 - `NOTESOUP_HOME` — overrides the notes root (default `~/.agents/notes`).
 - `NOTESOUP_AGENT` — overrides the agent name on Pi (default `anonymous`).
 
@@ -83,7 +76,7 @@ Environment variables:
 - [Standalone notes library](docs/notes-library.md) — use the notes store from Node, no Pi required
 - [DeepSeek Harness](docs/dsh.md) — adapter and profile patch for dsh 0.2.1-alpha.2
 - [Claude Code Mod](docs/claude-code-mod.md) — early-access notes and persisted-session history tools for Claude Code
-- [Skills, dream, and the notes doctor](docs/skills.md) — `/skill:memory`, `/skill:dream`, `dream doctor`, the dream lock
+- [Skills and dream](docs/skills.md) — `/skill:memory`, `/skill:dream`, the `dream_*` tools and the dream lock
 
 ## Development
 
@@ -100,7 +93,7 @@ The repository splits host-neutral code from host plugins:
 | Path | What it is |
 | --- | --- |
 | `src/` | The core: notes library, boot snapshot/renderer, history projection, budget policy and the shared tool operations. It never imports an SDK or a plugin. |
-| `plugins/pi/` | The Pi extension (`plugins/pi/index.ts` is what `pi.extensions` loads from source) and the `dream` CLI. |
+| `plugins/pi/` | The Pi extension (`plugins/pi/index.ts` is what `pi.extensions` loads from source). |
 | `plugins/claude/` | The self-contained Claude Code plugin (`.claude-plugin/`, `hooks/`, bundled `dist/claude/helper.js`, skills and playbook), with its adapter sources in `plugins/claude/src/`. |
 | `plugins/dsh/` | The Cordis rows published as `notesoup/dsh` and `notesoup/dsh/engine`. |
 

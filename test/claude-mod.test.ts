@@ -68,7 +68,11 @@ async function loadHookModule(t: test.TestContext): Promise<{ register: (on: (ev
   t.after(() => rmSync(loaded, { recursive: true, force: true }));
   const module = join(loaded, "register.mjs");
   writeFileSync(module, transpiled.outputFiles[0]!.text);
-  return await import(pathToFileURL(module).href) as { register: (on: (event: string, handler: HookHandler) => void) => void };
+  const hooks = await import(pathToFileURL(module).href) as { register: (on: (event: string, matcherOrHandler: Record<string, unknown> | HookHandler, handler?: HookHandler) => void) => void };
+  return { register: (on) => hooks.register((event, matcherOrHandler, handler) => {
+    if (typeof matcherOrHandler === "function") on(event, matcherOrHandler);
+    else on(event, ($, e, next) => Object.entries(matcherOrHandler).every(([key, value]) => e[key] === value) ? handler!($, e, next) : next(e));
+  }) };
 }
 
 /** An engine that answers the hook by running the real helper against a throwaway notes home. */
@@ -400,6 +404,39 @@ test("Claude Mod with NOTESOUP_DISABLED registers nothing and passes every event
   const measured = await handlers.get("session.measure")!(host, {}, async () => ({ marks: true }));
   assert.deepEqual(measured, { marks: true }, "session.measure passes through without a reset");
   assert.equal(helperCalls, 0, "the helper never runs while disabled");
+  const event = { text: "continue", context: ["upstream"] };
+  assert.equal(await handlers.get("prompt.submit")!(host, event, async (e) => e), event);
+  const tool = { result: "upstream" };
+  assert.equal(await handlers.get("tool.call")!(host, { tool: "Read" }, async () => tool), tool);
+  assert.equal(helperCalls, 0, "disabled warning routes are transparent too");
+});
+
+test("Claude Mod omits context_management always and memory unless kept; disabled passes through", async (t) => {
+  for (const mode of ["default", "keep", "disabled"] as const) {
+    await t.test(mode, async (t) => {
+      const home = mkdtempSync(join(tmpdir(), "claude-context-section-"));
+      t.after(() => rmSync(home, { recursive: true, force: true }));
+      const { host } = fakeEngine(home);
+      const readEnv = host.env.get;
+      host.env.get = async (name) => name === "NOTESOUP_KEEP_MEMORY" ? (mode === "keep" ? " YES " : undefined)
+        : name === "NOTESOUP_DISABLED" && mode === "disabled" ? "1" : readEnv(name);
+      const handlers = new Map<string, HookHandler>(), sections: HookHandler[] = [];
+      (await loadHookModule(t)).register((event, handler) => event === "prompt.section" ? sections.push(handler) : handlers.set(event, handler));
+      await handlers.get("session.start")!(host, { cwd: home, isInteractive: true }, async () => ({}));
+
+      for (const name of ["context_management", "memory"]) {
+        const event = { name, text: `engine ${name}` };
+        const upstream = { text: event.text };
+        let calls = 0;
+        const next = async (e: unknown) => { assert.equal(e, event); calls++; return upstream; };
+        // Chain the section hooks as the engine does; each matcher passes other names along.
+        const result = await sections.reduceRight<(e: unknown) => Promise<unknown>>((rest, handler) => (e) => handler(host, e as Record<string, unknown>, rest), next)(event);
+        const kept = mode === "disabled" || (mode === "keep" && name === "memory");
+        if (kept) { assert.equal(result, upstream); assert.equal(calls, 1); }
+        else { assert.deepEqual(result, { text: null }); assert.equal(calls, 0); }
+      }
+    });
+  }
 });
 
 test("Claude Mod boot failure preserves fallback with available, absent, or failing notifications", async (t) => {
@@ -579,6 +616,8 @@ test("Claude Mod headless detection skips compaction and logs once", async (t) =
   assert.equal(notifications.length, 1);
   const boot = await handlers.get("prompt.context")!(host, {}, async () => ({ blocks: [] })) as { blocks: Array<{ text: string }> };
   assert.match(boot.blocks[0]!.text, /Current context window id: claude:hook-session:0/);
+  const event = { text: "continue" };
+  assert.equal(await handlers.get("prompt.submit")!(host, event, async (e) => e), event, "headless prompts never warn");
 });
 
 test("Claude Mod keeps its window numbering from a boot written before the tag rename", async (t) => {
@@ -685,33 +724,64 @@ test("Claude Mod manual reset uses one hidden close-out turn, then recovers its 
 });
 
 
-test("Claude Mod warns once per window once the measured context crosses the runway", async (t) => {
-  const home = mkdtempSync(join(tmpdir(), "claude-warn-home-"));
-  t.after(() => rmSync(home, { recursive: true, force: true }));
-  const { host } = fakeEngine(home);
-  const handlers = new Map<string, HookHandler>();
-  (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
-  const invoke = (name: string, e: Record<string, unknown> = {}) => handlers.get(name)!(host, e, async () => ({}));
-  let tokens = 142_423;
+test("Claude Mod delivers one warning per window through main tools or prompt submission, never boot", async (t) => {
+  const { host, invoke, context } = await retainedFixture(t);
+  const texts = await dispatch({ op: "texts" }) as { warning: string };
+  let tokens = CLAUDE_200K.warn - 1;
   host.session.usage = async () => ({ context: { tokens, window: 200_000 } });
-  host.session.compact = async ({ instructions }) => await invoke("session.compact", { trigger: "plugin", instructions }) as { skip?: string; messages?: Array<{ role: string; text: string }> };
-  await invoke("session.start", { cwd: home, isInteractive: true });
-  const promptContext = (result: Record<string, unknown>) => handlers.get("prompt.context")!(host, {}, async () => result) as Promise<{ blocks: Array<{ name: string; text: string }> }>;
-  const upstream = { blocks: [{ name: "claude:user-context", text: "upstream" }] };
-  assert.deepEqual((await promptContext(structuredClone(upstream))).blocks.map((block) => block.name), ["claude:user-context", "notesoup:boot"], "one token below the warn point is silent");
-  tokens = 142_424;
-  const warned = await promptContext(structuredClone(upstream));
-  assert.deepEqual(warned.blocks.map((block) => block.name), ["claude:user-context", "notesoup:boot", "notesoup:warning"]);
-  assert.equal(warned.blocks[2]!.text, CLAUDE_WARNING_PROMPT);
-  assert.deepEqual(await promptContext(structuredClone(warned) as Record<string, unknown>), warned, "one warning per window");
-  // A reset opens a new window, and the flag resets with it.
-  await invoke("turn.start");
-  tokens = 158_808;
-  await invoke("turn.complete");
-  tokens = 142_424;
-  const again = await promptContext(structuredClone(upstream));
-  assert.deepEqual(again.blocks.map((block) => block.name), ["claude:user-context", "notesoup:warning"], "the new window warns again, and its retained boot is not duplicated");
-  assert.equal(again.blocks[1]!.text, CLAUDE_WARNING_PROMPT);
+  const foreign = { result: "upstream result", context: ["upstream context"], ref: 1 };
+  const tool = (event: Record<string, unknown> = { tool: "Read" }, result: unknown = foreign) => invoke("tool.call", event, result) as Promise<{ result?: string; context?: string[] }>;
+  const submit = () => invoke("prompt.submit", { text: "continue", context: ["earlier plugin"] }, {}, async (e) => e) as Promise<{ context: string[] }>;
+  assert.equal(await tool(), foreign, "below the warn point the result passes through untouched");
+  tokens++;
+  assert.deepEqual((await context()).blocks, [], "prompt.context never delivers a warning, even above the runway");
+  const denied = { deny: "upstream refusal" };
+  assert.equal(await tool({ tool: "Read" }, denied), denied, "deny stays unchanged and does not consume the warning");
+  assert.equal(await invoke("tool.call", { tool: "Read", agentId: "child" }, foreign), foreign, "subagent results do not warn");
+  const own = await tool({ tool: "mcp__notesoup__notes_list" });
+  assert.equal(typeof own.result, "string", "a self-registered result still carries its original text");
+  assert.deepEqual(own.context, [texts.warning]);
+  assert.equal(await tool(), foreign, "another tool cannot warn twice in the same window");
+  assert.deepEqual((await submit()).context, ["earlier plugin"], "tool delivery also consumes the prompt route");
+
+  const reset = () => invoke("session.compact", { trigger: "auto", messages: [] });
+  await reset();
+  assert.deepEqual(await tool(), { ...foreign, context: [...foreign.context, texts.warning] }, "a new window can warn through a next() tool result");
+  assert.equal(await tool(), foreign);
+  await reset();
+  assert.deepEqual((await submit()).context, ["earlier plugin", texts.warning], "prompt submission preserves earlier context and warns once");
+  assert.deepEqual((await submit()).context, ["earlier plugin"]);
+  assert.equal(await tool(), foreign, "prompt delivery wins over the later tool route");
+  assert.deepEqual((await context()).blocks, [], "no notesoup:warning block is ever added to prompt context");
+});
+
+test("Claude Mod consumes a warning only after an accepted delivery and ignores stale generations", async (t) => {
+  const { host, invoke } = await retainedFixture(t);
+  const texts = await dispatch({ op: "texts" }) as { warning: string };
+  host.session.usage = async () => ({ context: { tokens: CLAUDE_200K.warn, window: 200_000 } });
+  const event = { text: "continue", context: ["upstream"] };
+  const drop = { drop: "another plugin refused" };
+  assert.equal(await invoke("prompt.submit", event, drop), drop);
+  await assert.rejects(invoke("prompt.submit", event, {}, async () => { throw new Error("submission failed"); }), /submission failed/);
+  assert.deepEqual(await invoke("prompt.submit", event, event), event, "a downstream context rewrite does not count as delivery");
+  let entered!: () => void, release!: () => void;
+  const ready = new Promise<void>((resolve) => { entered = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const pending = invoke("prompt.submit", event, {}, async (e) => {
+    assert.deepEqual((e as typeof event).context, [...event.context, texts.warning]);
+    entered(); await held; return e;
+  });
+  await ready;
+  const result = { result: "tool while prompt enters" };
+  assert.equal(await invoke("tool.call", { tool: "Read" }, result), result, "an in-flight accepted route reserves this window against duplicate tool delivery");
+  await invoke("session.end", { reason: "clear" });
+  host.session.id = async () => "next-session";
+  host.session.messages = async () => [];
+  await invoke("prompt.context", {}, { blocks: [] });
+  release(); await pending;
+  const delivered = await invoke("prompt.submit", event, {}, async (e) => e) as typeof event;
+  assert.deepEqual(delivered.context, [...event.context, texts.warning], "an old delivery cannot mark the new generation warned");
+  assert.equal(await invoke("prompt.submit", event, event), event, "only an accepted delivery consumes the new window");
 });
 
 test("Claude Mod moves the reset point to the hard window when auto-compact is off", async (t) => {
@@ -762,6 +832,8 @@ test("Claude Mod stops the automatic reset and the manual command under DISABLE_
   await invoke("session.measure");
   assert.equal(compactions, 0, "the automatic reset is off and does not retry");
   assert.equal(notifications.length, 1, "detection logs once, not per turn");
+  const upstream = { result: "upstream", context: ["other plugin"] };
+  assert.equal(await handlers.get("tool.call")!(host, { tool: "Read" }, async () => upstream), upstream, "DISABLE_COMPACT also suppresses warnings");
 });
 
 test("Claude Mod skips the automatic reset when thresholds cannot be resolved", async (t) => {
@@ -931,7 +1003,7 @@ test("Claude session.end gives /clear, /resume and /branch a fresh boot and iden
     await t.test(action, async (t) => {
       const { host, invoke, context } = await retainedFixture(t);
       host.session.usage = async () => ({ context: { tokens: 142_424, window: 200_000 } });
-      assert.equal((await context()).blocks[0]?.name, "notesoup:warning", "the old window has already warned");
+      assert.deepEqual((await invoke("prompt.submit", { text: "continue" }, {}, async (e) => e) as { context: string[] }).context, [CLAUDE_WARNING_PROMPT], "the old window has already warned");
       await invoke("turn.start");
       await invoke("command.run", { command: "empty" });
       const ended = { sentinel: action };
@@ -944,7 +1016,8 @@ test("Claude session.end gives /clear, /resume and /branch a fresh boot and iden
       await invoke("turn.complete");
       assert.equal(compactions, 0, "the old queued reset cannot spill into the new session");
       const fresh = await context();
-      assert.deepEqual(fresh.blocks.map((block) => block.name), ["notesoup:boot", "notesoup:warning"]);
+      assert.deepEqual(fresh.blocks.map((block) => block.name), ["notesoup:boot"]);
+      assert.deepEqual((await invoke("prompt.submit", { text: "continue" }, {}, async (e) => e) as { context: string[] }).context, [CLAUDE_WARNING_PROMPT], "the new session can warn again");
       assert.match(fresh.blocks[0]!.text, new RegExp(`Current context window id: claude:after-${action}:0`));
       assert.doesNotMatch(fresh.blocks[0]!.text, /claude:hook-session:/);
       const requests: Array<{ identity?: { sessionId: string }; params?: Record<string, unknown> }> = [];
@@ -1049,7 +1122,11 @@ test("Claude identity uses the documented current model and cwd, with a safe mod
   host.session.cwd = async () => cwd;
   const seen: Array<{ identity: { model: string; cwd: string }; params: unknown }> = [];
   const run = host.process.run;
-  host.process.run = async (argv, init) => { seen.push(JSON.parse(init!.stdin!)); return run(argv, init); };
+  host.process.run = async (argv, init) => {
+    const request = JSON.parse(init!.stdin!);
+    if (request.op === "tool") seen.push(request);
+    return run(argv, init);
+  };
   const write = (address: string, content: string) => invoke("tool.call", { tool: "mcp__notesoup__notes_write", tool_use_id: "model-call", address, content }) as Promise<{ result: string }>;
   assert.equal((await write("@model/model.md", "opus")).result, "created @model/model.md");
   assert.equal(seen.at(-1)!.identity.model, "claude-opus-4-6");

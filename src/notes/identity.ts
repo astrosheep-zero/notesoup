@@ -8,6 +8,8 @@ export type NotesIdentity = Readonly<{
 	projectKey: string;
 	agent: string;
 	model: string;
+	/** Project slug being dreamed over: its named project and session notes become writable, and reads leave no access stamp. */
+	dreaming?: string;
 }>;
 
 function requireString(field: string, value: unknown): string {
@@ -27,6 +29,7 @@ export function snapshotNotesIdentity(value: NotesIdentity): NotesIdentity {
 	if (!SLUG_PATTERN.test(projectKey)) throw new TypeError("notes context projectKey must be a canonical lowercase slug");
 	if (!SLUG_PATTERN.test(agent)) throw new TypeError("notes context agent must be a canonical lowercase slug");
 	if (!SLUG_PATTERN.test(model)) throw new TypeError("notes context model must be a canonical lowercase slug");
+	if (value.dreaming !== undefined && !SLUG_PATTERN.test(value.dreaming)) throw new TypeError("notes context dreaming must be a canonical lowercase slug");
 	const home = resolve(homeValue);
-	return Object.freeze({ home, sessionId, projectKey, agent, model });
+	return Object.freeze({ home, sessionId, projectKey, agent, model, ...(value.dreaming === undefined ? {} : { dreaming: value.dreaming }) });
 }

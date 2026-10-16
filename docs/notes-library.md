@@ -26,7 +26,7 @@ const files = await notes.list({ glob: "@project/**" });
 const matches = await notes.search(["library"]);
 ```
 
-`/notes` ships JavaScript and TypeScript declarations. It does not import Pi or read `PI_*` environment variables. Pi packages are optional peers: a notes-only installation does not install them. Using the Pi plugin, the dsh rows (`notesoup/dsh`), or the `dream` CLI still requires its host. This is a filesystem library for Node, not a browser storage API.
+`/notes` ships JavaScript and TypeScript declarations. It does not import Pi or read `PI_*` environment variables. Pi packages are optional peers: a notes-only installation does not install them. Using the Pi plugin or the dsh rows (`notesoup/dsh`) still requires its host. This is a filesystem library for Node, not a browser storage API.
 
 ## API and identity
 

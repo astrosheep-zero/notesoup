@@ -28,9 +28,8 @@ function ensureRuntimeIgnored(home: string): void {
 }
 
 /**
- * Git audit layer for a dream run: one commit before (baseline) and one after (dream),
- * so the human gate reviews `git show` instead of trusting a report, and rollback is
- * `git revert`. The caller decides how loud a failure is; this function only reports it.
+ * Git audit layer for a dream: one commit at dream_begin (baseline) and one at dream_end,
+ * so the human reviews `git show` instead of trusting a report, and rollback is `git revert`. The caller decides how loud a failure is; this function only reports it.
  * A clean tree on an established repository commits nothing; a repository with no HEAD
  * gets an empty baseline commit, because an audit run with no snapshot is not a success.
  */
@@ -49,19 +48,15 @@ export function gitCommit(home: string, message: string): AuditResult {
 		const before = headCommit(home);
 		if (!clean) {
 			execFileSync("git", ["commit", "-q", "-m", message], { cwd: home, stdio: "ignore" });
-			console.log(`git: committed "${message}"`);
 		} else if (before === undefined) {
 			// A newly initialized repository has no snapshot at all; give the audit one.
 			execFileSync("git", ["commit", "-q", "--allow-empty", "-m", message], { cwd: home, stdio: "ignore" });
-			console.log(`git: committed "${message}"`);
 		}
 		const commit = headCommit(home);
 		if (commit === undefined) return { ok: false, error: "audit commit produced no snapshot (no HEAD)" };
 		return { ok: true, commit, empty: clean };
 	} catch (error) {
-		const reason = errorMessage(error);
-		console.log(`git audit layer failed: ${reason}`);
-		return { ok: false, error: reason };
+		return { ok: false, error: errorMessage(error) };
 	}
 }
 

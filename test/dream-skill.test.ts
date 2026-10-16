@@ -26,12 +26,12 @@ function discoverSkill(skillsDir: string, name: string) {
 	return skill;
 }
 
-test("dream skill is publicly discoverable and resolves the CLI's shared playbook", () => {
+test("dream skill is publicly discoverable and resolves the shared playbook", () => {
 	const root = packageRoot();
 	const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 	assert.deepEqual(manifest.pi.skills, ["./skills"]);
 	assert.deepEqual(manifest.pi.extensions, ["./plugins/pi/index.ts"]);
-	assert.equal(manifest.bin.dream, "dist/plugins/pi/dream/cli.js");
+	assert.equal(manifest.bin, undefined, "the dream CLI is gone; dreams run through the dream_* tools");
 	assert.ok(manifest.files.includes("skills"));
 
 	discoverSkill(join(root, "skills"), "memory");
@@ -58,7 +58,6 @@ test("npm tarball keeps the skill's relative playbook path portable after extrac
 		assert.ok(packedPaths.includes("skills/memory/SKILL.md"));
 		assert.ok(packedPaths.includes("playbook.md"));
 		assert.ok(packedPaths.includes("plugins/pi/index.ts"));
-		assert.ok(packedPaths.includes("dist/plugins/pi/dream/cli.js"));
 
 		const extracted = join(fixture, "extracted");
 		execFileSync("mkdir", ["-p", extracted]);

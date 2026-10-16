@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -157,7 +156,7 @@ test("the core entry is host-neutral and the Pi plugin entry owns the extension"
 	assert.equal(typeof createNotesoup(), "function");
 });
 
-test("the configured extension source and the moved dream CLI are executable current entries", async () => {
+test("the configured extension source is the executable current entry", async () => {
 	const root = repository();
 	const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 	assert.deepEqual(manifest.pi.extensions, ["./plugins/pi/index.ts"], "Pi loads the plugin entry from TypeScript source");
@@ -171,11 +170,9 @@ test("the configured extension source and the moved dream CLI are executable cur
 		registerTool(tool: ToolDefinition) { tools.push(tool); },
 		registerCommand(name: string) { commands.push(name); },
 	} as unknown as ExtensionAPI);
-	assert.deepEqual(tools.map((tool) => tool.name).sort(), ["empty_brain", "get_context_remaining", "history_list", "history_read", "history_windows", "notes_list", "notes_read", "notes_search", "notes_update", "notes_write"]);
+	assert.deepEqual(tools.map((tool) => tool.name).sort(), ["dream_begin", "dream_end", "dream_forget", "empty_brain", "get_context_remaining", "history_list", "history_read", "history_windows", "notes_list", "notes_read", "notes_search", "notes_update", "notes_write"]);
+	assert.deepEqual(tools.filter((tool) => tool.exposure === "deferred").map((tool) => tool.name).sort(), ["dream_begin", "dream_end", "dream_forget"], "dream tools stay hidden until searched");
 	assert.deepEqual(commands.sort(), ["empty", "fresh-window", "notesoup"]);
-	const help = execFileSync(process.execPath, [resolve(root, manifest.bin.dream), "--help"], { cwd: root, encoding: "utf8" });
-	assert.ok(help.startsWith("dream doctor [--notes-home <dir>]"));
-	assert.ok(help.includes("Default playbook: <installed package root>/playbook.md"));
 });
 
 test("NOTESOUP_DISABLED turns the Pi extension fully off", async () => {
