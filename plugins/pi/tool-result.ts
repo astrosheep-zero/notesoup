@@ -1,5 +1,5 @@
 /** Pi transport for host-neutral operations. */
-import { defineTool, type ExtensionAPI, type ExtensionToolContext } from "@earendil-works/pi-coding-agent";
+import { defineTool, type ExtensionAPI, type ExtensionToolContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { JsonValue } from "@earendil-works/pi-ai";
 import type { Static, TSchema } from "typebox";
@@ -26,12 +26,16 @@ export type ToolNamespace = { name: string; description: string };
 export const NOTES_NAMESPACE: ToolNamespace = { name: "notes", description: "Notes you choose to keep across context windows. See the memory skill." };
 export const HISTORY_NAMESPACE: ToolNamespace = { name: "history", description: "What happened in this session, read-only. See the memory skill." };
 
+/** Optional TUI renderers; without them the host draws its default call line and receipt text. */
+export type OperationRenderers<TParams extends TSchema> = Pick<ToolDefinition<TParams, undefined>, "renderCall" | "renderResult">;
+
 /** Register `operation` as a Pi tool; `run` supplies only the host context it needs. */
 export function registerOperation<TParams extends TSchema, TData, TRest extends readonly unknown[]>(
 	pi: ExtensionAPI,
 	operation: Operation<TParams, TData, TRest>,
 	run: (params: Static<TParams>, ctx: ExtensionToolContext) => Promise<Outcome<TData>>,
 	namespace?: ToolNamespace,
+	renderers?: OperationRenderers<TParams>,
 ): void {
 	pi.registerTool(defineTool<TParams, undefined>({
 		name: operation.name,
@@ -41,6 +45,7 @@ export function registerOperation<TParams extends TSchema, TData, TRest extends 
 		outputSchema: operation.outputSchema,
 		executionMode: operation.executionMode,
 		...(namespace ? { namespace } : {}),
+		...renderers,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			return piOperationResult(operation.render, await run(params, ctx));
 		},

@@ -4,6 +4,7 @@ import { getCurrentSystemMessage, Type } from "@earendil-works/pi-ai";
 import { VERSION, defineTool, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, type SettingsManager } from "@earendil-works/pi-coding-agent";
 import { registerBudget } from "./budget.js";
 import { output } from "./tool-result.js";
+import { emptyBrainRenderers } from "./render.js";
 import { currentReset, currentWindowId, isCheckpointBackedReset, isWindowBoot, isWindowMarker, markerResetOrigin, projectRootWindow, projectWindow, rootWindowId, type WindowMarker } from "./window.js";
 import { registerResetLifecycle } from "./reset/lifecycle.js";
 import { buildResetDrafts, LAST_WORD_ADVERTISED_CHARS, MAX_LAST_WORD_CHARS, repairResetTail, sanitizeLastWord } from "./reset/artifacts.js";
@@ -205,6 +206,8 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 		label: "Empty Brain",
 		description: "Clear your in-context memory and start a fresh context window. Your session, notes, and history survive. Pass `last_word` to stick a tiny note on your forehead for after the wipe.",
 		parameters: Type.Object({ last_word: Type.Optional(Type.String({ description: `A tiny sticky note, at most ${LAST_WORD_ADVERTISED_CHARS} characters. After the wipe it is slapped on your forehead; longer notes are refused.` })) }, { additionalProperties: false }),
+		renderCall: emptyBrainRenderers.renderCall,
+		renderResult: emptyBrainRenderers.renderResult,
 		async execute(_id, params, _signal, _update, ctx) {
 			if (!enabled) return output({ error: "notesoup is off, so memory can't be cleared; the user can turn it on with `/notesoup on`." });
 			const lastWord = sanitizeLastWord(params.last_word);
