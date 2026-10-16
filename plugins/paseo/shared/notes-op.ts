@@ -24,6 +24,7 @@ export const notesOpSchema = z.object({
   changeKind: z.string().optional(),
   diff: z.string().optional(),
   renamedFrom: z.string().optional(),
+  crumpled: z.boolean().optional(),
   truncated: z.boolean().optional(),
 });
 export type NotesOp = z.infer<typeof notesOpSchema>;

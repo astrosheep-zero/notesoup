@@ -1,33 +1,48 @@
 import type { ReactNode } from "react";
-import { View } from "react-native";
+import { Platform, StyleSheet, View } from "react-native";
 
 /** Shared paper palette, independent of the host theme. */
 export const PAPER = {
-  background: "#f7f2df",
-  border: "#d9cdaa",
-  tape: "#d8c98f",
+  background: "#f8f3e1",
+  edge: "#cbbd94",
+  tape: "rgba(222, 205, 140, 0.72)",
+  tapeEdge: "rgba(160, 140, 80, 0.18)",
   ink: "#33301f",
   inkMuted: "#867c63",
   added: "#357a44",
   removed: "#b0493e",
+  crumpled: "#ece6d1",
 };
 
-export function PaperCard({ compact, children }: { compact: boolean; children: ReactNode }) {
+export const MONO = Platform.select({ ios: "Menlo", android: "monospace", default: "ui-monospace, Menlo, monospace" });
+
+export function Tape() {
   return (
-    <View style={{ paddingTop: 6 }}>
+    <View style={{
+      alignSelf: "flex-start", width: 76, height: 15, marginLeft: 28, marginBottom: -9, zIndex: 1,
+      backgroundColor: PAPER.tape, borderLeftWidth: 1, borderRightWidth: 1, borderColor: PAPER.tapeEdge,
+      transform: [{ rotate: "-2deg" }],
+    }} />
+  );
+}
+
+export function PaperCard({ compact, crumpled = false, children }: {
+  compact: boolean;
+  crumpled?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <View style={{ paddingTop: 7 }}>
+      <Tape />
       <View style={{
-        alignSelf: "flex-start", width: 84, height: 14, marginLeft: 28, marginBottom: -9, zIndex: 1,
-        backgroundColor: PAPER.tape, opacity: 0.9, borderRadius: 2,
-        transform: [{ rotate: "-2deg" }],
-      }} />
-      <View style={{
-        padding: compact ? 10 : 12,
-        gap: 5,
+        paddingVertical: compact ? 8 : 9,
+        paddingHorizontal: 10,
+        gap: 4,
         minWidth: 0,
-        borderRadius: 4,
-        borderWidth: 1,
-        borderColor: PAPER.border,
-        backgroundColor: PAPER.background,
+        borderRadius: 3,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: PAPER.edge,
+        backgroundColor: crumpled ? PAPER.crumpled : PAPER.background,
       }}>
         {children}
       </View>

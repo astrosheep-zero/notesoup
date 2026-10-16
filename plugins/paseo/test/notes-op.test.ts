@@ -96,11 +96,11 @@ test("history replay has no structured payload: the rendered text is parsed inst
 
   const write = transform({
     name: "notes_write",
-    detail: { type: "unknown", input: { address: "a.md", content: "ignored" }, output: { content: [{ type: "text", text: "overwrote a.md (project pi-context)" }] } },
+    detail: { type: "unknown", input: { address: "a.md", content: "the new body" }, output: { content: [{ type: "text", text: "overwrote a.md (project pi-context)" }] } },
   });
   const writeData = notesOpSchema.parse(write!.items[0]!.data);
   assert.equal(writeData.outcome, "overwrote");
-  assert.equal(writeData.preview, undefined, "replay has no input preview authority beyond the address");
+  assert.equal(writeData.preview, "the new body", "replay carries the call arguments, so the content preview comes from input on every path");
 
   const update = transform({
     name: "notes_update",
@@ -127,3 +127,18 @@ test("non-notes tools, unknown shapes and missing addresses stay untouched", () 
 function result_items(result: { items: Array<{ data: unknown }> } | undefined) {
   return result!.items.map((item) => item.data);
 }
+
+test("a crumple call is marked from the input alone", () => {
+  const result = transform({
+    name: "notes_update",
+    detail: {
+      type: "unknown",
+      input: { address: "@self/stale.md", crumpled: true },
+      output: { structuredContent: { address: "@self/stale.md", change_kind: "metadata" } },
+    },
+  });
+  const data = notesOpSchema.parse(result!.items[0]!.data);
+  assert.equal(data.crumpled, true);
+  assert.equal(transform({ name: "notes_update", detail: { type: "unknown", input: { address: "@self/a.md", crumpled: false }, output: { structuredContent: { address: "@self/a.md", change_kind: "metadata" } } } })!
+    .items[0]!.data.crumpled, undefined);
+});

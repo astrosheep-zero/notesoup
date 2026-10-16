@@ -41,7 +41,8 @@ function baseData(item: ToolCallItem, op: NotesOp["op"], input: unknown): NotesO
   const address = isRecord(input) && typeof input.address === "string" ? input.address : undefined;
   if (!address) return undefined;
   const status = item.status === "running" ? "running" : item.status === "failed" ? "failed" : "completed";
-  return { op, address, status };
+  const crumpled = isRecord(input) && input.crumpled === true ? true : undefined;
+  return { op, address, status, ...(crumpled ? { crumpled } : {}) };
 }
 
 function notesOpData(item: ToolCallItem): NotesOp | undefined {
@@ -65,7 +66,9 @@ function notesOpData(item: ToolCallItem): NotesOp | undefined {
     }
     if (op === "write") {
       const outcome = text.split(" ")[0];
-      return { ...data, ...(["created", "overwrote", "uncrumpled"].includes(outcome) ? { outcome } : {}) };
+      // Replay still carries the call arguments; the preview comes from input on every path.
+      const preview = isRecord(input) && typeof input.content === "string" ? clip(input.content, PREVIEW_MAX_CHARS) : undefined;
+      return { ...data, ...(["created", "overwrote", "uncrumpled"].includes(outcome) ? { outcome } : {}), ...(preview ? { preview: preview.text, ...(preview.truncated ? { truncated: true } : {}) } : {}) };
     }
     const head = text.split("\n")[0] ?? "";
     const changeKind = head.startsWith("moved ") ? "moved" : head.startsWith("updated ") ? "body" : head.startsWith("unchanged ") ? "none" : undefined;

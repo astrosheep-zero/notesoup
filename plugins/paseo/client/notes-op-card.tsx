@@ -3,11 +3,19 @@ import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import type { NotesOp } from "../shared/notes-op.ts";
-import { PAPER, PaperCard } from "./paper-card.tsx";
+import { MONO, PAPER, PaperCard } from "./paper-card.tsx";
 
-const OP_LABEL: Record<NotesOp["op"], string> = { read: "READ NOTE", write: "WROTE NOTE", update: "UPDATED NOTE" };
-const OP_LABEL_RUNNING: Record<NotesOp["op"], string> = { read: "READING NOTE", write: "WRITING NOTE", update: "UPDATING NOTE" };
-const CHANGE_LABEL: Record<string, string> = { body: "edited", metadata: "metadata", moved: "renamed", none: "unchanged" };
+const OP_LABEL: Record<NotesOp["op"], string> = { read: "read", write: "wrote", update: "edited" };
+const OP_LABEL_RUNNING: Record<NotesOp["op"], string> = { read: "reading", write: "writing", update: "editing" };
+
+/** First added line of an update diff, without its line-number prefix: the sentence the agent just wrote down. */
+function addedLine(diff: string): string | undefined {
+  for (const line of diff.split("\n")) {
+    if (!line.startsWith("+")) continue;
+    return line.replace(/^\+\s*\d+\s+\+\s?/, "");
+  }
+  return undefined;
+}
 
 function DiffBody({ diff }: { diff: string }) {
   return (
@@ -16,7 +24,7 @@ function DiffBody({ diff }: { diff: string }) {
         const color = line.startsWith("+") ? PAPER.added
           : line.startsWith("-") ? PAPER.removed
           : PAPER.inkMuted;
-        return <Text key={index} selectable style={{ color, fontSize: 12, fontFamily: "Menlo" }}>{line}</Text>;
+        return <Text key={index} selectable style={{ color, fontSize: 12, fontFamily: MONO }}>{line}</Text>;
       })}
     </View>
   );
@@ -26,54 +34,48 @@ export function NotesOpCard({ item, layout }: PluginTimelineItemProps<NotesOp>) 
   const [expanded, setExpanded] = useState(false);
   const data = item.data;
   const title = data.status === "running" ? OP_LABEL_RUNNING[data.op] : OP_LABEL[data.op];
-  const state = data.error !== undefined ? "failed"
-    : data.op === "write" ? data.outcome
-    : data.op === "update" ? CHANGE_LABEL[data.changeKind ?? ""] ?? data.changeKind
-    : undefined;
-  const footnotes: string[] = [];
-  if (data.renamedFrom !== undefined) footnotes.push(`renamed from ${data.renamedFrom}`);
-  if (data.diff !== undefined && data.truncated) footnotes.push("diff shortened for display");
   const showEllipsis = data.truncated && data.diff === undefined;
-  const hasBody = Boolean(data.text || data.preview || data.diff || footnotes.length);
+  const hasBody = Boolean(data.text || data.preview || data.diff);
+  // Collapsed: one glance at what happened. Updates show the new sentence; writes the first of the content.
+  const peek = expanded || data.crumpled ? undefined
+    : data.diff !== undefined ? addedLine(data.diff)
+    : data.preview;
   return (
-    <PaperCard compact={layout.compact}>
-      <View style={{ gap: 5, paddingRight: hasBody && !expanded ? 34 : 0 }}>
-        <View style={{ gap: 3 }}>
-          <Text style={{ color: PAPER.inkMuted, fontSize: 11, letterSpacing: 0.5 }}>
-            {title}{data.status === "running" ? " …" : ""}
+    <PaperCard compact={layout.compact} crumpled={data.crumpled}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${expanded ? "收起" : "展开"} ${data.address}`}
+        aria-expanded={expanded}
+        onPress={hasBody ? () => setExpanded(value => !value) : undefined}
+        disabled={!hasBody}
+        style={({ pressed }) => ({ gap: 4, opacity: pressed && hasBody ? 0.7 : 1 })}
+      >
+        <View style={{ flexDirection: "row", alignItems: "baseline", gap: 8 }}>
+          <Text style={{ color: PAPER.inkMuted, fontSize: 11.5 }}>
+            {data.crumpled ? "crumpled" : title}{data.status === "running" ? " …" : ""}
           </Text>
-          <Text style={{ color: PAPER.ink, fontSize: 13, flexShrink: 1 }}>
+          <Text style={{ color: data.crumpled ? PAPER.inkMuted : PAPER.ink, fontSize: 13, flexShrink: 1, textDecorationLine: data.crumpled ? "line-through" : "none" }}>
             {data.address}
-            {state !== undefined && <Text style={{ color: PAPER.inkMuted, fontSize: 12, fontWeight: "400" }}>{"  "}{state}</Text>}
           </Text>
+          <View style={{ flex: 1 }} />
+          {hasBody && <Icon name={expanded ? "ChevronUp" : "ChevronDown"} size={16} color={PAPER.inkMuted} />}
         </View>
+        {peek !== undefined && (
+          <Text numberOfLines={2} style={{ color: data.diff !== undefined ? PAPER.added : PAPER.ink, fontSize: 13, lineHeight: 19 }}>
+            {data.diff !== undefined ? "+ " : ""}{peek}
+          </Text>
+        )}
         {data.error !== undefined && <Text selectable style={{ color: PAPER.removed, fontSize: 13, lineHeight: 19 }}>{data.error}</Text>}
-        {expanded && hasBody && <ScrollView
-          style={{ maxHeight: layout.compact ? 280 : 400 }}
-          contentContainerStyle={{ gap: 5 }}
-          nestedScrollEnabled
-        >
+      </Pressable>
+      {expanded && hasBody && (
+        <ScrollView style={{ maxHeight: layout.compact ? 280 : 400 }} contentContainerStyle={{ gap: 5 }} nestedScrollEnabled>
           {data.text !== undefined && <Text selectable style={{ color: PAPER.ink, fontSize: 13, lineHeight: 19 }}>{data.text}{showEllipsis && " …"}</Text>}
           {data.preview !== undefined && <Text selectable style={{ color: PAPER.inkMuted, fontSize: 13, lineHeight: 19 }}>{data.preview}{showEllipsis && " …"}</Text>}
           {data.diff !== undefined && <DiffBody diff={data.diff} />}
-          {footnotes.length > 0 && <Text style={{ color: PAPER.inkMuted, fontSize: 11 }}>{footnotes.join(" · ")}</Text>}
-        </ScrollView>}
-        {hasBody && <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`${expanded ? "收起" : "展开"} ${data.address}`}
-          aria-expanded={expanded}
-          onPress={() => setExpanded(value => !value)}
-          hitSlop={6}
-          style={({ pressed }) => ({
-            ...(expanded
-              ? { alignSelf: "flex-end" as const, marginTop: -3, marginBottom: -4 }
-              : { position: "absolute" as const, right: 0, bottom: 0 }),
-            paddingHorizontal: 5, opacity: pressed ? 0.6 : 1,
-          })}
-        >
-          <Icon name={expanded ? "ChevronUp" : "ChevronDown"} size={18} color={PAPER.inkMuted} />
-        </Pressable>}
-      </View>
+          {data.renamedFrom !== undefined && <Text style={{ color: PAPER.inkMuted, fontSize: 11 }}>renamed from {data.renamedFrom}</Text>}
+          {data.truncated && <Text style={{ color: PAPER.inkMuted, fontSize: 11 }}>shortened for display</Text>}
+        </ScrollView>
+      )}
     </PaperCard>
   );
 }
