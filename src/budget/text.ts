@@ -33,9 +33,9 @@ export function selectContinuation(origin: ResetOrigin): string {
  * instruction differs — Pi can reset the model itself, Claude can only end the turn.
  */
 export const WARNING_BODY =
-	"This brain is about to be emptied. The notes stay where they are; history has the rest written down, though digging it back out is on you. Whatever lives only in this brain goes with it.\nBefore that, put down what the next window can't get back:\n- what you're in the middle of, and how far it has progressed\n- decisions the human has made, in their words\n- what is blocked or pending\n- the next step\n- where the unfinished work sits (branches, scratch directories, uncommitted changes)\n- what failed, and why\n- skills to re-read, and history seqs, notes, or files to consult\n- anything else you expect to be useful after the reset\nCorrect or crumple notes that are no longer accurate, starting with MAP files, since every new window loads them.";
+	"This brain is already spent. Whatever lives only in this brain goes with it — but the notes stay where they are, and history has the rest written down, though digging it back out is on you.\nUse the last of this brain to put down what the next window can't get back:\n- what you're in the middle of, and how far it has progressed\n- decisions the human has made, in their words\n- what is blocked or pending\n- the next step\n- where the unfinished work sits (branches, scratch directories, uncommitted changes)\n- what failed, and why\n- skills to re-read, and history seqs, notes, or files to consult\n- anything else you expect to be useful after the reset\n- and refresh the stale notes with what has changed since you last wrote them — the notes the next window gets are the old ones, unless you fix them now\nCorrect or crumple notes that are no longer accurate, starting with MAP files, since every new window loads them.";
 
-export const WARNING_CALL = "When the notes are ready, call `empty_brain` to reset now instead of being cut off mid-task.";
+export const WARNING_CALL = "The moment the notes are saved, call `empty_brain`. Not one more probe, not one more test — the next thing you do after saving is reset.";
 
 export function warningPrompt(): string {
 	return `${WARNING_BODY}\n${WARNING_CALL}`;

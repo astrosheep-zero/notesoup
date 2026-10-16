@@ -20,8 +20,8 @@ What lives only in this brain leaves with it.
 A decent moment to put down where you are, while you still remember why.
 Ready when you are: \`{wipeTool}\`.`;
 
-const GOLDEN_WARNING = `This brain is about to be emptied. The notes stay where they are; history has the rest written down, though digging it back out is on you. Whatever lives only in this brain goes with it.
-Before that, put down what the next window can't get back:
+const GOLDEN_WARNING = `This brain is already spent. Whatever lives only in this brain goes with it — but the notes stay where they are, and history has the rest written down, though digging it back out is on you.
+Use the last of this brain to put down what the next window can't get back:
 - what you're in the middle of, and how far it has progressed
 - decisions the human has made, in their words
 - what is blocked or pending
@@ -30,6 +30,7 @@ Before that, put down what the next window can't get back:
 - what failed, and why
 - skills to re-read, and history seqs, notes, or files to consult
 - anything else you expect to be useful after the reset
+- and refresh the stale notes with what has changed since you last wrote them — the notes the next window gets are the old ones, unless you fix them now
 Correct or crumple notes that are no longer accurate, starting with MAP files, since every new window loads them.`;
 
 const GOLDEN_COUNTDOWN = "Brain emptied in 3… 2…";
