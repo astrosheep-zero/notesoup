@@ -1,6 +1,6 @@
 {
   "name": "notesoup",
-  "version": "0.52.6",
+  "version": "0.52.7",
   "type": "module",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
