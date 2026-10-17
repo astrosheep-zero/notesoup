@@ -146,28 +146,30 @@ function toolEvent(item: DecodedHistoryItem, result?: DecodedHistoryItem): Histo
 
 /** Pair results into call events; consumed result seqs are not alternate read addresses. */
 export function projectHistory(rawWindows: DecodedHistoryWindow[], highestSeq: number, branchSeqs: Set<number>): HistoryProjection {
-	const raw = rawWindows.flatMap((current) => current.items);
+	// Pair in durable address order, not window presentation order. Unnumbered
+	// segments need not have a provable chronological order relative to each other.
+	const raw = rawWindows.flatMap((current) => current.items).sort((a, b) => a.seq - b.seq);
 	const resultsById = new Map<string, DecodedHistoryItem>();
 	for (const item of raw) {
 		if (item.role === "tool" && item.toolCallId && !resultsById.has(item.toolCallId)) resultsById.set(item.toolCallId, item);
 	}
 	const pairedResults = new Map<number, number>();
-	const consumed = new Set<number>();
+	for (const item of raw) {
+		const result = item.role === "tool_call" && item.toolCallId ? resultsById.get(item.toolCallId) : undefined;
+		if (result && result.seq > item.seq && !pairedResults.has(result.seq)) {
+			pairedResults.set(result.seq, item.seq);
+		}
+	}
 	const windows: HistoryWindow[] = rawWindows.map((current) => ({
 		windowId: current.windowId,
 		...(current.createdAt ? { createdAt: current.createdAt } : {}),
 		items: current.items.flatMap((item): HistoryEvent[] => {
-			if (consumed.has(item.seq)) return [];
-			if (item.role === "tool_call") {
+			if (pairedResults.has(item.seq)) return [];
+			if (item.role === "tool_call" || item.role === "tool") {
 				const result = item.toolCallId ? resultsById.get(item.toolCallId) : undefined;
-				const paired = result && result.seq > item.seq && !consumed.has(result.seq) ? result : undefined;
-				if (paired) {
-					consumed.add(paired.seq);
-					pairedResults.set(paired.seq, item.seq);
-				}
+				const paired = result && pairedResults.get(result.seq) === item.seq ? result : undefined;
 				return [toolEvent(item, paired)];
 			}
-			if (item.role === "tool") return [toolEvent(item)];
 			return [{ seq: item.seq, windowId: item.windowId, role: item.role === "system" || item.role === "developer" ? "context" : item.role, text: item.text, createdAt: item.createdAt }];
 		}),
 	}));

@@ -8,6 +8,7 @@ import {
   type NotesOp,
   type NotesOpTool,
 } from "../shared/notes-op.ts";
+import { isRecord, notesoupToolName, resultError, resultText } from "./tool-result.ts";
 
 type Transformer = Extract<Parameters<PluginClientContext["addTimelineTransformer"]>[0], { query: { itemType: "tool_call" } }>;
 type Source = Parameters<Transformer["transform"]>[0];
@@ -19,22 +20,11 @@ const OP_BY_TOOL: Record<NotesOpTool, NotesOp["op"]> = {
   notes_update: "update",
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 function clip(text: string, maxChars: number): { text: string; truncated: boolean } {
   const chars = Array.from(text);
   return chars.length <= maxChars
     ? { text, truncated: false }
     : { text: chars.slice(0, maxChars).join(""), truncated: true };
-}
-
-/** Prefer the structured payload; fall back to the rendered text blocks. */
-function resultText(output: unknown): string | undefined {
-  if (!isRecord(output) || !Array.isArray(output.content)) return undefined;
-  const parts = output.content.filter(isRecord).filter((block) => block.type === "text" && typeof block.text === "string");
-  return parts.length > 0 ? parts.map((block) => block.text as string).join("\n") : undefined;
 }
 
 function baseData(item: ToolCallItem, op: NotesOp["op"], input: unknown): NotesOp | undefined {
@@ -45,9 +35,9 @@ function baseData(item: ToolCallItem, op: NotesOp["op"], input: unknown): NotesO
   return { op, address, status, ...(crumpled ? { crumpled } : {}) };
 }
 
-function notesOpData(item: ToolCallItem): NotesOp | undefined {
-  const op = OP_BY_TOOL[item.name as NotesOpTool];
-  if (!op || item.detail.type !== "unknown") return undefined;
+function notesOpData(item: ToolCallItem, tool: NotesOpTool): NotesOp | undefined {
+  const op = OP_BY_TOOL[tool];
+  if (item.detail.type !== "unknown") return undefined;
   const { input, output } = item.detail;
   const data = baseData(item, op, input);
   if (!data) return undefined;
@@ -55,9 +45,9 @@ function notesOpData(item: ToolCallItem): NotesOp | undefined {
 
   const wire = isRecord(output) && isRecord(output.structuredContent) ? output.structuredContent : undefined;
   if (wire && typeof wire.error === "string") return { ...data, error: wire.error };
-  if (data.status === "failed" && !wire) return { ...data, error: resultText(output) ?? "failed" };
+  if (data.status === "failed") return { ...data, error: resultError(output, item.error) };
   if (!wire) {
-    // History replay reconstructs results without the structured payload; parse the rendered text.
+    // Pi history and Claude carry rendered text, not the structured Notesoup payload.
     const text = resultText(output);
     if (text === undefined) return data;
     if (op === "read") {
@@ -111,8 +101,10 @@ export const notesOpTransformer = {
   id: "notes-op-source",
   query: { itemType: "tool_call" },
   transform: ({ item }: Pick<Source, "item">) => {
-    if (item.type !== "tool_call" || !NOTES_OP_TOOLS.includes(item.name as NotesOpTool)) return undefined;
-    const data = notesOpData(item);
+    if (item.type !== "tool_call") return undefined;
+    const tool = notesoupToolName(item.name) as NotesOpTool;
+    if (!NOTES_OP_TOOLS.includes(tool)) return undefined;
+    const data = notesOpData(item, tool);
     return data === undefined ? undefined : { items: [{ type: "plugin" as const, kind: NOTES_OP_KIND, version: 1, data }] };
   },
 } satisfies Transformer;

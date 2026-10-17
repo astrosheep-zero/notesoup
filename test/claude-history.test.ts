@@ -9,6 +9,7 @@ import { unavailableNotesSnapshot } from "../src/boot/snapshot.js";
 import { DEFAULT_BOOT_TOOL_NAMES } from "../src/boot/text.js";
 import { allItems, eventDocument } from "../src/history/history.js";
 import { historyList, historyRead, historyWindows } from "../src/tools/history.js";
+import { TOOL_OUTPUT_MAX_BYTES } from "../src/tools/output.js";
 import { dispatch, type ClaudeToolResult } from "../plugins/claude/src/helper.js";
 
 type Row = Record<string, unknown>;
@@ -91,11 +92,15 @@ test("Claude file-history deltas do not become events or change history addresse
 	assert.equal(baseline.highestSeq, 2);
 });
 
-test("Claude skips unknown record types unless selected ancestry requires them", () => {
+test("Claude skips unknown record types and treats required skipped UUIDs as gaps, not content", () => {
 	const u = user("u", null, "hello"), a = assistant("a", "u", [{ type: "text", text: "reply" }]);
 	const unknown = { type: "future-record", uuid: "future", parentUuid: "not-on-disk", content: "private metadata" };
 	assert.deepEqual(project([unknown, u, unknown, a, unknown], "a"), project([u, a], "a"));
-	assert.throws(() => project([u, unknown, { ...a, parentUuid: "future" }], "a"), /missing Claude transcript ancestor: future/);
+	const incomplete = project([u, unknown, { ...a, parentUuid: "future" }], "a");
+	assert.deepEqual(incomplete.missingAncestors, ["future"]);
+	assert.equal(incomplete.currentWindowOrdinal, undefined);
+	assert.deepEqual(allItems(incomplete).map((event) => event.seq), [2]);
+	assert.doesNotMatch(allItems(incomplete).map(eventDocument).join("\n"), /private metadata|hello/);
 });
 
 test("Claude duplicate UUID records do not allocate again or move addresses on reload", () => {
@@ -196,7 +201,7 @@ test("Claude resolves forward persisted ancestry without renumbering or using la
 	assert.equal(allItems(projection).find((event) => event.text === "hook notice")?.windowId, `claude:${sessionId}:0`);
 	assert.equal(allItems(projection).find((event) => event.text === "after reset")?.windowId, `claude:${sessionId}:1`);
 	assert.deepEqual(project(rows, "new"), projection);
-	assert.throws(() => project([notice], "notice"), /missing.*ancestor/);
+	assert.deepEqual(project([notice], "notice").missingAncestors, ["attachment"]);
 	assert.equal(project([user("u", null, bootText(9))], "u").windows.length, 1, "ordinary user text is not a trusted retained boot");
 });
 
@@ -219,7 +224,141 @@ test("Claude tolerates only the uncommitted JSONL tail, not malformed committed 
 	assert.throws(() => project([row("u", null, "user", { type: "text", text: "not an array" })], "u"), /message content/);
 	assert.throws(() => project([user("u", null, "first"), user("u", null, "conflict")], "u"), /conflicting.*duplicate UUID/);
 	assert.throws(() => project([{ ...user("u", null, "first"), isSidechain: true }], "u"), /only the main/);
+	assert.throws(() => project([user("u", "a", "cycle"), assistant("a", "u", "cycle")], "a"), /cyclic Claude transcript ancestry/);
+	assert.throws(() => project([user("u", "missing", "gap"), assistant("a", "a", "cycle")], "a"), /cyclic Claude transcript ancestry/);
 	assert.throws(() => project([{ ...user("u", null, "first"), sessionId: "another-session" }], "u"), /different session/);
+});
+
+test("Claude gaps retain only confirmed suffixes, keep pairing/seqs, and disappear when the ancestor is appended", async () => {
+	const rows = [user("prefix", null, "unconfirmed prefix"), assistant("sibling", "prefix", "unrelated sibling"),
+		assistant("suffix", "missing", [{ type: "text", text: "searchable suffix" }, call("one")]),
+		row("output", "suffix", "user", [result("one", "confirmed output")]),
+		assistant("gap-sibling", "missing", "unrelated gap sibling")];
+	const incomplete = project(rows, "output");
+	assert.deepEqual(incomplete.missingAncestors, ["missing"]);
+	assert.equal(incomplete.currentWindowOrdinal, undefined);
+	assert.deepEqual(allItems(incomplete).map((event) => event.seq), [3, 4, 5]);
+	assert.equal(incomplete.pairedResults.get(6), 4);
+	assert.equal(incomplete.highestSeq, 7);
+	assert.match(incomplete.windows[0]!.windowId, /:unknown:missing$/);
+	const suffix = await historyList.execute({ query: "searchable suffix" }, incomplete);
+	assert.ok(suffix.ok);
+	assert.deepEqual(suffix.data.items.map((item) => "seq" in item ? item.seq : -1), [3]);
+	const tool = await historyRead.execute({ seq: 4 }, incomplete);
+	assert.ok(tool.ok);
+	assert.match(tool.data.text, /confirmed output/);
+	assert.doesNotMatch(allItems(incomplete).map(eventDocument).join("\n"), /unconfirmed prefix|unrelated sibling|unrelated gap sibling/);
+
+	// A later first occurrence gets the next append seq, never an inserted seq.
+	const recovered = project([...rows, user("missing", "prefix", "recovered ancestor")], "output");
+	assert.deepEqual(recovered.missingAncestors, []);
+	assert.equal(recovered.currentWindowOrdinal, 0);
+	assert.equal(recovered.highestSeq, 8);
+	assert.deepEqual(allItems(recovered).map((event) => event.seq), [1, 3, 4, 5, 8]);
+	assert.equal(recovered.pairedResults.get(6), 4);
+	assert.ok(!recovered.branchSeqs.has(2) && !recovered.branchSeqs.has(7), "recovery never selects either sibling");
+});
+
+test("Claude helper reports gaps on list/read/windows and re-anchors reset state only with a retained boot", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "claude-history-gap-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const transcriptPath = join(root, "transcript.jsonl");
+	const identity = { home: join(root, "notes"), sessionId, cwd: root, agent: "claude", model: "claude" };
+	const rows = [user("prefix", null, "do not expose disconnected prefix"),
+		{ type: "future-record", uuid: "missing", parentUuid: "prefix", content: "do not expose metadata" },
+		assistant("suffix", "missing", "confirmed suffix")];
+	const history = { sessionId, transcriptPath, headUuid: "suffix" };
+	const invoke = (tool: string, params: unknown = {}) => dispatch({ op: "tool", tool, params, identity, history }) as Promise<ClaudeToolResult>;
+	writeFileSync(transcriptPath, jsonl(rows));
+	for (const [tool, params] of [["history_list", {}], ["history_read", { seq: 2 }], ["history_windows", {}],
+		["history_list", { query: "no matches" }], ["history_read", { seq: 99 }]] as const) {
+		const response = await invoke(tool, params);
+		assert.match(response.text, /history is incomplete: missing ancestor UUID\(s\): "missing"/);
+		assert.doesNotMatch(response.text, /do not expose/);
+	}
+	assert.match((await invoke("history_list")).text, /confirmed suffix/);
+	const excluded = await invoke("history_read", { seq: 1 });
+	assert.equal(excluded.ok, false);
+	assert.match(excluded.text, /outside the confirmed selected history/);
+	assert.match((await invoke("history_list", { window_id: "@previous" })).text, /Cannot resolve "@previous"/);
+	await assert.rejects(invoke("history_list", { window_id: "@previous", before_seq: "invalid" }), /invalid history_list parameters: before_seq/);
+	await assert.rejects(invoke("history_read", { seq: "2" }), /invalid history_read parameters: seq/);
+	await assert.rejects(dispatch({ op: "history_state", identity, history }), /cannot determine the current window ordinal/);
+
+	// A native boundary alone cannot count the missing earlier resets. A quoted
+	// identity without the full retained protocol is not a new ordinal anchor.
+	rows.push(compact("boundary", "suffix"), row("partial", "boundary", "user", "Current context window id: claude:synthetic-session:8"));
+	writeFileSync(transcriptPath, jsonl(rows));
+	history.headUuid = "partial";
+	await assert.rejects(dispatch({ op: "history_state", identity, history }), /cannot determine the current window ordinal/);
+	rows.push(row("boot", "partial", "user", bootText(8), { isCompactSummary: true }), user("after", "boot", "after anchored reset"));
+	writeFileSync(transcriptPath, jsonl(rows));
+	history.headUuid = "after";
+	const anchored = await readClaudeHistory(history);
+	assert.equal(anchored.currentWindowOrdinal, 8);
+	assert.deepEqual(anchored.windows.map((window) => window.windowId), [`claude:${sessionId}:8`, `claude:${sessionId}:unknown:missing`], "unknown segments are listed separately, not inserted into the numbered timeline");
+	assert.deepEqual(await dispatch({ op: "history_state", identity, history }), { window: 8 }, "never windows.length - 1");
+	assert.match((await invoke("history_read", { seq: 6 })).text, /window claude:synthetic-session:8/);
+	assert.match((await invoke("history_windows")).text, /history is incomplete/);
+	assert.match((await invoke("history_list", { window_id: "@previous" })).text, /Cannot resolve "@previous"/);
+	rows.push(compact("next", "after"), row("next-boot", "next", "user", bootText(9)), user("latest", "next-boot", "latest"));
+	writeFileSync(transcriptPath, jsonl(rows));
+	history.headUuid = "latest";
+	const previous = await invoke("history_list", { window_id: "@previous" });
+	assert.ok(previous.ok);
+	assert.match(previous.text, /after anchored reset/);
+	assert.doesNotMatch(previous.text, /confirmed suffix/);
+
+	// Restore the record as a supported message: warning disappears on the next
+	// read, without any in-memory repair state or changed existing addresses.
+	rows.push(user("missing", "prefix", "recovered ancestor"));
+	writeFileSync(transcriptPath, jsonl(rows));
+	assert.doesNotMatch((await invoke("history_windows")).text, /history is incomplete|:unknown:/);
+	assert.deepEqual(await dispatch({ op: "history_state", identity, history }), { window: 9 });
+});
+
+test("Claude gap windows sort by confirmed ordinal despite forward references, without duplicating paired output", async () => {
+	const rows = [row("notice", "boot9", "system", "notice"),
+		row("boot8", "missing", "user", bootText(8), { isCompactSummary: true }),
+		assistant("call", "boot8", [call("t")]), compact("boundary9", "call"),
+		row("boot9", "boundary9", "user", bootText(9)), row("result", "notice", "user", [result("t", "output")])];
+	const projection = project(rows, "result");
+	const windows = await historyWindows.execute({}, projection, sessionId);
+	assert.ok(windows.ok);
+	assert.deepEqual(windows.data.windows.map((window) => window.window_id), [8, 9].map((ordinal) => `claude:${sessionId}:${ordinal}`));
+	assert.equal(projection.currentWindowOrdinal, 9);
+	assert.equal(projection.highestSeq, 8);
+	assert.deepEqual(allItems(projection).filter((event) => event.role === "tool").map((event) => [event.seq, event.text]), [[4, "output"]]);
+	assert.equal(projection.pairedResults.get(8), 4);
+	const alias = await historyRead.execute({ seq: 8 }, projection);
+	assert.ok(!alias.ok);
+	assert.equal(alias.error.code, "not_an_event");
+	assert.match(alias.error.message, /read seq 4/);
+});
+
+test("Claude gap notices participate in list/read budgets without changing read coordinates", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "claude-history-budget-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const transcriptPath = join(root, "transcript.jsonl"), text = "x".repeat(50000);
+	writeFileSync(transcriptPath, jsonl([assistant("head", "missing", text)]));
+	const identity = { home: join(root, "notes"), sessionId, cwd: root, agent: "claude", model: "claude" };
+	const history = { sessionId, transcriptPath, headUuid: "head" };
+	const invoke = async (tool: string, params: unknown): Promise<string> => {
+		const response = await dispatch({ op: "tool", tool, params, identity, history }) as ClaudeToolResult;
+		assert.ok(response.ok);
+		assert.match(response.text, /history is incomplete.*"missing"/);
+		assert.ok(Buffer.byteLength(response.text, "utf8") <= TOOL_OUTPUT_MAX_BYTES, `${tool}: ${Buffer.byteLength(response.text, "utf8")} bytes`);
+		return response.text;
+	};
+	const first = await invoke("history_read", { seq: 1, max_chars: 50000 });
+	const offset = Number(/\[truncated; continue at offset_chars=(\d+)\]$/.exec(first)?.[1]);
+	assert.ok(offset > 0 && offset < text.length);
+	const firstBody = /\n\n(x+)\n\n\[truncated;/.exec(first)?.[1];
+	assert.equal(firstBody, text.slice(0, offset), "the footer addresses the first undelivered character, not the decorated text");
+	const rest = await invoke("history_read", { seq: 1, offset_chars: offset, max_chars: 50000 });
+	assert.equal(/\n\n(x+)$/.exec(rest)?.[1], text.slice(offset));
+	assert.doesNotMatch(rest, /\[truncated;/);
+	await invoke("history_list", { max_chars_per_item: 50000 });
 });
 
 test("Claude helper history tools reuse shared schemas, outcomes and text rendering from a supplied path", async (t) => {

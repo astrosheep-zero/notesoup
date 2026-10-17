@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { notesOpTransformer } from "../client/notes-op-transformer.ts";
 import { DIFF_MAX_CHARS, PREVIEW_MAX_CHARS, READ_TEXT_MAX_CHARS, notesOpSchema } from "../shared/notes-op.ts";
+import { claudeReadCompleted, claudeReadFailed, claudeUpdateCompleted, claudeWriteCompleted } from "./fixtures/claude-tool-calls.ts";
 
 function toolCall(overrides: Record<string, unknown>) {
   return {
@@ -118,10 +119,47 @@ test("history replay has no structured payload: the rendered text is parsed inst
 });
 
 test("non-notes tools, unknown shapes and missing addresses stay untouched", () => {
-  assert.equal(notesOpTransformer.transform({ item: toolCall({ name: "bash" }) as never }), undefined);
+  for (const name of ["bash", "mcp__other__notes_read", "mcp__notesoup_extra__notes_write", "mcp__notesoup__notes_list", "mcp__notesoup__mcp__notesoup__notes_read"]) {
+    assert.equal(transform({ name }), undefined, name);
+  }
   assert.equal(notesOpTransformer.transform({ item: toolCall({ detail: { type: "plain_text", text: "hi" } }) as never }), undefined);
   assert.equal(notesOpTransformer.transform({ item: toolCall({ detail: { type: "unknown", input: {}, output: {} } }) as never }), undefined);
   assert.equal(notesOpTransformer.transform({ item: { type: "user_message", text: "hi" } as never }), undefined);
+});
+
+test("Claude completed calls use the adapter's output text for read, write preview and update diff", () => {
+  const read = notesOpSchema.parse(transform(claudeReadCompleted)!.items[0]!.data);
+  assert.deepEqual(read, { op: "read", address: "@self/foo.md", status: "completed", text: "body line one\nbody line two" });
+  assert.deepEqual(notesOpSchema.parse(transform(claudeWriteCompleted)!.items[0]!.data), {
+    op: "write", address: "a.md", status: "completed", outcome: "overwrote", preview: "the new body",
+  });
+  assert.deepEqual(notesOpSchema.parse(transform(claudeUpdateCompleted)!.items[0]!.data), {
+    op: "update", address: "a.md", status: "completed", changeKind: "body", diff: "- 1 - old\n+ 1 + new",
+  });
+});
+
+test("Claude running calls render from input with null output", () => {
+  for (const [op, call] of [["read", claudeReadCompleted], ["write", claudeWriteCompleted], ["update", claudeUpdateCompleted]] as const) {
+    const running = transform({ ...call, status: "running", detail: { ...call.detail, output: null } });
+    assert.deepEqual(notesOpSchema.parse(running!.items[0]!.data), { op, address: call.detail.input.address, status: "running" });
+  }
+});
+
+test("Claude failures keep raw error content and transport messages instead of parsing them as notes", () => {
+  assert.deepEqual(notesOpSchema.parse(transform(claudeReadFailed)!.items[0]!.data), {
+    op: "read", address: "@self/foo.md", status: "failed", error: "No note at @self/foo.md.",
+  });
+  const write = transform({
+    ...claudeWriteCompleted, status: "failed",
+    detail: { ...claudeWriteCompleted.detail, output: null },
+    error: { type: "tool_result", tool_use_id: claudeWriteCompleted.callId, is_error: true, content: "Disk full" },
+  });
+  assert.deepEqual(notesOpSchema.parse(write!.items[0]!.data), { op: "write", address: "a.md", status: "failed", error: "Disk full" });
+  const update = transform({
+    ...claudeUpdateCompleted, status: "failed", error: { message: "MCP connection closed" },
+    detail: { ...claudeUpdateCompleted.detail, output: null },
+  });
+  assert.deepEqual(notesOpSchema.parse(update!.items[0]!.data), { op: "update", address: "a.md", status: "failed", error: "MCP connection closed" });
 });
 
 function result_items(result: { items: Array<{ data: unknown }> } | undefined) {

@@ -59,7 +59,7 @@ Pi's nested records contain child ID, name, optional arguments, status, timing a
 
 ## Bounds and continuation
 
-One selection determines the structured result and its text. Both complete representations must fit the 32 KiB output budget, including metadata, cursor and rendered notice. A programmatic caller does not receive an unbounded hidden payload beside a truncated textual one.
+One selection determines the structured result and its text. Both complete representations must fit the 32 KiB output budget, including metadata, cursor and rendered notice. A programmatic caller does not receive an unbounded hidden payload beside a truncated textual one. History operations accept an optional pure text wrapper from the host: selection and read-window checks measure that wrapper around the shared rendering, and the caller must apply the same wrapper at delivery. Host prose stays in its plugin; no final clipping or separate query is involved.
 
 History pages carry `page_older` and `page_newer`, the exact params to merge into the next call; `from` picks which end of a bounded range `limit` counts from, `since`/`until` narrow that range by event `created_at`, and only a call without roles or a non-empty query folds tool/context runs. Omitted queries, empty strings and empty lists all disable search filtering; empty entries in a query list are ignored. Without a query, notes search returns scoped notes with empty `matches`, not every body line. Notes listings/search are snapshots with a `more` count and can be narrowed by `glob`; they are not falsely advertised as paginated. `history_windows` is a snapshot too: its `more` counts the windows the budget left out and there is no window cursor, because `history_list` rows also expose `window_id`. A read can stop anywhere in the event document, including inside serialized arguments; concatenate its verbatim text slices before parsing any arguments. There is no separately truncated arguments object.
 
@@ -73,6 +73,6 @@ A note read reports unrecognized frontmatter under `metadata.extra`; a value too
 - The history adapter owns native decoding, seq allocation and branch visibility.
 - Shared operations own the typed result, filtering, paging, character windows and refusal messages.
 - Shared renderers derive text from that result.
-- Pi/Claude adapters supply host identity, projections and transport packaging only.
+- Pi/Claude adapters supply host identity, projections, optional pure text decoration and transport packaging only.
 
 There is no second query implementation for codemode, no copy of session storage and no migration of user records.

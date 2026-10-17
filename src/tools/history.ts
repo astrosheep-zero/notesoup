@@ -80,10 +80,9 @@ function renderRead(data: HistoryReadData): string {
 
 /* ------------------------------------------------------------------ shared bounding */
 
-/** Include rendering and cursors in the budget, not just row contents. */
-function pageFits(page: HistoryPage): boolean {
-	return fitsResult(success(page), (result) => renderOutcome(result, renderPage));
-}
+/** Pure host decoration, measured during selection and applied unchanged by the caller at delivery. */
+export type HistoryTextWrapper = (text: string) => string;
+const plainText: HistoryTextWrapper = (text) => text;
 
 // Sample known ids in the refusal message itself, never as a second listing.
 const MAX_REPORTED_WINDOWS = 5;
@@ -114,15 +113,15 @@ function badWindowId(projection: HistoryProjection, params: HistoryFilter): Outc
 
 export const historyWindowsParameters = Type.Object({}, { additionalProperties: false });
 
-export const historyWindows: Operation<typeof historyWindowsParameters, HistoryWindowsData, [HistoryProjection, string]> = {
+export const historyWindows: Operation<typeof historyWindowsParameters, HistoryWindowsData, [HistoryProjection, string, HistoryTextWrapper?]> = {
 	name: "history_windows",
 	label: "History list windows",
 	description: "List this session's context windows, oldest first, with seq ranges.",
 	parameters: historyWindowsParameters,
 	outputSchema: resultSchema(HistoryWindowsDataSchema),
-	async execute(_params, projection, sessionId) {
+	async execute(_params, projection, sessionId, wrapText = plainText) {
 		const data: HistoryWindowsData = { session_id: sessionId, windows: [], more: projection.windows.length };
-		const fits = (candidate: HistoryWindowsData) => fitsResult(success(candidate), (result) => renderOutcome(result, renderWindows));
+		const fits = (candidate: HistoryWindowsData) => fitsResult(success(candidate), (result) => wrapText(renderOutcome(result, renderWindows)));
 		for (const window of projection.windows) {
 			let first: number | null = null;
 			let last: number | null = null;
@@ -161,19 +160,21 @@ export const historyListParameters = Type.Object({
 	max_chars_per_item: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_READ_WINDOW_CHARS, description: `(optional, default ${HISTORY_PREVIEW_CHARS}) Max preview chars per event.` })),
 }, { additionalProperties: false });
 
-export const historyList: Operation<typeof historyListParameters, HistoryPage, [HistoryProjection]> = {
+export const historyList: Operation<typeof historyListParameters, HistoryPage, [HistoryProjection, HistoryTextWrapper?]> = {
 	name: "history_list",
 	label: "History list items",
 	description: "Browse or search this session's events, a page at a time. Read one in full with `history_read`.",
 	parameters: historyListParameters,
 	outputSchema: resultSchema(HistoryPageSchema),
-	async execute(params, projection) {
+	async execute(params, projection, wrapText = plainText) {
 		const resolved = resolveWindowId(projection, params.window_id);
 		if (!resolved.ok) return resolved.outcome;
 		const scoped = { ...params, window_id: resolved.window_id };
 		const badWindow = badWindowId(projection, scoped);
 		if (badWindow) return badWindow;
-		return selectPage(projection, scoped, pageFits, scoped.max_chars_per_item ?? HISTORY_PREVIEW_CHARS);
+		// Charge wrapped rendering and cursors, not only event previews.
+		const fits = (page: HistoryPage) => fitsResult(success(page), (result) => wrapText(renderOutcome(result, renderPage)));
+		return selectPage(projection, scoped, fits, scoped.max_chars_per_item ?? HISTORY_PREVIEW_CHARS);
 	},
 	render: (result) => renderOutcome(result, renderPage),
 };
@@ -182,13 +183,13 @@ export const historyList: Operation<typeof historyListParameters, HistoryPage, [
 
 export const historyReadParameters = Type.Object({ seq: Type.Integer({ minimum: 1, description: "Event seq, from `history_list`." }), ...TextWindowRequestSchema }, { additionalProperties: false });
 
-export const historyRead: Operation<typeof historyReadParameters, HistoryReadData, [HistoryProjection]> = {
+export const historyRead: Operation<typeof historyReadParameters, HistoryReadData, [HistoryProjection, HistoryTextWrapper?]> = {
 	name: "history_read",
 	label: "History read item",
 	description: "Read one event in full: tool arguments, output, and nested calls.",
 	parameters: historyReadParameters,
 	outputSchema: resultSchema(HistoryReadDataSchema),
-	async execute(params, projection) {
+	async execute(params, projection, wrapText = plainText) {
 		const item = allItems(projection).find((event) => event.seq === params.seq);
 		// Address checks run in one order: past the end of the file, off this branch, then
 		// consumed by a pairing. Only the last two can mention what is at the address.
@@ -223,7 +224,7 @@ export const historyRead: Operation<typeof historyReadParameters, HistoryReadDat
 				...nestedCallSummary(item),
 				...window,
 			}),
-			(result) => renderOutcome(result, renderRead),
+			(result) => wrapText(renderOutcome(result, renderRead)),
 		);
 	},
 	render: (result) => renderOutcome(result, renderRead),

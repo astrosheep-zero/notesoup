@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { brainEmptyTransformer } from "../client/brain-empty-transformer.ts";
 import { brainEmptySchema } from "../shared/brain-empty.ts";
+import { claudeEmptyCompleted, claudeEmptyFailed } from "./fixtures/claude-tool-calls.ts";
 
 function toolCall(overrides: Record<string, unknown>) {
   return {
@@ -45,7 +46,29 @@ test("a failed transport call without a payload still fails", () => {
   assert.deepEqual(brainEmptySchema.parse(result!.items[0]!.data), { status: "failed", error: "boom" });
 });
 
+test("Claude's plain acknowledgement completes the call without inventing a Pi rollover outcome", () => {
+  const result = transform(claudeEmptyCompleted);
+  assert.deepEqual(brainEmptySchema.parse(result!.items[0]!.data), { status: "completed" });
+});
+
+test("Claude empty_brain running and failed calls use the adapter's null output and raw error", () => {
+  const running = transform({ ...claudeEmptyCompleted, status: "running", detail: { ...claudeEmptyCompleted.detail, output: null } });
+  assert.deepEqual(brainEmptySchema.parse(running!.items[0]!.data), { status: "running" });
+  assert.deepEqual(brainEmptySchema.parse(transform(claudeEmptyFailed)!.items[0]!.data), {
+    status: "failed", error: "notesoup: only the main agent can empty this brain",
+  });
+  const blocks = transform({ ...claudeEmptyFailed, error: { ...claudeEmptyFailed.error, content: [{ type: "text", text: "notesoup: last_word must be a string" }] } });
+  assert.deepEqual(brainEmptySchema.parse(blocks!.items[0]!.data), { status: "failed", error: "notesoup: last_word must be a string" });
+});
+
+test("Pi failed calls still surface text-block errors when no JSON receipt exists", () => {
+  const result = transform({ status: "failed", detail: { type: "unknown", input: {}, output: { content: [{ type: "text", text: "io failed" }] } } });
+  assert.deepEqual(brainEmptySchema.parse(result!.items[0]!.data), { status: "failed", error: "io failed" });
+});
+
 test("other tools and non-tool items stay untouched", () => {
-  assert.equal(brainEmptyTransformer.transform({ item: toolCall({ name: "notes_read" }) as never }), undefined);
+  for (const name of ["notes_read", "mcp__other__empty_brain", "mcp__notesoup_extra__empty_brain", "mcp__notesoup__empty_brain_extra", "mcp__notesoup__mcp__notesoup__empty_brain"]) {
+    assert.equal(transform({ name }), undefined, name);
+  }
   assert.equal(brainEmptyTransformer.transform({ item: { type: "user_message", text: "hi" } as never }), undefined);
 });

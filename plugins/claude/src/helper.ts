@@ -3,14 +3,13 @@ import { pathToFileURL } from "node:url";
 import type { Static, TSchema } from "typebox";
 import { Check, Errors } from "typebox/value";
 import { notesList, notesRead, notesSearch, notesUpdate, notesWrite } from "../../../src/tools/notes.js";
-import { historyList, historyRead, historyWindows } from "../../../src/tools/history.js";
+import { historyList, historyRead, historyWindows, type HistoryTextWrapper } from "../../../src/tools/history.js";
 import { readClaudeHistory, type ClaudeHistorySource } from "./history.js";
-import type { HistoryProjection } from "../../../src/history/history.js";
 import { loadNotesSnapshot } from "../../../src/boot/snapshot.js";
 import { renderBootBlock } from "../../../src/boot/render.js";
 import type { BootToolNames } from "../../../src/boot/text.js";
 import { selectContinuation } from "../../../src/budget/text.js";
-import { CLAUDE_HISTORY_UNAVAILABLE_SENTENCE, CLAUDE_WARNING_PROMPT } from "./text.js";
+import { claudeHistoryGapNotice, claudeHistoryUnconfirmedSeq, CLAUDE_HISTORY_UNKNOWN_PREVIOUS, CLAUDE_HISTORY_UNKNOWN_WINDOW, CLAUDE_HISTORY_UNAVAILABLE_SENTENCE, CLAUDE_WARNING_PROMPT } from "./text.js";
 import { resolveClaudeLimits } from "./thresholds.js";
 import { projectKey, snapshotNotesIdentity, type NotesIdentity } from "../../../src/notes/index.js";
 import type { Operation } from "../../../src/tools/result.js";
@@ -41,7 +40,7 @@ function paramProblem(schema: TSchema, params: unknown): string {
 	return `${field ? `${field} ` : ""}${first.message}${extra}`;
 }
 
-/** Bind one shared operation to the identity Claude supplies. Validate untyped Claude parameters against the shared operation schema before execution. */
+/** Bind shared execution/rendering to a host context; dispatch validates parameters before calling. */
 function boundOperation<TParams extends TSchema, TData, TContext extends readonly unknown[]>(
 	operation: Operation<TParams, TData, TContext>,
 ): BoundOperation<TContext> {
@@ -49,8 +48,6 @@ function boundOperation<TParams extends TSchema, TData, TContext extends readonl
 		description: operation.description,
 		parameters: operation.parameters,
 		async call(params, ...context) {
-			// Refuse before the operation can act: a rejected shape never reaches a write.
-			if (!Check(operation.parameters, params)) throw new Error(`invalid ${operation.name} parameters: ${paramProblem(operation.parameters, params)}`);
 			// The same business outcome and the same renderer as the Pi tool; only the envelope differs.
 			const outcome = await operation.execute(params as Static<TParams>, ...context);
 			return { text: operation.render(outcome), ok: outcome.ok };
@@ -66,7 +63,7 @@ const OPERATIONS: Record<string, BoundOperation<[NotesIdentity]>> = {
 	notes_search: boundOperation(notesSearch),
 };
 
-const HISTORY_OPERATIONS: Record<string, BoundOperation<[HistoryProjection, string]>> = {
+const HISTORY_OPERATIONS = {
 	history_list: boundOperation(historyList),
 	history_read: boundOperation(historyRead),
 	history_windows: boundOperation(historyWindows),
@@ -95,17 +92,45 @@ export async function dispatch(request: unknown): Promise<unknown> {
 	if (value.op === "limits") return resolveClaudeLimits(value.facts);
 	if (value.op === "tool") {
 		if (typeof value.tool !== "string" || (!Object.hasOwn(OPERATIONS, value.tool) && !Object.hasOwn(HISTORY_OPERATIONS, value.tool))) throw new Error("unknown tool");
+		const operation = Object.hasOwn(OPERATIONS, value.tool) ? OPERATIONS[value.tool]! : HISTORY_OPERATIONS[value.tool as keyof typeof HISTORY_OPERATIONS];
+		// Refuse before any operation can act: a rejected shape never reaches a write.
+		if (!Check(operation.parameters, value.params)) throw new Error(`invalid ${value.tool} parameters: ${paramProblem(operation.parameters, value.params)}`);
 		const id = identity(value.identity as ClaudeIdentityInput);
 		if (Object.hasOwn(HISTORY_OPERATIONS, value.tool)) {
+			const tool = value.tool as keyof typeof HISTORY_OPERATIONS;
 			const projection = await readClaudeHistory(historySource(value.history, id.sessionId));
-			return HISTORY_OPERATIONS[value.tool]!.call(value.params, projection, id.sessionId);
+			const notice = claudeHistoryGapNotice(projection.missingAncestors);
+			const wrapText: HistoryTextWrapper = (text) => notice + text;
+			let params = value.params;
+			if (projection.missingAncestors.length > 0) {
+				// An unknown segment is not evidence for the window before the current
+				// one. Resolve the exact ordinal, never array adjacency across a gap.
+				if ((params as { window_id?: string }).window_id === "@previous") {
+					const previous = projection.currentWindowOrdinal === undefined ? undefined : `claude:${id.sessionId}:${projection.currentWindowOrdinal - 1}`;
+					if (!projection.windows.some((window) => window.windowId === previous)) {
+						return { ok: false, text: wrapText(CLAUDE_HISTORY_UNKNOWN_PREVIOUS) };
+					}
+					params = { ...params as object, window_id: previous };
+				}
+				if (value.tool === "history_read") {
+					const { seq } = params as { seq: number };
+					if (seq <= projection.highestSeq && !projection.branchSeqs.has(seq)) {
+						return { ok: false, text: wrapText(claudeHistoryUnconfirmedSeq(seq)) };
+					}
+				}
+			}
+			const result = tool === "history_windows"
+				? await HISTORY_OPERATIONS[tool].call(params, projection, id.sessionId, wrapText)
+				: await HISTORY_OPERATIONS[tool].call(params, projection, wrapText);
+			return { ...result, text: wrapText(result.text) };
 		}
 		return OPERATIONS[value.tool]!.call(value.params, id);
 	}
 	if (value.op === "history_state") {
 		const id = identity(value.identity as ClaudeIdentityInput);
 		const projection = await readClaudeHistory(historySource(value.history, id.sessionId));
-		return { window: projection.windows.length - 1 };
+		if (projection.currentWindowOrdinal === undefined) throw new Error(CLAUDE_HISTORY_UNKNOWN_WINDOW);
+		return { window: projection.currentWindowOrdinal };
 	}
 	if (value.op === "boot") {
 		const id = identity(value.identity as ClaudeIdentityInput);

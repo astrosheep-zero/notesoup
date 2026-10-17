@@ -4,9 +4,12 @@ import { isDeepStrictEqual } from "node:util";
 import { contentText, projectHistory, type DecodedHistoryItem, type DecodedHistoryWindow, type HistoryProjection } from "../../../src/history/history.js";
 
 type Row = Record<string, unknown>;
-type Version = { row: Row; ancestorUuid?: string; ancestor?: Version; ordinal?: number };
+type WindowPosition = { ordinal: number } | { unknownAncestor: string };
+type Version = { row: Row; ancestorUuid?: string; ancestor?: Version; position?: WindowPosition };
 type Node = { first: Version; latest: Version; items: DecodedHistoryItem[] };
 export type ClaudeHistorySource = { sessionId: string; transcriptPath: string; headUuid?: string };
+/** Claude graph evidence stays in the adapter; shared queries only see addressed windows. */
+export type ClaudeHistoryProjection = HistoryProjection & { missingAncestors: string[]; currentWindowOrdinal: number | undefined };
 const MESSAGE_TYPES = new Set(["user", "assistant", "system", "attachment"]);
 const NON_TEXT_BLOCKS = new Set(["thinking", "redacted_thinking", "image", "document", "audio", "video", "server_tool_use", "web_search_tool_result", "tool_reference"]);
 function object(value: unknown): value is Row { return typeof value === "object" && value !== null && !Array.isArray(value); }
@@ -112,12 +115,12 @@ function bootOrdinal(row: Row, retained: boolean): number | undefined {
 }
 
 /** All addresses are allocated on the full first-occurrence log, before branch selection. */
-export function claudeHistoryFromJsonl(text: string, source: Omit<ClaudeHistorySource, "transcriptPath">): HistoryProjection {
+export function claudeHistoryFromJsonl(text: string, source: Omit<ClaudeHistorySource, "transcriptPath">): ClaudeHistoryProjection {
 	const nodes = new Map<string, Node>();
 	let nextSeq = 1;
 	for (const row of rowsOf(text)) {
-		// Ignore non-message records, including future metadata. A skipped UUID that
-		// the selected branch actually requires still fails ancestry resolution below.
+		// Ignore non-message records, including future metadata. If selected ancestry
+		// reaches a skipped UUID, it becomes a gap, never permission to expose its payload.
 		if (!MESSAGE_TYPES.has(row.type as string)) continue;
 		const uuid = requiredString(row.uuid, "uuid");
 		parent(row);
@@ -141,29 +144,37 @@ export function claudeHistoryFromJsonl(text: string, source: Omit<ClaudeHistoryS
 		nextSeq += items.length;
 		nodes.set(uuid, { first: version, latest: version, items });
 	}
-	function ordinalOf(version: Version): number {
-		// Persisted history is not limited to the host's newest 4096 inference rows.
-		// Resolve long parent chains iteratively, not with the JavaScript call stack.
+	const missingAncestors = new Set<string>();
+	function positionOf(version: Version): WindowPosition {
+		// Resolve long chains iteratively. A gap destroys ordinal evidence, not the
+		// confirmed suffix. Only a retained boot can re-anchor that suffix's ordinal.
 		const chain: Version[] = [], calculating = new Set<Version>();
 		let cursor = version;
-		while (cursor.ordinal === undefined) {
-			// A notice can precede its parent on disk; use that parent's first eventual version.
+		let before: WindowPosition = { ordinal: 0 };
+		while (cursor.position === undefined) {
+			// Forward references use the parent's first eventual version, not a rewrite.
 			cursor.ancestor ??= cursor.ancestorUuid === undefined ? undefined : nodes.get(cursor.ancestorUuid)?.first;
 			if (calculating.has(cursor)) throw new Error("cyclic Claude transcript ancestry");
-			if (cursor.ancestorUuid !== undefined && cursor.ancestor === undefined) throw new Error(`missing Claude transcript ancestor: ${cursor.ancestorUuid}`);
 			calculating.add(cursor);
 			chain.push(cursor);
+			if (cursor.ancestorUuid !== undefined && cursor.ancestor === undefined) {
+				missingAncestors.add(cursor.ancestorUuid);
+				before = { unknownAncestor: cursor.ancestorUuid };
+				break;
+			}
 			if (cursor.ancestor === undefined) break;
 			cursor = cursor.ancestor;
 		}
-		let before = cursor.ordinal ?? 0;
+		before = cursor.position ?? before;
 		for (const current of chain.reverse()) {
 			const retained = current.row.isCompactSummary === true || (current.ancestor !== undefined && boundary(current.ancestor.row));
 			const marked = bootOrdinal(current.row, retained);
-			current.ordinal = marked === undefined ? before + (boundary(current.row) ? 1 : 0) : Math.max(before, marked);
-			before = current.ordinal;
+			current.position = marked !== undefined
+				? { ordinal: "ordinal" in before ? Math.max(before.ordinal, marked) : marked }
+				: "ordinal" in before ? { ordinal: before.ordinal + (boundary(current.row) ? 1 : 0) } : before;
+			before = current.position;
 		}
-		return version.ordinal!;
+		return version.position!;
 	}
 	if (!source.headUuid) throw new Error("Claude history has no confirmed active head yet; wait for a main-session append after startup/resume");
 	if (!nodes.has(source.headUuid)) throw new Error("Claude history active head is not persisted yet; retry after the transcript write");
@@ -182,7 +193,7 @@ export function claudeHistoryFromJsonl(text: string, source: Omit<ClaudeHistoryS
 		visiting.add(key);
 		stack.push({ ...step, exit: true });
 		const node = nodes.get(uuid);
-		if (!node) throw new Error(`missing Claude transcript ancestor: ${uuid}`);
+		if (!node) { missingAncestors.add(uuid); continue; }
 		selected.add(uuid);
 		const row = (historical ? node.first : node.latest).row;
 		const ancestor = parent(row);
@@ -207,20 +218,41 @@ export function claudeHistoryFromJsonl(text: string, source: Omit<ClaudeHistoryS
 		}
 	}
 
-	let maxOrdinal = ordinalOf(nodes.get(source.headUuid)!.latest);
-	for (const uuid of selected) maxOrdinal = Math.max(maxOrdinal, ordinalOf(nodes.get(uuid)!.first));
-	const windows: DecodedHistoryWindow[] = Array.from({ length: maxOrdinal + 1 }, (_, index) => ({ windowId: `claude:${source.sessionId}:${index}`, items: [] }));
+	const current = positionOf(nodes.get(source.headUuid)!.latest);
+	const windowId = (position: WindowPosition) => `claude:${source.sessionId}:${"ordinal" in position ? position.ordinal : `unknown:${position.unknownAncestor}`}`;
+	const windowsById = new Map<string, DecodedHistoryWindow & { ordinal?: number }>();
 	const branchSeqs = new Set<number>();
+	let maxOrdinal = "ordinal" in current ? current.ordinal : 0;
 	for (const [uuid, node] of nodes) {
 		if (!selected.has(uuid)) continue;
-		const window = windows[ordinalOf(node.first)]!;
+		const position = positionOf(node.first);
+		if ("ordinal" in position) maxOrdinal = Math.max(maxOrdinal, position.ordinal);
+		const id = windowId(position);
+		let window = windowsById.get(id);
+		if (!window) {
+			window = { windowId: id, ...("ordinal" in position ? { ordinal: position.ordinal } : {}), items: [] };
+			windowsById.set(id, window);
+		}
 		window.createdAt ??= node.items[0]?.createdAt;
-		for (const item of node.items) { branchSeqs.add(item.seq); window.items.push({ ...item, windowId: window.windowId }); }
+		for (const item of node.items) { branchSeqs.add(item.seq); window.items.push({ ...item, windowId: id }); }
 	}
-	return projectHistory(windows, nextSeq - 1, branchSeqs);
+	// Preserve complete-history empty windows (including copied boot ordinals).
+	// With gaps, report only evidenced windows, never invent the missing ordinals.
+	if (missingAncestors.size === 0) {
+		for (let ordinal = 0; ordinal <= maxOrdinal; ordinal++) {
+			const id = windowId({ ordinal });
+			if (!windowsById.has(id)) windowsById.set(id, { windowId: id, ordinal, items: [] });
+		}
+	}
+	// Forward references can put a newer numbered window on disk first. Unknown
+	// segments are a separate, unordered group, not an inferred place in that timeline.
+	const windows = [...windowsById.values()].sort((a, b) => a.ordinal === undefined
+		? b.ordinal === undefined ? 0 : 1
+		: b.ordinal === undefined ? -1 : a.ordinal - b.ordinal);
+	return { ...projectHistory(windows, nextSeq - 1, branchSeqs), missingAncestors: [...missingAncestors], currentWindowOrdinal: "ordinal" in current ? current.ordinal : undefined };
 }
 
-export async function readClaudeHistory(source: ClaudeHistorySource): Promise<HistoryProjection> {
+export async function readClaudeHistory(source: ClaudeHistorySource): Promise<ClaudeHistoryProjection> {
 	if (!source || typeof source.transcriptPath !== "string" || !source.transcriptPath || typeof source.sessionId !== "string") throw new Error("Claude history transcript_path is unavailable");
 	return claudeHistoryFromJsonl(await readFile(source.transcriptPath, "utf8"), source);
 }

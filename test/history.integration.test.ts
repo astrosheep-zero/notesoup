@@ -122,6 +122,21 @@ test("every history operation declares a result schema its own payload satisfies
 	assert.equal(Check(historyRead.outputSchema, refusal.structuredContent), true, "a refusal satisfies the same result schema");
 });
 
+test("pairing uses append seq rather than the presentation order of unnumbered segments", async () => {
+	const projection = projectHistory([
+		{ windowId: "unknown-a", items: [
+			{ seq: 1, windowId: "unknown-a", role: "system", text: "notice" },
+			{ seq: 3, windowId: "unknown-a", role: "tool", toolCallId: "t", text: "output" },
+		] },
+		{ windowId: "unknown-b", items: [{ seq: 2, windowId: "unknown-b", role: "tool_call", toolCallId: "t", toolName: "bash", text: "" }] },
+	], 3, new Set([1, 2, 3]));
+	assert.deepEqual(projection.windows.map((window) => window.windowId), ["unknown-a", "unknown-b"], "pairing must not invent segment chronology");
+	assert.deepEqual(projection.windows.flatMap((window) => window.items).filter((event) => event.role === "tool").map((event) => [event.seq, event.text]), [[2, "output"]]);
+	const alias = await historyRead.execute({ seq: 3 }, projection);
+	assert.ok(!alias.ok);
+	assert.equal(alias.error.code, "not_an_event");
+});
+
 test("seq is stable across branch changes, abandoned entries stay unreadable, and a paired result seq is refused precisely", async () => {
 	const session = manager();
 	const captured = makeExtension(session);
@@ -719,7 +734,7 @@ test("history_read paginates one document with an accurate limit and a bounded b
 	assert.match(past.message, new RegExp(`\\b${content.length}\\b`), "the refusal names the real length");
 });
 
-test("history windows expose stable ranges and session identity", async () => {
+test("history windows expose stable ranges and include host decoration in the complete budget", async () => {
 	const session = manager();
 	const captured = makeExtension(session);
 	const ctx = context(session);
@@ -728,6 +743,18 @@ test("history windows expose stable ranges and session identity", async () => {
 	assert.equal(windows.session_id, session.getSessionId());
 	assert.equal(windows.windows.length, 1);
 	assert.deepEqual(windows.windows[0], { window_id: windows.windows[0]!.window_id, created_at: null, first_seq: 1, last_seq: 1 });
+
+	const projection = projectHistory([0, 1, 2].map((index) => ({ windowId: `w${index}-${"x".repeat(200)}`, items: [] })), 0, new Set());
+	const notice = `${"n".repeat(TOOL_OUTPUT_MAX_BYTES - 400)}\n`;
+	const wrapText = (text: string) => notice + text;
+	const bounded = await historyWindows.execute({}, projection, "session-x", wrapText);
+	assert.ok(bounded.ok);
+	assert.equal(bounded.data.windows.length, 1);
+	assert.equal(bounded.data.more, 2);
+	const text = wrapText(historyWindows.render(bounded));
+	assert.ok(Buffer.byteLength(text, "utf8") <= TOOL_OUTPUT_MAX_BYTES);
+	assert.ok(text.startsWith(notice), "decoration is measured, never clipped at delivery");
+	assert.match(text, /2 more windows not shown/);
 });
 
 test("historyDocument is one deterministic projection of the facts, with no UI header or continuation suffix", async () => {
