@@ -5,7 +5,7 @@ import { mergeNotesoupSettings } from "../../src/settings.js";
 import { errorMessage } from "../../src/error-message.js";
 
 /**
- * Read the active compaction reserve, enablement, and notesoup margin settings. This
+ * Read the active compaction reserve, enablement, and notesoup budget settings. This
  * function deliberately has no cache: the budget owner supplies the invocation-scoped
  * cache so two live notesoup instances cannot share mutable policy state.
  */

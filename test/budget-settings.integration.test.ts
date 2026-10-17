@@ -3,7 +3,9 @@ import { join } from "node:path";
 import test from "node:test";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_REMINDER_MARGIN_TOKENS, DEFAULT_RESERVE_TOKENS } from "../src/budget/constants.js";
-import { GUIDANCE_TYPE, WARNING_TYPE } from "../plugins/pi/entries.js";
+import { GUIDANCE_TYPE, RESET_MARKER_TYPE, WARNING_TYPE } from "../plugins/pi/entries.js";
+import { deriveThresholds } from "../src/budget/policy.js";
+import { readThresholdSettings } from "../plugins/pi/thresholds.js";
 import { NOTESOUP_SETTINGS_KEY } from "../src/settings.js";
 import {
 	appendText,
@@ -24,6 +26,77 @@ import {
 import { installExtensionTestHooks } from "./helpers/extension-test-environment.js";
 
 const testEnvironment = installExtensionTestHooks("notesoup-integration");
+
+test("budget derivation preserves defaults and validates overrides independently", () => {
+	assert.deepEqual(deriveThresholds(32_768, {}), {
+		thresholds: { reserve: 32_768, reminder: 57_344, warning: 49_152 }, warnings: [],
+	});
+	assert.deepEqual(deriveThresholds(32_768, { reserveTokens: 8192, warningRunwayTokens: "16384" }), {
+		thresholds: { reserve: 8192, reminder: 32_768, warning: 24_576 }, warnings: [],
+	});
+	const invalid = deriveThresholds(32_768, { reserveTokens: 0, warningRunwayTokens: 1.5, reminderMarginTokens: -1 });
+	assert.deepEqual(invalid.thresholds, deriveThresholds(32_768, {}).thresholds);
+	assert.equal(invalid.warnings.length, 3);
+	for (const key of ["reserveTokens", "warningRunwayTokens", "reminderMarginTokens"]) {
+		assert.equal(invalid.warnings.filter((warning) => warning.includes(`notesoup.${key} must be a positive integer · using the default`)).length, 1);
+	}
+	assert.deepEqual(deriveThresholds(32_768, { reserveTokens: 8192, warningRunwayTokens: null }).thresholds,
+		{ reserve: 8192, reminder: 32_768, warning: 24_576 }, "an invalid runway does not discard a valid reserve");
+});
+
+test("Pi budget settings merge per key without changing native compaction settings or enablement", async () => {
+	const fixture = settingsFixture({
+		reserveTokens: 32_768,
+		global: { notesoup: { reserveTokens: 12_000, warningRunwayTokens: 20_000 } },
+		project: { notesoup: { reserveTokens: 8192 } },
+	});
+	const sm = manager();
+	const ctx = context(sm, undefined, undefined, true, fixture.cwd);
+	const sdk = SettingsManager.create(fixture.cwd, fixture.agentDir, { projectTrusted: true });
+	const native = sdk.getCompactionSettings();
+	assert.deepEqual(readThresholdSettings(ctx, sdk), {
+		thresholds: { reserve: 8192, reminder: 32_768, warning: 28_192 }, automatic: true, warnings: [],
+	});
+	assert.deepEqual(sdk.getCompactionSettings(), native, "notesoup reserve does not mutate Pi's reserve or other compaction settings");
+	writeJson(join(fixture.cwd, ".pi", "settings.json"), { notesoup: { warningRunwayTokens: 4096, reserveTokens: 0 } });
+	const reloaded = SettingsManager.create(fixture.cwd, fixture.agentDir, { projectTrusted: true });
+	const invalid = readThresholdSettings(ctx, reloaded);
+	assert.deepEqual(invalid.thresholds, { reserve: 32_768, reminder: 57_344, warning: 36_864 }, "invalid project reserve falls back to native, not the global notesoup reserve; project runway wins");
+	assert.equal(invalid.warnings.length, 1);
+	assert.match(invalid.warnings[0]!, /notesoup.reserveTokens/);
+
+	const disabledSettings = { compaction: { enabled: false, reserveTokens: 32_768 }, notesoup: { reserveTokens: 8192, warningRunwayTokens: 16_384 } };
+	const disabled = SettingsManager.inMemory(disabledSettings);
+	const captured = makeExtension(sm, disabled);
+	const full = context(sm, undefined, { tokens: 199_999, percent: 99.9, contextWindow: 200_000 });
+	assert.equal(readThresholdSettings(full, disabled).automatic, false);
+	assert.equal(await runContextHook(captured, full), undefined, "new knobs do not enable warning injection when native compaction is off");
+	const boundary = await commitTurnEndBoundary(captured, sm, full);
+	assert.equal(boundary.entries.some((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE), false, "new knobs do not enable a hard wipe when native compaction is off");
+	assert.equal(disabled.getCompactionSettings().enabled, false);
+});
+
+test("Pi warning, reported room, and hard wipe use the notesoup reserve override", async () => {
+	const fixture = settingsFixture({ reserveTokens: 32_768, global: { notesoup: { reserveTokens: 8192, warningRunwayTokens: 16_384 } } });
+	const sm = manager();
+	appendText(sm, "user", "ongoing work");
+	const captured = makeExtension(sm);
+	await runHandlers(captured, "session_tree", {}, context(sm, undefined, undefined, true, fixture.cwd));
+	const at = (remaining: number) => context(sm, undefined, { tokens: 200_000 - remaining, percent: 0, contextWindow: 200_000 }, true, fixture.cwd);
+	const early = await runContextHook(captured, at(24_577));
+	assert.equal((early?.messages[0] as { customType?: string })?.customType, GUIDANCE_TYPE, "no warning above reserve + runway");
+	assert.match(String((early?.messages[0] as { content?: string })?.content), /About 16385 tokens of room left\./, "guidance subtracts the overridden reserve");
+	const warning = await runContextHook(captured, at(24_576));
+	assert.equal((warning?.messages[0] as { customType?: string })?.customType, WARNING_TYPE, "warn at 8192 + 16384, not native reserve + runway");
+	const room = async (remaining: number) => resultJson<{ remaining_tokens: number }>(await call(captured, "get_context_remaining", {}, at(remaining))).remaining_tokens;
+	assert.equal(await room(24_576), 16_384);
+	assert.equal(await room(8193), 1);
+	const before = await commitTurnEndBoundary(captured, sm, at(8193));
+	assert.equal(before.entries.some((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE), false, "no wipe above the overridden reserve, even below Pi's reserve");
+	assert.equal(await room(8192), 0);
+	const hard = await commitTurnEndBoundary(captured, sm, at(8192));
+	assert.equal(hard.entries.filter((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE).length, 1, "hard wipe at the overridden reserve");
+});
 
 test("low-budget guidance and warning persist at turn_end, once per active window", async () => {
 	const sessionManager = manager();

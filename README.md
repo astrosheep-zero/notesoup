@@ -53,14 +53,28 @@ pi -e npm:notesoup
 
 ## Configuration
 
-The reminder threshold is Pi's compaction reserve plus a margin, configured under the top-level `notesoup` key in `~/.pi/agent/settings.json` or `<cwd>/.pi/settings.json` (project values win per key):
+Pi budget settings live under the top-level `notesoup` key in `~/.pi/agent/settings.json` or `<cwd>/.pi/settings.json`. Trusted project values win **per key**: a project override of `reserveTokens` still inherits a global `warningRunwayTokens`. Each value must be a positive safe integer (numeric strings are also accepted). An absent value uses its fallback; an invalid value emits a warning and uses that same fallback, not a lower-precedence global value.
+
+| Setting | Meaning | Fallback |
+| --- | --- | --- |
+| `notesoup.reserveTokens` | Remaining tokens at the hard-reserve wipe. Also subtracted by `get_context_remaining`. | The active Pi compaction reserve, including provider/model overrides. |
+| `notesoup.warningRunwayTokens` | Room between the final warning and the hard-reserve wipe. Warning fires at remaining tokens ≤ reserve + runway. | Shared default: `16384`. |
+| `notesoup.reminderMarginTokens` | Early reminder margin above the resolved notesoup reserve. | `24576`. |
+
+For example, explicitly configure an `8192` hard reserve and a `16384` warning runway:
 
 ```json
 {
-  "compaction": { "reserveTokens": 16384 },
-  "notesoup": { "reminderMarginTokens": 24576 }
+  "notesoup": {
+    "reserveTokens": 8192,
+    "warningRunwayTokens": 16384
+  }
 }
 ```
+
+This warns at **24576 remaining tokens** and hard-wipes at **8192**; `get_context_remaining` reports `16384` at the warning line. These are example settings, not changed defaults. Without overrides, the reserve still inherits Pi's active compaction reserve, and the warning runway remains `16384`. The early reminder uses reserve + reminder margin; if usage crosses both reminder and warning, the final warning takes precedence.
+
+These settings only change notesoup's budget thresholds. They do not modify Pi's native `compaction` settings or enable automatic resets when Pi's compaction is disabled (or notesoup is off). Other hosts retain their existing host-specific settings.
 
 Environment variables:
 
