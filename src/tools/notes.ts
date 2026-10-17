@@ -42,6 +42,7 @@ export const NoteMetadataSchema = Type.Object({
 	origin: Type.Union([...ORIGIN_VALUES]),
 	created_at: Type.String(),
 	updated_at: Type.String(),
+	last_accessed: Type.String(),
 	crumpled_at: Type.Optional(Type.String()),
 	project: Type.Optional(Type.String()),
 	extra: Type.Record(Type.String(), Type.Unknown()),
@@ -73,6 +74,7 @@ function noteMetadata(meta: NoteMeta): NoteMetadata {
 		origin: meta.origin,
 		created_at: localIso(meta.createdAt),
 		updated_at: localIso(meta.updatedAt),
+		last_accessed: localIso(meta.lastAccessed),
 		...(typeof meta.crumpledAt === "string" ? { crumpled_at: meta.crumpledAt } : {}),
 		...(typeof meta.project === "string" ? { project: meta.project } : {}),
 		extra,
@@ -84,6 +86,7 @@ function renderMetadata(metadata: NoteMetadata): string {
 		`origin ${metadata.origin}`,
 		`created ${metadata.created_at}`,
 		`updated ${metadata.updated_at}`,
+		`accessed ${metadata.last_accessed}`,
 		...(metadata.crumpled_at === undefined ? [] : [`crumpled ${metadata.crumpled_at}`]),
 		...(metadata.project === undefined ? [] : [`project ${metadata.project}`]),
 	];
@@ -110,6 +113,7 @@ const ListedFileSchema = Type.Object({
 	project_key: Type.Optional(Type.String()),
 	...ProjectReceiptSchema,
 	updated_at: Type.String(),
+	last_accessed: Type.String(),
 	crumpled_at: Type.Optional(Type.String()),
 }, { additionalProperties: false });
 
@@ -197,7 +201,7 @@ export function snapshot<T extends { address: string }>(
 }
 
 export function listedFile(row: Pick<NoteRow, "address" | "meta">, identity: NotesIdentity): NotesListData["files"][number] {
-	return { ...noteIdentity(identity, row.address), updated_at: localIso(row.meta.updatedAt), ...(row.meta.crumpledAt === undefined ? {} : { crumpled_at: row.meta.crumpledAt }) };
+	return { ...noteIdentity(identity, row.address), updated_at: localIso(row.meta.updatedAt), last_accessed: localIso(row.meta.lastAccessed), ...(row.meta.crumpledAt === undefined ? {} : { crumpled_at: row.meta.crumpledAt }) };
 }
 
 export const notesWriteParameters = Type.Object({ address: Type.String(), content: Type.String(), origin: ORIGIN }, { additionalProperties: false });
@@ -291,7 +295,8 @@ export const notesRead = {
 			if (!note) return failure("not_found", `No note at ${resolved.address}.`);
 			const totalChars = Array.from(note.body).length;
 			if (params.offset_chars !== undefined && params.offset_chars > totalChars) return failure("invalid_offset", `This note ends at char ${totalChars}; offset_chars ${params.offset_chars} is past the last word.`);
-			const metadata = noteMetadata(note.meta);
+			// Report the access before this one: the read itself must not make a long-unread note look fresh.
+			const metadata = noteMetadata({ ...note.meta, lastAccessed: note.accessedBefore });
 			return readTextWindow(note.body, params.offset_chars, params.max_chars, (window) => ({ ...resolved, metadata, ...window }), (result) => renderOutcome(result, renderReadData));
 		} catch (error) { return failureOf(error); }
 	},
@@ -303,7 +308,7 @@ export const notesListParameters = Type.Object({ glob: GLOB_PARAMETER, limit: FI
 export function renderListData(data: NotesListData): string {
 	const lines = [`${data.files.length} ${data.files.length === 1 ? "note" : "notes"}`];
 	for (const file of data.files) {
-		lines.push(`- ${renderIdentity(file)} | updated ${file.updated_at}${file.crumpled_at === undefined ? "" : ` | crumpled ${file.crumpled_at}`}`);
+		lines.push(`- ${renderIdentity(file)} | updated ${file.updated_at} | accessed ${file.last_accessed}${file.crumpled_at === undefined ? "" : ` | crumpled ${file.crumpled_at}`}`);
 	}
 	if (data.more > 0) lines.push(`${data.more} more matching notes omitted; narrow with glob`);
 	for (const home of data.homes_unavailable) lines.push(`${home} could not be read`);

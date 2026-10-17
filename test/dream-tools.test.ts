@@ -41,6 +41,8 @@ test("a dream opens one other project, writes its notes, deletes only crumpled o
 	const begun = await dreamBegin.execute({ project: "beta" }, me, state);
 	assert.ok(begun.ok);
 	assert.deepEqual(begun.data.files.map(f => f.address).sort(), ["@projects/beta/rule.md", "@sessions/b1/checkpoint.md", "@sessions/b2/trash.md"]);
+	assert.ok(begun.data.files.every(f => typeof f.last_accessed === "string"), "the dream's list shows each note's last access");
+	assert.match(dreamBegin.render(begun), /\| accessed /);
 	assert.equal((await dreamBegin.execute({}, me, state)).ok, false, "only one dream at a time");
 	assert.ok(existsSync(join(home, ".dream.lock.beta")), "the project lock is held");
 	assert.equal((await dreamBegin.execute({ project: "beta" }, as("other", "alpha"), {})).ok, false, "another session can't dream the same project");
@@ -67,6 +69,20 @@ test("a dream opens one other project, writes its notes, deletes only crumpled o
 	assert.equal(execFileSync("git", ["status", "--porcelain"], { cwd: home, encoding: "utf8" }), "", "the audit leaves a clean tree");
 	assert.equal((await notesWrite.execute({ address: "@projects/beta/rule", content: "x" }, ident())).ok, false, "closed again");
 	assert.equal((await dreamEnd.execute({}, me, state)).ok, false);
+});
+
+test("notes_read reports the access before itself, so reading never makes an unread note look fresh", async (t) => {
+	const { home, as } = fixture(t);
+	const me = as("s", "alpha");
+	const old = "2026-01-01T08:00:00.000+08:00";
+	mkdirSync(join(home, "human"), { recursive: true });
+	writeFileSync(join(home, "human", "stale.md"), `---\norigin: self\ncreatedAt: ${old}\nupdatedAt: ${old}\nlastAccessed: ${old}\naccessCount: 0\n---\n\nbody`);
+	const first = await notesRead.execute({ address: "@human/stale" }, me);
+	assert.ok(first.ok);
+	assert.equal(Date.parse(first.data.metadata.last_accessed), Date.parse(old), "the first read shows the old access");
+	const second = await notesRead.execute({ address: "@human/stale" }, me);
+	assert.ok(second.ok);
+	assert.ok(Date.parse(second.data.metadata.last_accessed) > Date.parse(old), "the first read still counted as an access");
 });
 
 test("dream_begin refuses an unknown project", async (t) => {

@@ -42,6 +42,10 @@ test("dream skill is publicly discoverable and resolves the shared playbook", ()
 	const playbook = readFileSync(packagePlaybook, "utf8");
 	assert.equal(readFileSync(skillPlaybook, "utf8"), playbook);
 
+	const instructions = readFileSync(join(skill.baseDir, "SKILL.md"), "utf8");
+	for (const name of ["dream_begin", "dream_forget", "dream_end"]) assert.ok(instructions.includes(name));
+	assert.match(instructions, /missing from the current tool list, search for them/);
+	assert.doesNotMatch(instructions, /tool_search|searchTools|codemode/);
 });
 
 test("npm tarball keeps the skill's relative playbook path portable after extraction", () => {

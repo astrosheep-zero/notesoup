@@ -453,7 +453,7 @@ test("list and search merge scopes and carry addresses; the path jail rejects es
 	const listed = resultData<NotesListData>(await call(captured, "notes_list", {}, ctx));
 	assert.deepEqual([...listed.files].map((file) => file.address).sort(), ["@human/three.md", "@project/two.md", "one.md"], "every merged row carries its full address");
 	for (const row of listed.files) {
-		assert.deepEqual(Object.keys(row).sort(), ["address", "updated_at", ...(row.address.startsWith("@project/") ? ["project_key"] : [])].sort());
+		assert.deepEqual(Object.keys(row).sort(), ["address", "updated_at", "last_accessed", ...(row.address.startsWith("@project/") ? ["project_key"] : [])].sort());
 	}
 	const scoped = resultData<NotesListData>(await call(captured, "notes_list", { glob: "@human/**" }, ctx));
 	assert.deepEqual(scoped.files.map((file) => file.address), ["@human/three.md"], "an address glob filter narrows the set");

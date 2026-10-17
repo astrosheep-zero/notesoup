@@ -62,13 +62,13 @@ test("notes_update unchanged keeps quiet", () => {
 });
 
 test("notes_read collapsed: size and a peek at the first line", () => {
-	const result = toolResult(success({ address: "@project/MAP.md", metadata: { origin: "self", created_at: "x", updated_at: "y", extra: {} }, text: "# MAP\n\nbody", total_chars: 11, next_offset_chars: null }));
+	const result = toolResult(success({ address: "@project/MAP.md", metadata: { origin: "self", created_at: "x", updated_at: "y", last_accessed: "z", extra: {} }, text: "# MAP\n\nbody", total_chars: 11, next_offset_chars: null }));
 	const component = notesReadRenderers.renderResult(result, { expanded: false }, flatTheme);
 	assert.equal(lines(component), "read @project/MAP.md · 11 chars — # MAP");
 });
 
 test("notes_read expanded: truncation points at the next offset", () => {
-	const result = toolResult(success({ address: "a.md", metadata: { origin: "self", created_at: "x", updated_at: "y", extra: {} }, text: "part", total_chars: 10, next_offset_chars: 4 }));
+	const result = toolResult(success({ address: "a.md", metadata: { origin: "self", created_at: "x", updated_at: "y", last_accessed: "z", extra: {} }, text: "part", total_chars: 10, next_offset_chars: 4 }));
 	const component = notesReadRenderers.renderResult(result, { expanded: true }, flatTheme);
 	assert.equal(lines(component), "read a.md · 10 chars · truncated — part\n\npart\n… continue at offset_chars=4");
 });
