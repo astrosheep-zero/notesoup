@@ -45,6 +45,14 @@ The library returns full data, not tool envelopes or paginated/truncated output.
 
 Addresses are a relative path (a current-session note), `@project/`, `@human/`, `@self/`, `@model/`, or explicit `@projects/<slug>/`, `@sessions/<id>/`, `@agents/<slug>/` and `@models/<slug>/`. Named project and session addresses are read-only, including for rename sources and destinations. Session IDs use the same safe single-directory-component grammar as `NotesIdentity.sessionId`, not the agent/model slug grammar. Only the first character of an address is sigil-position: an unknown leading `@head` refuses, while `@` inside the path (`release@v1.md`, `@project/mail/alice@example.com.md`) is an ordinary character. Relative self/model addresses resolve to the supplied identity. Results show the current agent's and model's notes as `@self/` and `@model/`; only other agents' or models' notes carry an explicit `@agents/<slug>/` or `@models/<slug>/`. Globs accept either form. The disk layout remains `pi/session/<sessionId>/`, `project/<projectKey>/`, `human/`, `agents/<agent>/`, and `models/<model>/`. No data migration happens on library import or construction. Notes already using camelCase metadata retain their metadata; old snake_case keys are preserved as unrecognized extras, not interpreted or migrated. New session notes record the supplied project key.
 
+### Root MAP aliases and legacy files
+
+Each home's root memory index has the canonical address `MAP.md`. Root aliases such as `map`, `MAP`, `map.md` and `Map.MD` resolve to it for reads, writes, updates and both ends of a rename. Receipts, list/search rows and boot snapshots use `MAP.md`. New indexes are written with that spelling. Ordinary filenames and nested paths such as `features/map.md` keep their existing case-sensitive address semantics; glob patterns remain literal and case-sensitive, so use `MAP.md` in an exact glob.
+
+A lone legacy root spelling (for example `map.md`) is used in place, not automatically renamed: boot loads its body without modifying the file or access metadata, and explicit note operations address that same file. Named-home read-only rules still apply.
+
+If multiple root spellings coexist, operations on that MAP and queries that include it (including boot loading) refuse with `map_conflict` rather than choosing a potentially stale index. This also applies to identical copies or crumpled notes. Neither file is merged, overwritten, renamed or deleted by the refusal. Back up and compare the files in the filesystem directory named by the error, then explicitly reconcile them into one `MAP.md`; move any retained copies to non-MAP names or outside that home's root. Boot can resume after the conflict is resolved. There is no automatic migration or cross-process filesystem lock.
+
 ## Library and plugin boundary
 
 Ownership is explicit in the file tree:

@@ -98,6 +98,24 @@ async function readFileIfExists(path: string): Promise<string | undefined> {
 	}
 }
 
+/** Resolve a root MAP under its canonical queue, without migrating legacy files.
+ * Even identical duplicates require explicit resolution: metadata or later edits may diverge.
+ */
+async function resolveMapPath(path: string): Promise<string> {
+	let entries: string[];
+	try {
+		entries = await readdir(dirname(path));
+	} catch (error) {
+		if (errno(error) === "ENOENT") return path;
+		throw error;
+	}
+	const maps = entries.filter(name => /^map\.md$/i.test(name)).sort();
+	if (maps.length > 1) {
+		throw new NoteError("map_conflict", `Conflicting root MAP files in ${JSON.stringify(dirname(path))}: ${maps.join(", ")}. Nothing was changed. Back up and compare these files on disk, then explicitly reconcile them into one MAP.md; move other copies outside the root MAP aliases. Notes tools cannot choose a version for you.`);
+	}
+	return maps.length === 1 ? join(dirname(path), maps[0]!) : path;
+}
+
 /** Recursively list `.md` files under `dir` as forward-slash virtual paths relative to `base`. */
 async function walkMarkdown(dir: string, base = dir): Promise<string[]> {
 	let entries: Dirent[];
@@ -113,7 +131,7 @@ async function walkMarkdown(dir: string, base = dir): Promise<string[]> {
 	for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
 		const child = join(dir, entry.name);
 		if (entry.isDirectory()) paths.push(...await walkMarkdown(child, base));
-		else if (entry.isFile() && entry.name.endsWith(".md")) paths.push(child.slice(base.length + 1).split("\\").join("/"));
+		else if (entry.isFile() && (entry.name.endsWith(".md") || (dir === base && /^map\.md$/i.test(entry.name)))) paths.push(child.slice(base.length + 1).split("\\").join("/"));
 	}
 	return paths;
 }
@@ -291,8 +309,9 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 		// Absent means "keep whatever the note already says": replacing a note must not silently
 		// re-attribute a user-written note to the agent that happened to rewrite it.
 		const origin = stableOptions.origin === undefined ? undefined : assertOrigin(stableOptions.origin);
-		const path = physicalPath(scope, destination.path, identity, destination.who);
-		return withPathQueue(path, async () => {
+		const queuePath = physicalPath(scope, destination.path, identity, destination.who);
+		return withPathQueue(queuePath, async () => {
+			const path = noteFileName(destination.path) === "MAP.md" ? await resolveMapPath(queuePath) : queuePath;
 			const now = writeStamp();
 			const cleanBody = stripLeadingFrontmatter(content);
 			const existingRaw = await readFileIfExists(path);
@@ -322,8 +341,9 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 	async function read(address: string): Promise<NoteReadResult | undefined> {
 		const destination = assertAddress(address);
 		const scope = destination.scope;
-		const path = physicalPath(scope, destination.path, identity, destination.who);
-		return withPathQueue(path, async () => {
+		const queuePath = physicalPath(scope, destination.path, identity, destination.who);
+		return withPathQueue(queuePath, async () => {
+			const path = noteFileName(destination.path) === "MAP.md" ? await resolveMapPath(queuePath) : queuePath;
 			const raw = await readFileIfExists(path);
 			if (raw === undefined) return undefined;
 			const now = Date.now();
@@ -349,10 +369,12 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 		if (operations.length === 0 && stableOptions.origin === undefined && stableOptions.crumpled === undefined && stableOptions.renameTo === undefined) {
 			throw new NoteError("nothing_to_do", "Nothing to change: provide edits, an origin, a crumpled state, or a new address.");
 		}
-		const fromPath = physicalPath(from.scope, from.path, identity, from.who);
-		const path = physicalPath(scope, destination.path, identity, destination.who);
-		const differentPaths = resolve(fromPath) !== resolve(path);
+		const fromQueuePath = physicalPath(from.scope, from.path, identity, from.who);
+		const queuePath = physicalPath(scope, destination.path, identity, destination.who);
+		const differentPaths = resolve(fromQueuePath) !== resolve(queuePath);
 		const mutate = async (): Promise<NoteEditResult> => {
+			const fromPath = noteFileName(from.path) === "MAP.md" ? await resolveMapPath(fromQueuePath) : fromQueuePath;
+			const path = noteFileName(destination.path) === "MAP.md" ? await resolveMapPath(queuePath) : queuePath;
 			const raw = await readFileIfExists(fromPath);
 			if (raw === undefined) throw new NoteError("not_found", `No note at ${noteIdentity(identity, address).address}.`);
 			const targetRaw = differentPaths ? await readFileIfExists(path) : undefined;
@@ -411,8 +433,8 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 			return { meta, applied, resolvedScope: scope, change, moved, replacedCrumpledTarget: moved && targetRaw !== undefined };
 		};
 		// Exact aliases share one queue; other spellings lock both paths in stable order.
-		if (!differentPaths) return withPathQueue(path, mutate);
-		const [first, second] = [fromPath, path].sort();
+		if (!differentPaths) return withPathQueue(queuePath, mutate);
+		const [first, second] = [fromQueuePath, queuePath].sort();
 		return withPathQueue(first!, () => withPathQueue(second!, mutate));
 	}
 
@@ -426,8 +448,9 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 		if (identity.dreaming === undefined) throw new NoteError("invalid_scope", "Only a dream can delete notes; begin one first.");
 		const target = assertAddress(address);
 		assertWritableHome(target.scope, target.who, identity);
-		const path = physicalPath(target.scope, target.path, identity, target.who);
-		return withPathQueue(path, async () => {
+		const queuePath = physicalPath(target.scope, target.path, identity, target.who);
+		return withPathQueue(queuePath, async () => {
+			const path = noteFileName(target.path) === "MAP.md" ? await resolveMapPath(queuePath) : queuePath;
 			const raw = await readFileIfExists(path);
 			if (raw === undefined) throw new NoteError("not_found", `No note at ${noteIdentity(identity, address).address}.`);
 			assertDreamSessionNote(target.scope, target.who, identity, raw, address);
@@ -455,14 +478,15 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 				status.homesUnavailable.push(addressFor(identity, scope, "", home.who).replace(/\/$/, "") || "session");
 				continue;
 			}
-			for (const path of paths) {
+			for (const diskPath of paths) {
+				const path = noteFileName(diskPath);
 				if (matcher && !matcher.test(canonicalAddressFor(identity, scope, path, home.who))
 					&& !(scope === "session" && home.who === undefined && !pattern!.startsWith("@") && matcher.test(path))) continue;
 				const address = addressFor(identity, scope, path, home.who);
 				const fullPath = join(root, path);
 				let raw: string;
 				try {
-					raw = await withPathQueue(fullPath, () => readFile(fullPath, "utf8"));
+					raw = await withPathQueue(fullPath, async () => readFile(path === "MAP.md" ? await resolveMapPath(fullPath) : fullPath, "utf8"));
 				} catch (error) {
 					// One unreadable note is named on its own; its home's readable notes still list.
 					if (!status || !isFilesystemError(error)) throw error;

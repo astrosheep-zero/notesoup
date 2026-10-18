@@ -65,8 +65,10 @@ export async function namespaceSlugs(namespace: "sessions" | "project" | "agents
 /**
  * Notes are markdown files: a virtual path without an `.md` suffix gains one, an explicit
  * `.md` is kept as-is, so `a/b` and `a/b.md` name the same physical file.
+ * Only the special root MAP is case-insensitive; nested and ordinary names stay literal.
  */
 export function noteFileName(vpath: string): string {
+	if (/^map(?:\.md)?$/i.test(vpath)) return "MAP.md";
 	return vpath.endsWith(".md") ? vpath : `${vpath}.md`;
 }
 
