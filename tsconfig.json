@@ -10,5 +10,5 @@
     "outDir": "dist",
     "rootDir": "."
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "plugins/pi/**/*.ts", "plugins/dsh/**/*.ts", "plugins/claude/src/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "plugins/pi/**/*.ts", "plugins/dsh/**/*.ts", "plugins/claude/src/**/*.ts", "plugins/codex/src/**/*.ts"]
 }
