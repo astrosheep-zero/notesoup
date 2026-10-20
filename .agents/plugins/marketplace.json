@@ -1,0 +1,15 @@
+{
+  "name": "notesoup",
+  "interface": {
+    "displayName": "notesoup"
+  },
+  "plugins": [
+    {
+      "name": "notesoup",
+      "source": {
+        "source": "local",
+        "path": "./plugins/codex"
+      }
+    }
+  ]
+}

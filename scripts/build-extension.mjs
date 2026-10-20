@@ -13,6 +13,15 @@ for (const [source, projection] of projections) {
 }
 
 await build({
+	entryPoints: ["plugins/codex/src/cli.ts"],
+	outfile: "plugins/codex/dist/codex/notesoup.js",
+	bundle: true,
+	platform: "node",
+	format: "esm",
+	target: "node22",
+});
+
+await build({
 	entryPoints: ["plugins/claude/src/helper.ts"],
 	outfile: "plugins/claude/dist/claude/helper.js",
 	bundle: true,

@@ -41,10 +41,16 @@ test("the host-neutral core resolves without any SDK or plugin dependency", () =
 
 test("each plugin resolves only its own host, the core, and the public notes entry", () => {
 	const root = repository();
-	for (const plugin of ["pi", "claude", "dsh"]) {
+	const plugins: Array<[string, Set<string>]> = [
+		["pi", new Set(["typebox"])],
+		["claude", new Set(["typebox"])],
+		["dsh", new Set(["typebox"])],
+		["codex", new Set(["typebox", "@modelcontextprotocol/sdk"])],
+	];
+	for (const [plugin, allowed] of plugins) {
 		const entries = sources(join(root, "plugins", plugin));
 		if (plugin === "claude") entries.push(...sources(join(root, "plugins/claude/hooks")));
-		assert.deepEqual(dependencyViolations(root, entries, options, new Set(["typebox"])), [], plugin);
+		assert.deepEqual(dependencyViolations(root, entries, options, allowed), [], plugin);
 	}
 });
 

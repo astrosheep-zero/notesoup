@@ -81,7 +81,7 @@ Environment variables:
 - `NOTESOUP_DISABLED` — presence-style kill switch: any value but an explicit no (`0`, `false`, `no`, `off`) turns notesoup off. On Pi the extension registers nothing at all; on Claude the mod passes every event through and native compaction behaves as if the mod were absent.
 - `NOTESOUP_KEEP_MEMORY` — Claude only: keep Claude Code's auto-memory guidance, which notesoup omits by default (its summarization guidance is always omitted). Enabled by any non-empty value except `0`, `false`, `no`, or `off` (case-insensitive); read at session startup.
 - `NOTESOUP_HOME` — overrides the notes root (default `~/.agents/notes`).
-- `NOTESOUP_AGENT` — overrides the agent name on Pi (default `anonymous`).
+- `NOTESOUP_AGENT` — overrides the root agent name on Pi and Codex (default `anonymous`; Codex children use `agent_type`).
 
 ## Documentation
 
@@ -90,6 +90,7 @@ Environment variables:
 - [Standalone notes library](docs/notes-library.md) — use the notes store from Node, no Pi required
 - [DeepSeek Harness](docs/dsh.md) — adapter and profile patch for dsh 0.2.1-alpha.2
 - [Claude Code Mod](docs/claude-code-mod.md) — early-access notes and persisted-session history tools for Claude Code
+- [Codex plugin](docs/codex.md) — native notes boot, persisted history and native `new_context` for Codex 0.160.1
 - [Skills and dream](docs/skills.md) — `/skill:memory`, `/skill:dream`, the `dream_*` tools and the dream lock
 
 ## Development
@@ -110,6 +111,7 @@ The repository splits host-neutral code from host plugins:
 | `plugins/pi/` | The Pi extension (`plugins/pi/index.ts` is what `pi.extensions` loads from source). |
 | `plugins/claude/` | The self-contained Claude Code plugin (`.claude-plugin/`, `hooks/`, bundled `dist/claude/helper.js`, skills and playbook), with its adapter sources in `plugins/claude/src/`. |
 | `plugins/dsh/` | The Cordis rows published as `notesoup/dsh` and `notesoup/dsh/engine`. |
+| `plugins/codex/` | The Agent Plugins package for Codex 0.160.1: manifests, hooks, and the bundled `dist/codex/notesoup.js` MCP/hook helper. |
 
 Each plugin owns its host's words — Pi's pre-reset hints and `last_word` nudge live in `plugins/pi/text.ts`, Claude's reset and missing-history prose in `plugins/claude/src/text.ts` — while the shared boot, protocol and warning bodies stay in `src/boot/text.ts` and `src/budget/text.ts`.
 

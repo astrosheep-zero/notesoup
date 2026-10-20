@@ -1,0 +1,41 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/dist/codex/notesoup.js\" hook SessionStart",
+            "timeout": 120,
+            "statusMessage": "notesoup: reading notes",
+            "additionalContextLimit": 0
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/dist/codex/notesoup.js\" hook SubagentStart",
+            "timeout": 120,
+            "statusMessage": "notesoup: reading notes",
+            "additionalContextLimit": 0
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/dist/codex/notesoup.js\" hook PreCompact",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}

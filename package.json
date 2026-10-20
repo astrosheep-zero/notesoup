@@ -23,13 +23,15 @@
       "import": "./dist/plugins/dsh/engine.js"
     }
   },
-  "description": "Host-neutral notes, history and context-window core, with plugins for Pi, Claude Code and the DeepSeek Harness.",
+  "description": "Host-neutral notes, history and context-window core, with plugins for Pi, Claude Code, the DeepSeek Harness and Codex.",
   "license": "MIT",
   "keywords": [
     "pi-package",
     "pi-extension",
     "agent-memory",
-    "notes"
+    "notes",
+    "codex",
+    "claude-code"
   ],
   "repository": {
     "type": "git",
@@ -137,6 +139,7 @@
     "@earendil-works/pi-ai": "^1.0.0",
     "@earendil-works/pi-coding-agent": "^1.0.0",
     "@earendil-works/pi-tui": "1.0.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@types/node": "^22.19.19",
     "esbuild": "^0.28.2",
     "typebox": "1.3.27",

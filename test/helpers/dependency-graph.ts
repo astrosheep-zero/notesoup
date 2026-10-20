@@ -4,7 +4,7 @@ import { relative, resolve, sep } from "node:path";
 import ts from "typescript";
 
 const builtins = new Set(builtinModules.map((name) => name.replace(/^node:/, "")));
-type Adapter = "pi" | "claude" | "dsh";
+type Adapter = "pi" | "claude" | "dsh" | "codex";
 function packageAdapter(specifier: string): Adapter | undefined {
 	if (/^@(?:earendil-works|mariozechner)\//.test(specifier)) return "pi";
 	if (/^@deepseek-ai\//.test(specifier)) return "dsh";
@@ -53,7 +53,7 @@ export function dependencyViolations(root: string, entries: string[], options: t
 	const local = (file: string) => file.startsWith(sourceRoot + sep) || file.startsWith(pluginRoot + sep);
 	const adapter = (file: string): Adapter | undefined => {
 		const path = display(file);
-		return /^plugins\/(pi|claude|dsh)\//.exec(path)?.[1] as Adapter | undefined
+		return /^plugins\/(pi|claude|dsh|codex)\//.exec(path)?.[1] as Adapter | undefined
 			?? packageAdapter(file.split(sep).join("/").split("/node_modules/").at(-1)!);
 	};
 	const walk = (file: string, chain: string[]): void => {

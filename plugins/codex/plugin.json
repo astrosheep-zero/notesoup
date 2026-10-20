@@ -1,0 +1,6 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "notesoup",
+  "description": "Host-neutral notes and native history for Codex, with a native-window boot.",
+  "keywords": ["notes", "history", "context-window"]
+}
