@@ -1,5 +1,5 @@
 import type { NotesHome, NotesSnapshot } from "./snapshot.js";
-import { WINDOW_IDENTITY_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG, MAPS_BLOCK, MAP_BOOT_MAX_CHARS, SHELF_FRESH_LIMIT, renderProtocolBlock, type BootToolNames } from "./text.js";
+import { WINDOW_IDENTITY_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG, MAPS_BLOCK, CHEATSHEET_BOOT_MAX_CHARS, MAP_BOOT_MAX_CHARS, SHELF_FRESH_LIMIT, renderProtocolBlock, type BootToolNames } from "./text.js";
 
 function relativeTime(timestamp: number, now: number): string {
 	const seconds = Math.trunc((timestamp - now) / 1000);
@@ -65,7 +65,7 @@ function notesIndex(snapshot: NotesSnapshot, tools: BootToolNames, agentName: st
 				return title === undefined ? `  ${locator}` : `  ${title}\n  ${locator}`;
 			});
 		if (pinned.length === 0 && fresh.length === 0) continue;
-		const parts = pinned.map((row) => `${row.path === "MAP.md" ? "map" : "cheatsheet"}\n\n${indent(pinnedBodyForBoot(row.address, row.body))}`);
+		const parts = pinned.map((row) => `${row.path === "MAP.md" ? "map" : "cheatsheet"}\n\n${indent(pinnedBodyForBoot(row.address, row.body, row.path === "MAP.md" ? MAP_BOOT_MAX_CHARS : CHEATSHEET_BOOT_MAX_CHARS))}`);
 		if (fresh.length > 0) parts.push(`recent\n\n${fresh.join("\n\n")}`);
 		shelves.push(section(home.label, parts.join("\n\n")));
 	}
@@ -76,10 +76,10 @@ function notesIndex(snapshot: NotesSnapshot, tools: BootToolNames, agentName: st
 }
 
 /** Each pinned page is bounded; the cut names where the rest lives. */
-function pinnedBodyForBoot(address: string, body: string): string {
+function pinnedBodyForBoot(address: string, body: string, maxChars: number): string {
 	const chars = Array.from(body);
-	if (chars.length <= MAP_BOOT_MAX_CHARS) return body;
-	return `${chars.slice(0, MAP_BOOT_MAX_CHARS).join("")}\n[truncated at ${MAP_BOOT_MAX_CHARS} chars; slim this page down, full body at \`${address}\`]`;
+	if (chars.length <= maxChars) return body;
+	return `${chars.slice(0, maxChars).join("")}\n[truncated at ${maxChars} chars; slim this page down, full body at \`${address}\`]`;
 }
 
 export type BootWindowTree = {

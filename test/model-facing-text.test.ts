@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { renderBootBlock } from "../src/boot/render.js";
 import { loadNotesSnapshot } from "../src/boot/snapshot.js";
-import { DEFAULT_BOOT_TOOL_NAMES, MAPS_BLOCK, MAP_BOOT_MAX_CHARS, NOTES_PROTOCOL_CLOSE_TAG, NOTES_PROTOCOL_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG, renderProtocolBlock } from "../src/boot/text.js";
+import { DEFAULT_BOOT_TOOL_NAMES, MAPS_BLOCK, CHEATSHEET_BOOT_MAX_CHARS, MAP_BOOT_MAX_CHARS, NOTES_PROTOCOL_CLOSE_TAG, NOTES_PROTOCOL_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG, renderProtocolBlock } from "../src/boot/text.js";
 import { CLAUDE_WARNING_PROMPT } from "../plugins/claude/src/text.js";
 import { COMMAND_NOTICE, PI_PRE_RESET_HINTS, commandWarningContent, warningContent } from "../plugins/pi/text.js";
 import { COUNTDOWN_LINE, FORCED_CONTINUATIONS, GUIDANCE_CLOSE_TAG, GUIDANCE_OPEN_TAG, NORMAL_CONTINUATIONS, WARNING_BODY, WARNING_CALL, WARNING_TIMING, selectContinuation, tokenBudgetGuidance } from "../src/budget/text.js";
@@ -171,7 +171,10 @@ test("cheatsheets and maps are independently pinned, bounded, and excluded from 
 			...Array.from({ length: 4 }, (_, i) => note("project", `n${i}.md`, `@project/n${i}.md`, `TITLE_${i}`)),
 		]],
 		["human", [note("human", "MAP.md", "@human/MAP.md", "HUMAN_INDEX")]],
-		["agent", [note("agent", "CHEATSHEET.md", "@self/CHEATSHEET.md", "🐑".repeat(MAP_BOOT_MAX_CHARS + 1))]],
+		["agent", [
+			note("agent", "CHEATSHEET.md", "@self/CHEATSHEET.md", "🐑".repeat(CHEATSHEET_BOOT_MAX_CHARS + 1)),
+			note("agent", "MAP.md", "@self/MAP.md", "M".repeat(MAP_BOOT_MAX_CHARS + 1)),
+		]],
 		["model", [{
 			...note("model", "CHEATSHEET.md", "@model/CHEATSHEET.md", "CRUMPLED_RULE"),
 			meta: { ...note("model", "", "", "").meta, crumpledAt: "2026-10-01T00:00:00+08:00" },
@@ -184,9 +187,12 @@ test("cheatsheets and maps are independently pinned, bounded, and excluded from 
 	assert.ok(rendered.includes("@project/n2.md ·"));
 	assert.equal(rendered.includes("TITLE_3"), false);
 	assert.equal(/(?:MAP|CHEATSHEET)\.md ·/.test(rendered), false);
-	assert.ok(rendered.includes("🐑".repeat(MAP_BOOT_MAX_CHARS)));
-	assert.equal(rendered.includes("🐑".repeat(MAP_BOOT_MAX_CHARS + 1)), false);
-	assert.ok(rendered.includes("full body at `@self/CHEATSHEET.md`"));
+	assert.ok(rendered.includes("🐑".repeat(CHEATSHEET_BOOT_MAX_CHARS)));
+	assert.equal(rendered.includes("🐑".repeat(CHEATSHEET_BOOT_MAX_CHARS + 1)), false);
+	assert.ok(rendered.includes(`[truncated at ${CHEATSHEET_BOOT_MAX_CHARS} chars; slim this page down, full body at \`@self/CHEATSHEET.md\`]`));
+	assert.ok(rendered.includes("M".repeat(MAP_BOOT_MAX_CHARS)));
+	assert.equal(rendered.includes("M".repeat(MAP_BOOT_MAX_CHARS + 1)), false);
+	assert.ok(rendered.includes(`[truncated at ${MAP_BOOT_MAX_CHARS} chars; slim this page down, full body at \`@self/MAP.md\`]`));
 	assert.equal(rendered.includes("CRUMPLED_RULE"), false);
 	assert.equal(rendered.includes("@model —"), false);
 });

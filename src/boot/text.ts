@@ -1,6 +1,7 @@
 /** Each shelf shows this many of its own freshest pages beneath its pinned pages. */
 export const SHELF_FRESH_LIMIT = 3;
-/** Each pinned page is inlined per home up to this many code points, then a lookup pointer. */
+/** Each pinned page has its own code-point cap; overflow keeps a lookup pointer. */
+export const CHEATSHEET_BOOT_MAX_CHARS = 2048;
 export const MAP_BOOT_MAX_CHARS = 4096;
 export const WINDOW_IDENTITY_OPEN_TAG = "<notesoup:window_identity>";
 export const WINDOW_IDENTITY_CLOSE_TAG = "</notesoup:window_identity>";
