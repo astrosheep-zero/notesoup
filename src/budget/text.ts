@@ -33,7 +33,7 @@ export const WARNING_TIMING = "The reserve is nearly spent. The wipe lands at th
 
 /** The shared handoff instructions, used for both budget and manual close-outs. */
 export const WARNING_BODY =
-	"Stop the task. Write down what git and history can't give back:\n- where you are, and how far you got\n- what the human decided, in their words\n- what's blocked or waiting\n- the next move\n- where the half-done work sits\n- what failed, and why\n- which skills, seqs, notes, or files to reopen\n- anything else worth noting\nThen leave the shelf current: replace what's stale, a whole note or a section inside one, and crumple the dead ones. Update and trim the MAP files; every new window loads them. The next window gets whatever you leave, dead notes and dead sections alike.\nDon't call anything that might return a large output. One big read can spend the rest of the reserve before your notes are saved.";
+	"Stop the task. Write down what git and history can't give back:\n- where you are, and how far you got\n- what the human decided, in their words\n- what's blocked or waiting\n- the next move\n- where the half-done work sits\n- what failed, and why\n- which skills, seqs, notes, or files to reopen\n- anything else worth noting\nThen leave the shelf current: replace what's stale, a whole note or a section inside one, and crumple the dead ones. Update and trim CHEATSHEET.md and MAP.md; every new window loads them. The next window gets whatever you leave, dead notes and dead sections alike.\nDon't call anything that might return a large output. One big read can spend the rest of the reserve before your notes are saved.";
 
 export const WARNING_CALL = "Then call `empty_brain`. Nothing in between.";
 

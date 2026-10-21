@@ -338,7 +338,7 @@ test("dsh explicit resets survive auto:false; shared tool reads and expected err
 	if (refused.isError) assert.equal(refused.error.info?.code, "invalid_scope");
 	const snapshot = engine.windows.get(agent.session).snapshot;
 	const sharedBoot = renderBootBlock({ agentName: identity.agent, modelName: identity.model, tree: { trunk: `dsh:${agent.session.id}`, windows: [{ shortName: "0", isCurrent: false }, { shortName: "1", isCurrent: true }] }, notes: await loadNotesSnapshot(identity, snapshot.openedAt), tools: { notes: "notes_*", notesList: "notes_list", history: "history_*", remaining: "get_context_remaining", wipe: "empty_brain" } });
-	// The shared protocol, including the MAP cheatsheet, is used verbatim inside host framing.
+	// The shared protocol, including the pinned-page instructions, is used verbatim inside host framing.
 	assert.ok(snapshot.boot.includes(sharedBoot.split("YOUR NOTES")[0]!));
 	const blocked = ctx.on("tools/post-execute", async (exec, _result, next) => exec.name === "empty_brain" ? { kind: "block", feedback: [{ type: "text", text: "blocked" }] } : next());
 	mock.script.push({ tool: "empty_brain", input: {} }, { text: "request refused" });

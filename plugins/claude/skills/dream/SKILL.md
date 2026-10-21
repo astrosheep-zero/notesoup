@@ -5,7 +5,7 @@ description: Review and consolidate durable notes using notesoup's shared dream 
 
 # Dream
 
-Read `../../playbook.md` completely, resolving the path from this skill's directory. It is the shared guide to reviewing and organizing notes. MAP may include a short Cheatsheet of rules that apply in every window (about 5 lines); the rest stays the note index, for lookup.
+Read `../../playbook.md` completely, resolving the path from this skill's directory. It is the shared guide to reviewing and organizing notes. Standing reminders belong in a separate `CHEATSHEET.md` (five lines); `MAP.md` holds only the note index. Both load every window when present.
 
 Dream in this agent's current session. Do not start another agent or model unless the human asks.
 

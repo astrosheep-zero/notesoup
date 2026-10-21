@@ -27,7 +27,7 @@ Durable notes hold decisions, constraints, and lessons that stay true after the 
 5. **Relocate misfiled notes.** When a standing ruling or the note's own MAP already names its proper home, move it there, preserving its metadata, and update both homes' maps. Do it, don't propose it. Propose only when the destination home itself is unclear.
 6. **Preserve meaning and provenance.** Keep facts, conditions, exceptions, uncertainty, authorship, and sources. When promoting a finding, cite its source. Do not relabel agent-authored material as human-authored. If its destination or authority is unclear, propose the promotion instead.
 7. **Keep notes manageable.** Aim below about 200 lines / 8KB per note. Split oversized notes by topic with one-line cross-links.
-8. **Keep maps useful.** Each writable home's MAP.md may include a Cheatsheet of rules that apply in every window; keep it short, about 5 lines. The rest stays the note index: durable notes' addresses and short gists, for lookup. Preserve standing rules, add promoted notes, and drop entries that no longer hold. Maps follow the same size budget.
+8. **Keep wake-up pages useful.** Each writable home's `CHEATSHEET.md` holds standing reminders, kept to five lines. Its `MAP.md` holds only the note index: durable notes' addresses and short gists. Both load every window when present; do not create empty pages. Preserve standing rules, add promoted notes to the map, and drop entries that no longer hold. Maps follow the same size budget.
 
 ## Deleting
 

@@ -32,7 +32,7 @@ Any other `@` prefix is refused. A path is relative and `/`-separated, with no e
 
 `@` addresses are not file paths: never pass them to file tools like `read`, `write`, `edit`, or `bash`. That creates a stray directory instead of a note.
 
-`MAP.md` at the root of each `@` home is a page you wake up with. It may include a Cheatsheet of rules that apply in every window; keep it short, about 5 lines. The rest is the note index: each durable note's address and gist, for lookup. Update it whenever you add, move or crumple a durable note.
+`CHEATSHEET.md` and `MAP.md` at the root of each `@` home are separate pages you wake up with; absent pages are skipped. Keep standing reminders in `CHEATSHEET.md`, to five lines. `MAP.md` holds only the note index: each durable note's address and gist, for lookup. Update it whenever you add, move or crumple a durable note. Do not create empty pages.
 
 Write only what git and history cannot give back. Crumple notes that are no longer true; a stale note is worse than none.
 

@@ -356,6 +356,7 @@ test("the boot binds its tools and bounds an over-cap MAP with a lookup pointer"
 	const captured = makeExtension(session);
 	const ctx = context(session);
 	await call(captured, "notes_write", { address: "MAP.md", content: "M".repeat(MAP_BOOT_MAX_CHARS + 10) }, ctx);
+	await call(captured, "notes_write", { address: "CHEATSHEET.md", content: "REMEMBER_THIS_RULE" }, ctx);
 	const rendered = await explicitBoot(ctx, "pcw:test:root", undefined);
 
 	for (const tool of ["notes_*", "history_*", "get_context_remaining", "empty_brain"]) {
@@ -364,6 +365,8 @@ test("the boot binds its tools and bounds an over-cap MAP with a lookup pointer"
 	assert.ok(rendered.includes("M".repeat(MAP_BOOT_MAX_CHARS)), "the existing MAP cap keeps a bounded prefix");
 	assert.equal(rendered.includes("M".repeat(MAP_BOOT_MAX_CHARS + 1)), false, "the over-cap suffix is not inlined");
 	assert.ok(rendered.includes("`MAP.md`"), "the full MAP remains available by address");
+	assert.ok(rendered.includes("cheatsheet\n\n  REMEMBER_THIS_RULE\n\nmap"), "a real stored cheatsheet is pinned before the map");
+	assert.equal(/CHEATSHEET\.md ·/.test(rendered), false, "the stored cheatsheet takes no recent seat");
 	for (const retired of ["history_windows", "history_list", "history_read"]) {
 		assert.equal(rendered.includes(retired), false, `${retired} no longer appears in the boot block`);
 	}

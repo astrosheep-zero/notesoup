@@ -35,7 +35,7 @@ function section(label: string, body: string): string {
 /** Pi's default agent slug: an unnamed agent shares its `@self` shelf with every other nameless one. */
 const NAMELESS_AGENT = "anonymous";
 
-/** One closed boot snapshot: five tabbed shelves, current hands first, durable last; each shelf keeps its map and its own freshest pages. */
+/** One closed boot snapshot: five tabbed shelves, current hands first, durable last; each shelf keeps its pinned pages and its own freshest pages. */
 function notesIndex(snapshot: NotesSnapshot, tools: BootToolNames, agentName: string, modelName: string): string {
 	const homes: ReadonlyArray<{ scope: NotesHome["scope"]; label: string }> = [
 		{ scope: "session", label: "no @ — this session" },
@@ -52,18 +52,20 @@ function notesIndex(snapshot: NotesSnapshot, tools: BootToolNames, agentName: st
 			continue;
 		}
 		const rows = (snapshot.homes.get(home.scope) ?? []).filter((row) => row.meta.crumpledAt === undefined);
-		const map = rows.find((row) => row.path === "MAP.md");
+		const pinned = ["CHEATSHEET.md", "MAP.md"].flatMap((path) => {
+			const row = rows.find((row) => row.path === path);
+			return row?.body ? [row] : [];
+		});
 		const fresh = rows
-			.filter((row) => row.path !== "MAP.md")
+			.filter((row) => row.path !== "MAP.md" && row.path !== "CHEATSHEET.md")
 			.slice(0, SHELF_FRESH_LIMIT)
 			.map((row) => {
 				const locator = `${row.address} · ${relativeTime(row.meta.updatedAt, snapshot.openedAt)}`;
 				const title = feedTitle(row.body);
 				return title === undefined ? `  ${locator}` : `  ${title}\n  ${locator}`;
 			});
-		if (!map?.body && fresh.length === 0) continue;
-		const parts: string[] = [];
-		if (map?.body) parts.push(`map\n\n${indent(mapBodyForBoot(map.address, map.body))}`);
+		if (pinned.length === 0 && fresh.length === 0) continue;
+		const parts = pinned.map((row) => `${row.path === "MAP.md" ? "map" : "cheatsheet"}\n\n${indent(pinnedBodyForBoot(row.address, row.body))}`);
 		if (fresh.length > 0) parts.push(`recent\n\n${fresh.join("\n\n")}`);
 		shelves.push(section(home.label, parts.join("\n\n")));
 	}
@@ -73,11 +75,11 @@ function notesIndex(snapshot: NotesSnapshot, tools: BootToolNames, agentName: st
 		: "YOUR NOTES\n──────────\n\nNone yet. A blank slate is a fine place to start — just don't finish there.";
 }
 
-/** One unbounded MAP body fits the boot only up to the cap; the cut names where the rest lives. */
-function mapBodyForBoot(address: string, body: string): string {
+/** Each pinned page is bounded; the cut names where the rest lives. */
+function pinnedBodyForBoot(address: string, body: string): string {
 	const chars = Array.from(body);
 	if (chars.length <= MAP_BOOT_MAX_CHARS) return body;
-	return `${chars.slice(0, MAP_BOOT_MAX_CHARS).join("")}\n[truncated at ${MAP_BOOT_MAX_CHARS} chars; slim this MAP down, full body at \`${address}\`]`;
+	return `${chars.slice(0, MAP_BOOT_MAX_CHARS).join("")}\n[truncated at ${MAP_BOOT_MAX_CHARS} chars; slim this page down, full body at \`${address}\`]`;
 }
 
 export type BootWindowTree = {

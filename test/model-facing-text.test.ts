@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { renderBootBlock } from "../src/boot/render.js";
 import { loadNotesSnapshot } from "../src/boot/snapshot.js";
-import { DEFAULT_BOOT_TOOL_NAMES, MAPS_BLOCK, NOTES_PROTOCOL_CLOSE_TAG, NOTES_PROTOCOL_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG, renderProtocolBlock } from "../src/boot/text.js";
+import { DEFAULT_BOOT_TOOL_NAMES, MAPS_BLOCK, MAP_BOOT_MAX_CHARS, NOTES_PROTOCOL_CLOSE_TAG, NOTES_PROTOCOL_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG, renderProtocolBlock } from "../src/boot/text.js";
 import { CLAUDE_WARNING_PROMPT } from "../plugins/claude/src/text.js";
 import { COMMAND_NOTICE, PI_PRE_RESET_HINTS, commandWarningContent, warningContent } from "../plugins/pi/text.js";
 import { COUNTDOWN_LINE, FORCED_CONTINUATIONS, GUIDANCE_CLOSE_TAG, GUIDANCE_OPEN_TAG, NORMAL_CONTINUATIONS, WARNING_BODY, WARNING_CALL, WARNING_TIMING, selectContinuation, tokenBudgetGuidance } from "../src/budget/text.js";
@@ -30,7 +30,7 @@ const GOLDEN_WARNING = `Stop the task. Write down what git and history can't giv
 - what failed, and why
 - which skills, seqs, notes, or files to reopen
 - anything else worth noting
-Then leave the shelf current: replace what's stale, a whole note or a section inside one, and crumple the dead ones. Update and trim the MAP files; every new window loads them. The next window gets whatever you leave, dead notes and dead sections alike.
+Then leave the shelf current: replace what's stale, a whole note or a section inside one, and crumple the dead ones. Update and trim CHEATSHEET.md and MAP.md; every new window loads them. The next window gets whatever you leave, dead notes and dead sections alike.
 Don't call anything that might return a large output. One big read can spend the rest of the reserve before your notes are saved.`;
 
 const GOLDEN_COUNTDOWN = "Brain emptied in 3… 2…";
@@ -51,32 +51,19 @@ const GOLDEN_FORCED_CONTINUATIONS = [
 ];
 
 const GOLDEN_MAPS = `<notesoup:maps>
-Every home's root can hold a \`MAP.md\`, and a MAP is the one page that never waits on a shelf — it
-gets jammed straight into your brain the moment you wake up. No asking, no skipping. Whoever wakes
-up next reads it, and next is you. So keep it short, and keep it true.
+Every home's root can hold two pages that never wait on a shelf: \`CHEATSHEET.md\` and \`MAP.md\`.
+Both get jammed straight into your brain the moment you wake up. No asking, no skipping. Whoever
+wakes up next reads them, and next is you. So keep them short, and keep them true.
 
-Two things live in there:
+- **\`CHEATSHEET.md\`** holds what you'll want next time — a rule, a warning, a grudge, a name,
+  a phone number you'll regret losing. Nobody grades it. Keep it to five lines, or it grows fat
+  and everybody pays for it.
+- **\`MAP.md\`** is only the note index. One line per durable note: the address, then a gist short
+  enough to tell whether the thing is worth opening. Rules belong in \`CHEATSHEET.md\`, not here.
 
-- **Cheatsheet.** A cheatsheet is a cheatsheet. Scribble whatever you'll want next time — a rule, a
-  warning, a grudge, a name, a phone number you'll regret losing. Nobody grades it. Just keep it
-  under five lines, or it grows fat and everybody pays for it.
-- **Index.** One line per durable note: the address, then a gist short enough to tell whether the
-  thing is worth opening.
-
-\`\`\`
-  # CHEATSHEET
-  - Read the repo before asking; run it before believing it
-  - Report times in Beijing time
-
-  # INDEX
-  - release-and-local-install.md — version bump, local override install, host load timing
-  - history-api-v2-design.md — seq addressing; read before touching history
-  - current-reset-and-dream-scope.md — reset scope, dream territory, session ownership
-\`\`\`
-
-Every home gets one: \`@project\`, \`@human\`, \`@self\`, \`@model\`. New note, new line. New rule worth
-remembering, new Cheatsheet line. And when a line stops being true, kill it — every window after you
-reads that page as fact.
+Each home keeps its own: \`@project\`, \`@human\`, \`@self\`, \`@model\`. Missing pages are skipped;
+no need to create empty ones. New note, new MAP line. New rule worth remembering, new Cheatsheet
+line. And when a line stops being true, kill it — every window after you reads that page as fact.
 </notesoup:maps>`;
 
 const openedAt = 1_700_000_000_000;
@@ -173,6 +160,35 @@ test("a rendered boot carries the new tags, its own MAP section, and no pre-rena
 	assert.ok(rendered.includes("@self — root only"), "a named agent's shelf says it is theirs alone");
 	assert.ok(rendered.includes("map\n\n  AGENT_MAP_BODY"), "the pinned MAP is headed by its own label");
 	assert.equal(rendered.includes("MAP — "), false, "the old MAP heading is gone");
+});
+
+test("cheatsheets and maps are independently pinned, bounded, and excluded from recent pages", async () => {
+	const rows = new Map<Scope, NoteRow[]>([
+		["session", [note("session", "CHEATSHEET.md", "CHEATSHEET.md", "SESSION_RULE")]],
+		["project", [
+			note("project", "CHEATSHEET.md", "@project/CHEATSHEET.md", "PROJECT_RULE"),
+			note("project", "MAP.md", "@project/MAP.md", "PROJECT_INDEX"),
+			...Array.from({ length: 4 }, (_, i) => note("project", `n${i}.md`, `@project/n${i}.md`, `TITLE_${i}`)),
+		]],
+		["human", [note("human", "MAP.md", "@human/MAP.md", "HUMAN_INDEX")]],
+		["agent", [note("agent", "CHEATSHEET.md", "@self/CHEATSHEET.md", "🐑".repeat(MAP_BOOT_MAX_CHARS + 1))]],
+		["model", [{
+			...note("model", "CHEATSHEET.md", "@model/CHEATSHEET.md", "CRUMPLED_RULE"),
+			meta: { ...note("model", "", "", "").meta, crumpledAt: "2026-10-01T00:00:00+08:00" },
+		}]],
+	]);
+	const rendered = (await boot("root", rows)).split("YOUR NOTES")[1]!;
+	assert.ok(rendered.includes("cheatsheet\n\n  SESSION_RULE"));
+	assert.ok(rendered.includes("cheatsheet\n\n  PROJECT_RULE\n\nmap\n\n  PROJECT_INDEX"));
+	assert.ok(rendered.includes("map\n\n  HUMAN_INDEX"));
+	assert.ok(rendered.includes("@project/n2.md ·"));
+	assert.equal(rendered.includes("TITLE_3"), false);
+	assert.equal(/(?:MAP|CHEATSHEET)\.md ·/.test(rendered), false);
+	assert.ok(rendered.includes("🐑".repeat(MAP_BOOT_MAX_CHARS)));
+	assert.equal(rendered.includes("🐑".repeat(MAP_BOOT_MAX_CHARS + 1)), false);
+	assert.ok(rendered.includes("full body at `@self/CHEATSHEET.md`"));
+	assert.equal(rendered.includes("CRUMPLED_RULE"), false);
+	assert.equal(rendered.includes("@model —"), false);
 });
 
 test("the shelves name their reader and the @self shelf says when it is shared", async () => {

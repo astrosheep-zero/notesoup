@@ -1,6 +1,6 @@
-/** Each shelf shows this many of its own freshest pages beneath the map. */
+/** Each shelf shows this many of its own freshest pages beneath its pinned pages. */
 export const SHELF_FRESH_LIMIT = 3;
-/** One MAP body is inlined per home; past this many code points the boot shows a fitting prefix plus a pointer. */
+/** Each pinned page is inlined per home up to this many code points, then a lookup pointer. */
 export const MAP_BOOT_MAX_CHARS = 4096;
 export const WINDOW_IDENTITY_OPEN_TAG = "<notesoup:window_identity>";
 export const WINDOW_IDENTITY_CLOSE_TAG = "</notesoup:window_identity>";
@@ -54,36 +54,22 @@ Any other @ address is fake. End of discussion. @ addresses are not file paths: 
 ${NOTES_PROTOCOL_CLOSE_TAG}`;
 
 /**
- * The MAP page is taught once per window, as its own section between the protocol and the notes
- * index. A MAP is the one note every waking window loads, so this block says what one holds.
+ * The two pinned pages are taught once per window between the protocol and the notes index.
  */
 export const MAPS_BLOCK = `<notesoup:maps>
-Every home's root can hold a \`MAP.md\`, and a MAP is the one page that never waits on a shelf — it
-gets jammed straight into your brain the moment you wake up. No asking, no skipping. Whoever wakes
-up next reads it, and next is you. So keep it short, and keep it true.
+Every home's root can hold two pages that never wait on a shelf: \`CHEATSHEET.md\` and \`MAP.md\`.
+Both get jammed straight into your brain the moment you wake up. No asking, no skipping. Whoever
+wakes up next reads them, and next is you. So keep them short, and keep them true.
 
-Two things live in there:
+- **\`CHEATSHEET.md\`** holds what you'll want next time — a rule, a warning, a grudge, a name,
+  a phone number you'll regret losing. Nobody grades it. Keep it to five lines, or it grows fat
+  and everybody pays for it.
+- **\`MAP.md\`** is only the note index. One line per durable note: the address, then a gist short
+  enough to tell whether the thing is worth opening. Rules belong in \`CHEATSHEET.md\`, not here.
 
-- **Cheatsheet.** A cheatsheet is a cheatsheet. Scribble whatever you'll want next time — a rule, a
-  warning, a grudge, a name, a phone number you'll regret losing. Nobody grades it. Just keep it
-  under five lines, or it grows fat and everybody pays for it.
-- **Index.** One line per durable note: the address, then a gist short enough to tell whether the
-  thing is worth opening.
-
-\`\`\`
-  # CHEATSHEET
-  - Read the repo before asking; run it before believing it
-  - Report times in Beijing time
-
-  # INDEX
-  - release-and-local-install.md — version bump, local override install, host load timing
-  - history-api-v2-design.md — seq addressing; read before touching history
-  - current-reset-and-dream-scope.md — reset scope, dream territory, session ownership
-\`\`\`
-
-Every home gets one: \`@project\`, \`@human\`, \`@self\`, \`@model\`. New note, new line. New rule worth
-remembering, new Cheatsheet line. And when a line stops being true, kill it — every window after you
-reads that page as fact.
+Each home keeps its own: \`@project\`, \`@human\`, \`@self\`, \`@model\`. Missing pages are skipped;
+no need to create empty ones. New note, new MAP line. New rule worth remembering, new Cheatsheet
+line. And when a line stops being true, kill it — every window after you reads that page as fact.
 </notesoup:maps>`;
 
 /** Logical tool names are supplied by the composing host, not discovered here. */
