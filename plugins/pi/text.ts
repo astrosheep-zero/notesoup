@@ -11,6 +11,11 @@ Unless the human explicitly directs otherwise, decide for yourself when to call 
 
 export { warningNotice as warningContent } from "../../src/budget/text.js";
 
+/** Odometer breadcrumb: the marker names its own seq, so history paging reads the landscape directly. */
+export function markerContent(seq: number): string {
+	return `<notesoup:marker seq="${seq}" />`;
+}
+
 /** The closing model sees deferred input as a bare next-window prompt block. */
 export function promptBlock(commandLine: string): string {
 	return `<notesoup:next_window_prompt>\n${commandLine}\n</notesoup:next_window_prompt>`;

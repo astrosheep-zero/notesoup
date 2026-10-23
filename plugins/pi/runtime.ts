@@ -11,6 +11,7 @@ import { buildResetDrafts, LAST_WORD_ADVERTISED_CHARS, MAX_LAST_WORD_CHARS, repa
 import { BOOT_TYPE, MANUAL_WIPE_TYPE } from "./entries.js";
 import { commandWarningContent } from "./text.js";
 import { buildBootMessage, sendBoot, type IncompleteNotesNotifier } from "./boot.js";
+import { maybeSendMarker } from "./marker.js";
 import { nextHistorySeq } from "./history.js";
 import { errorMessage } from "../../src/error-message.js";
 
@@ -76,7 +77,10 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 			if (markerResetOrigin(marker) === "forced") ctx.ui.notify("🥣 Brain forcibly emptied: overflow", "warning");
 		}
 	};
-	pi.on("turn_start", (_event, ctx) => notifyCommittedResets(ctx));
+	pi.on("turn_start", (_event, ctx) => {
+		notifyCommittedResets(ctx);
+		if (enabled) maybeSendMarker(pi, ctx);
+	});
 	pi.on("agent_settled", (_event, ctx) => {
 		notifyCommittedResets(ctx);
 		pendingResetNotices.clear();
