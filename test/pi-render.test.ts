@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { initTheme, type AgentToolResult, type Theme } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import { Box, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { emptyBrainRenderers, notesReadRenderers, notesUpdateRenderers, notesWriteRenderers } from "../plugins/pi/render.js";
 import { success, wireResult, type Outcome } from "../src/tools/result.js";
 
@@ -95,6 +95,41 @@ test("empty_brain: divider with the last word, refusals in one line", () => {
 	assert.equal(lines(refused), "✂ brain refused to empty — notesoup is off");
 	const pending = emptyBrainRenderers.renderResult(jsonResult({ status: "rollover_already_pending" }), { expanded: false }, flatTheme, { args: {} });
 	assert.equal(lines(pending), "✂ brain already being emptied");
+});
+
+test("empty_brain wraps a long last word inside the host's padded tool box", () => {
+	const lastWord = "x".repeat(262);
+	const component = emptyBrainRenderers.renderResult(jsonResult({ status: "rollover_requested" }), { expanded: false }, flatTheme, { args: { last_word: lastWord } });
+	const box = new Box(1, 0);
+	box.addChild(component);
+	const rendered = box.render(163);
+	assert.ok(rendered.every((line) => visibleWidth(line) <= 163), "tool output must fit the terminal, including box padding");
+	assert.ok(rendered.length > 2, "the handoff should wrap rather than be truncated");
+	assert.equal(rendered.slice(1).map((line) => stripTerminalSequences(line).trim()).join(""), `“${lastWord}”`);
+});
+
+test("empty_brain wraps styled Unicode and multiline handoffs when resized", () => {
+	const styledTheme = {
+		...flatTheme,
+		fg: (_color: string, text: string) => `\u001b[33m${text}\u001b[39m`,
+		italic: (text: string) => `\u001b[3m${text}\u001b[23m`,
+	} as Theme;
+	const lastWord = `${"界🥣e\u0301".repeat(30)}\nnext step`;
+	const component = emptyBrainRenderers.renderResult(jsonResult({ status: "rollover_requested" }), { expanded: false }, styledTheme, { args: { last_word: lastWord } });
+	for (const width of [80, 12, 40]) {
+		const rendered = component.render(width);
+		assert.ok(rendered.every((line) => visibleWidth(line) <= width), `styled output must fit width ${width}`);
+		assert.equal(rendered.slice(1).map((line) => stripTerminalSequences(line).trimEnd()).join(""), `“${lastWord.replace("\n", "")}”`);
+	}
+});
+
+test("empty_brain keeps the divider and handoff within very narrow widths", () => {
+	for (const lastWord of [undefined, "resume", "界🥣"]) {
+		const component = emptyBrainRenderers.renderResult(jsonResult({ status: "rollover_requested" }), { expanded: false }, flatTheme, { args: { last_word: lastWord } });
+		for (const width of [0, 1, 2, 5, 12, 19, 20, 21]) {
+			assert.ok(component.render(width).every((line) => visibleWidth(line) <= width), `output must fit width ${width}, last_word=${lastWord}`);
+		}
+	}
 });
 
 test("notes_update expanded diff goes through the host's diff renderer", () => {

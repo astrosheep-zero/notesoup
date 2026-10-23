@@ -1,6 +1,6 @@
 /** Pi TUI renderers for notesoup's own tools: collapsed one-line slips, expandable bodies. */
 import { renderDiff, type AgentToolResult, type Theme } from "@earendil-works/pi-coding-agent";
-import { Text, TruncatedText, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { Text, TruncatedText, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import type { Static } from "typebox";
 import type { NotesReadData, NotesUpdateData, NotesWriteData } from "../../src/tools/notes.js";
 import { notesReadParameters, notesUpdateParameters, notesWriteParameters } from "../../src/tools/notes.js";
@@ -153,12 +153,14 @@ export const emptyBrainRenderers = {
 		return {
 			invalidate() {},
 			render(width: number): string[] {
+				if (width <= 0) return [];
 				const label = "✂ brain emptied";
 				const prefix = "── ";
-				const fill = Math.max(2, width - visibleWidth(prefix) - visibleWidth(label) - 1);
+				const fill = Math.max(0, width - visibleWidth(prefix) - visibleWidth(label) - 1);
 				const lines = [theme.fg("dim", `${prefix}${label} ${"─".repeat(fill)}`)];
-				if (lastWord !== undefined) lines.push(theme.fg("warning", theme.italic(`“${lastWord}”`)));
-				return lines;
+				if (lastWord !== undefined) lines.push(...new Text(theme.fg("warning", theme.italic(`“${lastWord}”`)), 0, 0).render(width));
+				// The divider, or a wide glyph in a one-column viewport, may still need clipping.
+				return lines.map((line) => truncateToWidth(line, width, ""));
 			},
 		};
 	},
