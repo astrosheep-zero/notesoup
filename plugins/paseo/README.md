@@ -9,4 +9,4 @@ npm run typecheck
 npm test
 ```
 
-Install this directory with `paseo plugin install /absolute/path/to/plugins/paseo`. Source changes require `paseo plugin reload notesoup-last-word`; no daemon restart is needed.
+Install this directory with `paseo plugin install /absolute/path/to/plugins/paseo`. Source changes require `paseo plugin reload notesoup`; no daemon restart is needed.

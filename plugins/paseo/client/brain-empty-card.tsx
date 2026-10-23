@@ -1,7 +1,6 @@
 import type { PluginTimelineItemProps } from "@getpaseo/plugin/client";
 import { Text, View } from "react-native";
 import type { BrainEmpty } from "../shared/brain-empty.ts";
-import { PAPER } from "./paper-card.tsx";
 
 function label(data: BrainEmpty): string {
   if (data.status === "running") return "✂ emptying brain …";
@@ -23,10 +22,10 @@ function CutLine({ color }: { color: string }) {
   );
 }
 
-export function BrainEmptyDivider({ item }: PluginTimelineItemProps<BrainEmpty>) {
+export function BrainEmptyDivider({ item, theme }: PluginTimelineItemProps<BrainEmpty>) {
   const data = item.data;
   const refused = data.error !== undefined || data.status === "failed";
-  const color = refused ? PAPER.removed : PAPER.inkMuted;
+  const color = refused ? theme.colors.statusDanger : theme.colors.foregroundMuted;
   return (
     <View style={{ paddingVertical: 6, gap: 3 }}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
@@ -35,7 +34,7 @@ export function BrainEmptyDivider({ item }: PluginTimelineItemProps<BrainEmpty>)
         <CutLine color={color} />
       </View>
       {data.error !== undefined && (
-        <Text selectable style={{ color: PAPER.removed, fontSize: 12, textAlign: "center" }}>{data.error}</Text>
+        <Text selectable style={{ color: theme.colors.statusDanger, fontSize: 12, textAlign: "center" }}>{data.error}</Text>
       )}
     </View>
   );

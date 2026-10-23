@@ -1,6 +1,6 @@
-# Notesoup last word
+# Notesoup
 
-Displays notesoup last-word messages already present in Paseo’s timeline as expanded, selectable paper cards. Last-word and notes cards share a pale-paper palette, tape accent, small corners, and compact spacing; a crumple call turns its card grey and strikes the address. Requires Paseo 0.11.2 on the client and daemon.
+Displays notesoup last-word messages already present in Paseo’s timeline as expanded, selectable paper cards. Last-word and notes cards share a paper palette that follows Paseo’s theme: pale paper in light themes and warm charcoal paper in dark themes, with matching ink, tape and diff colors. Both keep small corners and compact spacing; a crumple call dulls its paper and strikes the address. Requires Paseo 0.11.2 or newer on the client and daemon.
 
 This client-only plugin transforms existing timeline rows in place: last-word custom messages become sticky cards, and notes_read/notes_write/notes_update tool calls become paper cards with the address, state, and a content or diff preview. It accepts the bare Pi tool names and Claude's exact `mcp__notesoup__` prefix; same-named tools from other MCP servers are unchanged. It does not read session files or append messages. Other timeline items are unchanged.
 
