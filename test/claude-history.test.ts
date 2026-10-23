@@ -190,6 +190,33 @@ test("Claude reset crosses native turn_duration graph metadata with no message c
 	assert.ok((await historyWindows.execute({}, projection, sessionId)).ok);
 });
 
+test("Claude api_error retry metadata keeps compact ancestry without allocating seq or exposing internals", async () => {
+	const retry = { type: "system", subtype: "api_error", uuid: "retry", parentUuid: "old", sessionId, isSidechain: false,
+		level: "error", error: { message: "Connection error.", formatted: "Connection dropped (ECONNRESET)",
+			connection: { code: "ECONNRESET", message: "PRIVATE_RETRY_PAYLOAD", isSSLError: false }, isNetworkDown: false, rateLimits: null, noResponse: null },
+		retryInMs: 620, retryAttempt: 1, maxRetries: 10, source: "request_retry", timestamp: "2026-10-22T03:20:21.859Z", version: "2.1.295" };
+	const prefix = [user("u", null, "before retry"), assistant("old", "u", "finished turn")];
+	const rows = [...prefix, retry, compact("boundary", "retry"), row("boot", "boundary", "user", bootText(1)), user("after", "boot", "after reset")];
+	const projection = project(rows, "after");
+	assert.deepEqual(projection.missingAncestors, []);
+	assert.equal(projection.highestSeq, 5, "retry metadata allocates no message or seq");
+	assert.equal(projection.windows.length, 2);
+	assert.equal(projection.currentWindowOrdinal, 1);
+	assert.deepEqual(project([...prefix, { ...rows[3]!, logicalParentUuid: "old" }, ...rows.slice(4)], "after"), projection, "metadata leaves all addresses and windows unchanged");
+	assert.doesNotMatch(allItems(projection).map(eventDocument).join("\n"), /PRIVATE_RETRY_PAYLOAD|ECONNRESET|request_retry/);
+	assert.ok((await historyList.execute({}, projection)).ok);
+	const previous = await historyList.execute({ window_id: "@previous" }, projection);
+	assert.ok(previous.ok);
+	assert.match(JSON.stringify(previous), /before retry|finished turn/);
+	assert.ok((await historyRead.execute({ seq: 2 }, projection)).ok);
+	assert.ok((await historyWindows.execute({}, projection, sessionId)).ok);
+	assert.deepEqual(project(rows, "after"), projection, "reload preserves seq");
+	assert.deepEqual(project([...prefix, { ...retry, subtype: "future_metadata" }, ...rows.slice(3)], "after"), projection, "metadata does not depend on a subtype whitelist");
+	const withBody = project([...prefix, { ...retry, content: "visible system notice" }], "retry");
+	assert.match(allItems(withBody).map(eventDocument).join("\n"), /visible system notice/, "a body is read regardless of subtype");
+	assert.throws(() => project([...prefix, row("broken", "old", "system", { invalid: true })], "broken"), /invalid Claude transcript message content/);
+});
+
 test("Claude resolves forward persisted ancestry without renumbering or using later rewritten parent versions", () => {
 	const notice = row("notice", "attachment", "system", "hook notice");
 	const attachment = { type: "attachment", uuid: "attachment", parentUuid: "u", sessionId };

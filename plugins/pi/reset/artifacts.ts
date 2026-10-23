@@ -19,10 +19,10 @@ export function isCarriedInputEntry(entry: SessionEntry): boolean {
 }
 
 /** Advertised size: the description quotes this softer limit so sloppy character counts still fit. */
-export const LAST_WORD_ADVERTISED_CHARS = 250;
+export const LAST_WORD_ADVERTISED_CHARS = 300;
 
 /** A sticky note, not a letter: over this, empty_brain refuses instead of truncating. */
-export const MAX_LAST_WORD_CHARS = 300;
+export const MAX_LAST_WORD_CHARS = 500;
 
 /** How the next window finds the note. */
 export const LAST_WORD_PREFIX = "*You peel a sticky note off your forehead.*\n";

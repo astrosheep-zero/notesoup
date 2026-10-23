@@ -142,9 +142,11 @@ export function resolveClaudeLimits(facts: unknown): ClaudeLimits {
 	if (window !== undefined) {
 		const configured = configuredWindow(settings, env, breakdown.model);
 		const effective = Math.min(configured ?? window, window);
+		const available = effective - CLAUDE_OUTPUT_RESERVE_TOKENS;
+		const threshold = available - CLAUDE_AUTOCOMPACT_BUFFER_TOKENS;
 		const native = autoCompact
-			? effective - CLAUDE_OUTPUT_RESERVE_TOKENS - CLAUDE_AUTOCOMPACT_BUFFER_TOKENS
-			: effective - CLAUDE_OUTPUT_RESERVE_TOKENS;
+			? pct === undefined ? threshold : Math.min(Math.floor(available * (pct / 100)), threshold)
+			: available;
 		return tokenLimits("window", autoCompact, native, resetMargin, warningRunway);
 	}
 

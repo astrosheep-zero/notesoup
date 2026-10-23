@@ -26,7 +26,7 @@ type HookHandler = ($: HookEngine, e: Record<string, unknown>, next: (e: unknown
 /** One measured context plus the undocumented breakdown fields the mod reads. */
 type HookUsageContext = {
   tokens?: number; window?: number; percent?: number;
-  autoCompactThreshold?: number; isAutoCompactEnabled?: boolean; model?: string;
+  breakdown?: { autoCompactThreshold?: number; isAutoCompactEnabled?: boolean; model?: string };
 };
 /** The engine surface the hook actually touches; no live model or user configuration. */
 type HookEngine = {
@@ -40,7 +40,7 @@ type HookEngine = {
     compact: (options: { instructions: string }) => Promise<{ skip?: string; messages?: Array<{ role: string; text: string }> }>;
   };
   settings: { read: () => Promise<unknown> };
-  command: { register: (spec: { name: string; description: string; immediate?: boolean }) => Promise<unknown> };
+  command: { run: (input: { command: string }) => Promise<{ text?: string }>; register: (spec: { name: string; description: string; immediate?: boolean }) => Promise<unknown> };
   clock: { after: (ms: number, callback: () => void | Promise<void>) => unknown };
   prompt: { submit: (input: { text: string }) => Promise<unknown> };
   tool: { register: (spec: HookToolSpec) => Promise<{ tool: string }> };
@@ -86,7 +86,7 @@ function fakeEngine(home: string): { host: HookEngine; registered: HookToolSpec[
       env: { get: async (name) => name === "NOTESOUP_HOME" ? home : undefined },
       session: { id: async () => "hook-session", cwd: async () => home, model: async () => "claude", messages: async () => [], usage: async () => ({ context: {} }), compact: async () => ({ skip: "test default" }) },
       settings: { read: async () => ({}) },
-      command: { register: async (spec) => ({ command: spec.name }) },
+      command: { run: async () => ({}), register: async (spec) => ({ command: spec.name }) },
       clock: { after: () => { throw new Error("test has no pending manual timer") } },
       prompt: { submit: async () => undefined },
       tool: { register: async (spec) => { registered.push(structuredClone(spec)); return { tool: `mcp__notesoup__${spec.name}` }; } },
@@ -215,7 +215,7 @@ function limitPoints(facts: unknown): { source: string; unit: string; autoCompac
   return { source: limits.source, unit: limits.unit, autoCompact: limits.autoCompact, native: limits.native, reset: limits.reset, warn: limits.warn };
 }
 
-// Claude compacts at min(floor((W-20000)*pct/100), W-20000-13000); notesoup resets 8192 below
+// Claude compacts at min(floor((W-20000)*pct/100), W-20000-13000); warning math uses the old reset intermediate 8192 below
 // that and warns 16384 earlier. These are the numbers, not prose.
 const CLAUDE_200K = { native: 167_000, reset: 158_808, warn: 142_424 };
 
@@ -240,8 +240,18 @@ test("Claude limits derive from Claude's own auto-compact point, never a fixed p
     settings: { autoCompactWindow: 500_000, modelSettings: { "claude-opus-4-6": { autoCompactWindow: 300_000 } } },
   }).native, 267_000, "the smallest configured window wins");
 
+  for (const [pctOverride, native, warn] of [["65", 117_000, 92_424], ["75", 135_000, 110_424]] as const) {
+    assert.equal(resolveClaudeLimits({ ...fromBreakdown, env: { pctOverride } }).warn, warn);
+    const fallback = resolveClaudeLimits({ usage: { window: 200_000 }, env: { pctOverride, autoCompactWindow: "200000" } });
+    assert.equal(fallback.source, "window");
+    assert.equal(fallback.native, native);
+    assert.equal(fallback.warn, warn);
+  }
+  for (const pctOverride of ["0", "101", "abc", "", "96"])
+    assert.equal(resolveClaudeLimits({ usage: { window: 200_000 }, env: { pctOverride } }).native, 167_000);
   // Auto-compact off: the point moves to the hard window, and the margins stay.
   const offSettings = { usage: { tokens: 171_808, window: 200_000 }, settings: { autoCompactEnabled: false } };
+  assert.deepEqual(limitPoints({ ...offSettings, env: { pctOverride: "65" } }), { source: "window", unit: "tokens", autoCompact: false, native: 180_000, reset: 171_808, warn: 155_424 }, "disabled auto-compaction ignores pct");
   assert.deepEqual(limitPoints(offSettings), { source: "window", unit: "tokens", autoCompact: false, native: 180_000, reset: 171_808, warn: 155_424 });
   assert.deepEqual(limitPoints({ usage: { window: 200_000 }, env: { disableAutoCompact: "1" } }), { source: "window", unit: "tokens", autoCompact: false, native: 180_000, reset: 171_808, warn: 155_424 });
   assert.deepEqual(limitPoints({ usage: { window: 200_000 }, breakdown: { isAutoCompactEnabled: false } }), { source: "window", unit: "tokens", autoCompact: false, native: 180_000, reset: 171_808, warn: 155_424 });
@@ -419,8 +429,7 @@ test("Claude Mod with NOTESOUP_DISABLED registers nothing and passes every event
 
   const completed = await handlers.get("turn.complete")!(host, {}, async () => ({ done: true }));
   assert.deepEqual(completed, { done: true }, "turn.complete passes through without a reset");
-  const measured = await handlers.get("session.measure")!(host, {}, async () => ({ marks: true }));
-  assert.deepEqual(measured, { marks: true }, "session.measure passes through without a reset");
+  assert.equal(handlers.has("session.measure"), false, "measure has no reset hook");
   assert.equal(helperCalls, 0, "the helper never runs while disabled");
   const event = { text: "continue", context: ["upstream"] };
   assert.equal(await handlers.get("prompt.submit")!(host, event, async (e) => e), event);
@@ -548,14 +557,15 @@ test("Claude Mod hook delivers the helper's shared text, and marks only a refusa
 });
 
 
-test("Claude Mod resets at Claude's resolved point after the turn, retains one fresh boot and deduplicates measure", async (t) => {
+test("Claude Mod crosses old reset thresholds without clearing and retains one fresh boot on request", async (t) => {
   const home = mkdtempSync(join(tmpdir(), "claude-reset-home-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const { host, registered, notifications } = fakeEngine(home);
   const handlers = new Map<string, HookHandler>();
   (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
   const invoke = (name: string, event: Record<string, unknown> = {}) => handlers.get(name)!(host, event, async () => ({ sentinel: name }));
-  // A 200K window resolves to Claude's 167 000 point, so notesoup resets 8 192 below it.
+  assert.equal(handlers.has("session.measure"), false, "measure has no reset hook");
+  // The old proactive point was 158808; crossing it must no longer clear.
   let tokens: number | undefined = 140_000;
   let compactions = 0;
   let kept: Array<{ role: string; text: string }> = [];
@@ -574,13 +584,12 @@ test("Claude Mod resets at Claude's resolved point after the turn, retains one f
   assert.equal(initial.blocks.length, 1, "below the warn point no warning joins the boot");
   assert.match(initial.blocks[0]!.text, /Current context window id: claude:hook-session:0/);
   await invoke("turn.start");
-  await invoke("session.measure");
   await invoke("turn.complete");
   assert.equal(compactions, 0, "140000 is below every resolved point");
   host.session.usage = async () => { throw new Error("usage unavailable"); };
-  await invoke("session.measure");
   await invoke("turn.complete");
-  assert.equal(notifications.filter((text) => text.includes("Brain fullness unknown")).length, 1, "usage failure logs once per session");
+  await invoke("tool.call", { tool: "Read" });
+  assert.equal(notifications.filter((text) => text.includes("Brain fullness unknown")).length, 1, "warning usage failure logs once per session");
   host.session.usage = async () => measured();
   await dispatch({ op: "tool", tool: "notes_write", identity: { ...identity, home, cwd: home, sessionId: "hook-session" }, params: { address: "@human/MAP.md", content: "FRESH_NOTES_AT_RESET" } });
   await invoke("turn.start");
@@ -589,9 +598,16 @@ test("Claude Mod resets at Claude's resolved point after the turn, retains one f
   assert.equal(compactions, 0, "one token below the resolved reset point");
   await invoke("turn.start");
   tokens = 158_808;
-  await invoke("session.measure");
   assert.equal(compactions, 0, "measure cannot compact under a running turn");
   assert.deepEqual(await invoke("turn.complete"), { sentinel: "turn.complete" });
+  assert.equal(compactions, 0, "the old reset point no longer clears at turn completion");
+  tokens = 190_000;
+  await invoke("turn.start");
+  await invoke("turn.complete");
+  assert.equal(compactions, 0, "even beyond the native threshold, only a native auto event or explicit request resets");
+  await invoke("turn.start");
+  await invoke("command.run", { command: "empty" });
+  await invoke("turn.complete");
   assert.equal(compactions, 1);
   assert.equal(kept.length, 2, "the reset is the notes boot followed by the one reset message");
   assert.equal(kept[0]!.role, "user");
@@ -600,45 +616,110 @@ test("Claude Mod resets at Claude's resolved point after the turn, retains one f
   assert.match(kept[0]!.text, /FRESH_NOTES_AT_RESET/);
   assert.doesNotMatch(kept[0]!.text, /OLD_SECRET/);
   assert.ok(FORCED_CONTINUATIONS.includes(kept[1]!.text), "the handoff comes from the shared forced pool");
-  await invoke("session.measure");
   assert.equal(compactions, 1, "invalidated tokens cannot immediately reset twice");
   const upstream = { blocks: [{ name: "unrelated", text: "leave this alone" }], sentinel: "kept" };
   assert.deepEqual(await handlers.get("prompt.context")!(host, {}, async () => upstream), upstream, "the retained boot is not injected a second time");
 });
 
-test("Claude Mod headless detection skips compaction and logs once", async (t) => {
+test("Claude headless resets through its own manual command, retries failure and keeps user compact vetoed", async (t) => {
   const home = mkdtempSync(join(tmpdir(), "claude-headless-home-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const { host, notifications } = fakeEngine(home);
   const handlers = new Map<string, HookHandler>();
   (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
-  const invoke = (name: string, e: Record<string, unknown> = {}) => handlers.get(name)!(host, e, async () => ({ sentinel: name }));
-  let tokens: number | undefined;
+  const invoke = (name: string, e: Record<string, unknown> = {}) => handlers.get(name)!(host, e, async () => ({}));
+  let kept: Array<{ role: string; text: string }> = [];
   let attempts = 0;
-  host.session.usage = async () => ({ context: { tokens, window: 200_000 } });
-  host.session.compact = async () => { attempts++; throw new Error("not available in a headless (-p / SDK) session yet"); };
+  let reject = true;
+  host.session.messages = async () => kept;
+  host.session.compact = async () => { throw new Error("headless must not call session.compact"); };
+  host.command.run = async ({ command }) => {
+    attempts++;
+    assert.equal(command, "compact");
+    if (reject) throw new Error("command unavailable");
+    return { text: "Not compacted" };
+  };
+  // Exercise the user veto before the internally owned command is in flight.
   await invoke("session.start", { cwd: home, isInteractive: false });
-  await invoke("turn.start");
+  assert.match(JSON.stringify(await invoke("session.compact", { trigger: "manual" })), /use \/fresh-window/);
+  await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", last_word: "STICKY", tool_use_id: "reset" });
   await invoke("turn.complete");
-  await invoke("session.measure");
-  assert.equal(attempts, 0, "no measured tokens means no automatic reset");
-  tokens = 190_000;
-  await invoke("turn.start");
-  assert.deepEqual(await invoke("turn.complete"), { sentinel: "turn.complete" }, "a rejection does not break the turn chain");
-  await invoke("session.measure");
+  assert.equal(attempts, 1);
+  assert.ok(notifications.some(x => x.includes("command unavailable")));
+  reject = false;
   await invoke("turn.complete");
-  assert.equal(attempts, 0, "headless sessions skip the unsupported capability from startup");
-  assert.deepEqual(notifications, ["🥣 No brain when headless"]);
-  const manual = await invoke("command.run", { command: "empty" }) as { text: string };
-  assert.match(manual.text, /No brain when headless/);
-  const tool = await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "headless" }) as { result: string; isError?: boolean };
-  assert.equal(tool.isError, true);
-  assert.match(tool.result, /No brain when headless/);
-  assert.equal(notifications.length, 1);
-  const boot = await handlers.get("prompt.context")!(host, {}, async () => ({ blocks: [] })) as { blocks: Array<{ text: string }> };
-  assert.match(boot.blocks[0]!.text, /Current context window id: claude:hook-session:0/);
-  const event = { text: "continue" };
-  assert.equal(await handlers.get("prompt.submit")!(host, event, async (e) => e), event, "headless prompts never warn");
+  assert.equal(attempts, 2, "failed requests remain pending");
+  assert.ok(notifications.some(x => x.includes("Brain not emptied")));
+  // Core dispatches the admitted manual event within our command hook.
+  host.command.run = async ({ command }) => {
+    attempts++;
+    const user = await handlers.get("command.run")!(host, { command, origin: { kind: "user" } }, async () => invoke("session.compact", { trigger: "manual" }));
+    assert.match(JSON.stringify(user), /use \/fresh-window/, "a pending reset does not admit the user's command");
+    await handlers.get("command.run")!(host, { command, origin: { kind: "plugin", name: "notesoup" } }, async () => {
+      kept = (await invoke("session.compact", { trigger: "manual" }) as { messages: typeof kept }).messages;
+      return {};
+    });
+    return {};
+  };
+  await invoke("turn.complete");
+  assert.match(kept[0]!.text, /claude:hook-session:1/);
+  assert.equal(kept[2]!.text, "*You peel a sticky note off your forehead.*\nSTICKY");
+  await invoke("turn.complete");
+  assert.equal(attempts, 3, "success clears pending exactly once");
+  assert.match(JSON.stringify(await invoke("session.compact", { trigger: "manual" })), /use \/fresh-window/);
+  await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "reset2" });
+  await invoke("turn.complete");
+  assert.match(kept[0]!.text, /claude:hook-session:2/);
+  assert.equal(kept.length, 2, "sticky is consumed once");
+});
+
+test("Claude headless warns without proactive resets and supports both manual aliases", async (t) => {
+  const home = mkdtempSync(join(tmpdir(), "claude-headless-auto-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const { host } = fakeEngine(home);
+  const handlers = new Map<string, HookHandler>();
+  (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
+  const invoke = (name: string, e: Record<string, unknown> = {}) => handlers.get(name)!(host, e, async () => ({}));
+  let tokens: number | undefined = CLAUDE_200K.warn;
+  let attempts = 0, prompts = 0;
+  const timers: Array<() => void | Promise<void>> = [];
+  host.session.usage = async () => ({ context: { tokens, window: 200_000 } });
+  host.clock.after = (_ms, callback) => { timers.push(callback); };
+  host.prompt.submit = async () => { prompts++; await invoke("turn.start"); await invoke("turn.complete"); };
+  host.command.run = async ({ command }) => {
+    attempts++;
+    await handlers.get("command.run")!(host, { command, origin: { kind: "plugin", name: "notesoup" } }, async () => {
+      const result = await invoke("session.compact", { trigger: "manual" }) as { messages: Array<{ text: string }> };
+      assert.match(result.messages[0]!.text, new RegExp(`claude:hook-session:${attempts}`));
+      tokens = undefined;
+      return {};
+    });
+    return {};
+  };
+  await invoke("session.start", { cwd: home, isInteractive: false });
+  const warning = await handlers.get("prompt.submit")!(host, { text: "continue" }, async e => e) as { context: string[] };
+  assert.deepEqual(warning.context, [CLAUDE_WARNING_PROMPT]);
+  tokens = CLAUDE_200K.reset;
+  await invoke("turn.start");
+  assert.equal(attempts, 0);
+  await invoke("turn.complete");
+  assert.equal(attempts, 0, "the old reset threshold and turn completion do not clear");
+  await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "explicit" });
+  await invoke("turn.complete");
+  assert.equal(attempts, 1);
+  for (const command of ["empty", "fresh-window"]) {
+    assert.deepEqual(await invoke("command.run", { command }), { text: "🥣 Dumping Brain" });
+    await Promise.resolve();
+    await timers.shift()!();
+  }
+  assert.equal(attempts, 3);
+  assert.equal(prompts, 2, "each idle alias schedules one close-out, not a summarizer");
+  host.prompt.submit = async () => { throw new Error("close-out unavailable"); };
+  await invoke("command.run", { command: "empty" });
+  await Promise.resolve();
+  await timers.shift()!();
+  await invoke("turn.complete");
+  assert.equal(attempts, 4, "a failed close-out also leaves the reset pending");
 });
 
 test("Claude Mod keeps its window numbering from a boot written before the tag rename", async (t) => {
@@ -679,6 +760,7 @@ test("Claude Mod refuses to wipe on boot failure and can retry without advancing
   let result: Awaited<ReturnType<HookEngine["session"]["compact"]>> = {};
   host.session.compact = async ({ instructions }) => result = await invoke("session.compact", { trigger: "plugin", instructions }) as typeof result;
   await invoke("turn.start");
+  await invoke("command.run", { command: "empty" });
   await invoke("turn.complete");
   assert.match(result.skip!, /notes didn't load/);
   assert.equal(result.messages, undefined, "a failed builder must veto rather than fall through to summary");
@@ -721,7 +803,7 @@ test("Claude Mod manual reset uses one hidden close-out turn, then recovers its 
   assert.deepEqual(await invoke("command.run", { command: "empty-brain" }), {}, "the retired spelling passes through instead of resetting");
   assert.equal(timers.length, 0);
   const command = await invoke("command.run", { command: "empty" }) as { text: string };
-  assert.match(command.text, /Brain being emptied/);
+  assert.equal(command.text, "🥣 Dumping Brain");
   await Promise.resolve();
   assert.equal(compactions, 0, "command.run must not call compact under its held turn");
   assert.equal(timers.length, 1);
@@ -776,6 +858,36 @@ test("Claude Mod delivers one warning per window through main tools or prompt su
   assert.deepEqual((await context()).blocks, [], "no notesoup:warning block is ever added to prompt context");
 });
 
+test("Claude warnings read the public nested breakdown and apply pct even without its threshold", async (t) => {
+  for (const threshold of [167_000, undefined]) {
+    const { host, invoke } = await retainedFixture(t);
+    const env = host.env.get;
+    host.env.get = async name => name === "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE" ? "65" : name === "CLAUDE_CODE_AUTO_COMPACT_WINDOW" ? "200000" : env(name);
+    let tokens = 92_423;
+    host.session.usage = async options => ({ context: {
+      tokens, window: 200_000,
+      ...(options?.breakdown ? { breakdown: { autoCompactThreshold: threshold, isAutoCompactEnabled: true, model: "claude" } } : {}),
+    } });
+    const run = host.process.run;
+    host.process.run = async (argv, init) => {
+      const request = JSON.parse(init?.stdin ?? "{}");
+      if (request.op === "limits") assert.deepEqual(request.facts.breakdown, { ...(threshold === undefined ? {} : { autoCompactThreshold: threshold }), isAutoCompactEnabled: true, model: "claude" });
+      return run(argv, init);
+    };
+    let resets = 0;
+    host.session.compact = async () => { resets++; return {}; };
+    const submit = () => invoke("prompt.submit", { text: "continue" }, {}, async e => e) as Promise<{ context?: string[] }>;
+    assert.equal((await submit()).context, undefined);
+    tokens++;
+    assert.deepEqual((await submit()).context, [CLAUDE_WARNING_PROMPT]);
+    assert.equal((await submit()).context, undefined, "one warning per window");
+    await invoke("turn.complete");
+    assert.equal(resets, 0, "warning and turn completion never proactively clear");
+    assert.equal((await invoke("session.compact", { trigger: "auto" }) as { messages: unknown[] }).messages.length, 2);
+    assert.deepEqual((await submit()).context, [CLAUDE_WARNING_PROMPT], "native auto starts a new warning window");
+  }
+});
+
 test("Claude Mod consumes a warning only after an accepted delivery and ignores stale generations", async (t) => {
   const { host, invoke } = await retainedFixture(t);
   const texts = await dispatch({ op: "texts" }) as { warning: string };
@@ -805,7 +917,7 @@ test("Claude Mod consumes a warning only after an accepted delivery and ignores 
   assert.equal(await invoke("prompt.submit", event, event), event, "only an accepted delivery consumes the new window");
 });
 
-test("Claude Mod moves the reset point to the hard window when auto-compact is off", async (t) => {
+test("Claude Mod keeps warning timing when auto-compact is off without clearing at the old reset point", async (t) => {
   const home = mkdtempSync(join(tmpdir(), "claude-off-home-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const { host, notifications } = fakeEngine(home);
@@ -813,22 +925,26 @@ test("Claude Mod moves the reset point to the hard window when auto-compact is o
   const handlers = new Map<string, HookHandler>();
   (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
   const invoke = (name: string, e: Record<string, unknown> = {}) => handlers.get(name)!(host, e, async () => ({}));
-  let tokens = 171_807;
+  let tokens = 155_423;
   let compactions = 0;
   host.session.usage = async () => ({ context: { tokens, window: 200_000 } });
   host.session.compact = async ({ instructions }) => { compactions++; return await invoke("session.compact", { trigger: "plugin", instructions }) as { skip?: string; messages?: Array<{ role: string; text: string }> }; };
   await invoke("session.start", { cwd: home, isInteractive: true });
   await invoke("turn.start");
   await invoke("turn.complete");
-  assert.equal(compactions, 0, "171807 is below the hard-window point");
+  const submit = () => handlers.get("prompt.submit")!(host, { text: "continue" }, async e => e) as Promise<{ context?: string[] }>;
+  assert.equal((await submit()).context, undefined);
+  tokens = 155_424;
+  assert.deepEqual((await submit()).context, [CLAUDE_WARNING_PROMPT], "the hard-window warning point stays 180000 - 8192 - 16384");
+  assert.equal(compactions, 0);
   await invoke("turn.start");
   tokens = 171_808;
   await invoke("turn.complete");
-  assert.equal(compactions, 1, "200000 - 20000 - 8192");
+  assert.equal(compactions, 0, "the former 200000 - 20000 - 8192 reset point is not a clear trigger");
   assert.deepEqual(notifications.filter((text) => text.includes("unavailable") || text.includes("Couldn't")), [], "a resolvable configuration logs no failure");
 });
 
-test("Claude Mod stops the automatic reset and the manual command under DISABLE_COMPACT", async (t) => {
+test("Claude Mod suppresses warnings and explicit reset requests under DISABLE_COMPACT", async (t) => {
   const home = mkdtempSync(join(tmpdir(), "claude-disabled-home-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const { host, notifications } = fakeEngine(home);
@@ -851,16 +967,14 @@ test("Claude Mod stops the automatic reset and the manual command under DISABLE_
   assert.match(tool.result, /DISABLE_COMPACT/);
   assert.equal(timers.length, 0, "no close-out turn is queued");
   await invoke("turn.start");
-  await invoke("session.measure");
   await invoke("turn.complete");
-  await invoke("session.measure");
-  assert.equal(compactions, 0, "the automatic reset is off and does not retry");
+  assert.equal(compactions, 0, "disabled reset requests never run");
   assert.equal(notifications.length, 1, "detection logs once, not per turn");
   const upstream = { result: "upstream", context: ["other plugin"] };
   assert.equal(await handlers.get("tool.call")!(host, { tool: "Read" }, async () => upstream), upstream, "DISABLE_COMPACT also suppresses warnings");
 });
 
-test("Claude Mod skips the automatic reset when thresholds cannot be resolved", async (t) => {
+test("Claude Mod skips the warning when thresholds cannot be resolved", async (t) => {
   const home = mkdtempSync(join(tmpdir(), "claude-nolimits-home-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const { host, notifications } = fakeEngine(home);
@@ -873,9 +987,8 @@ test("Claude Mod skips the automatic reset when thresholds cannot be resolved", 
   host.session.compact = async () => { compactions++; return {}; };
   await invoke("session.start", { cwd: home, isInteractive: true });
   await invoke("turn.start");
-  await invoke("session.measure");
   await invoke("turn.complete");
-  await invoke("session.measure");
+  await invoke("tool.call", { tool: "Read" });
   assert.equal(compactions, 0, "an unresolvable point never resets");
   assert.equal(notifications.filter((text) => text.includes("Brain size unknown")).length, 1, "one line, not one per turn");
 });
@@ -910,9 +1023,9 @@ test("Claude Mod keeps the turn latch through subagent turns", async (t) => {
 	host.session.compact = async ({ instructions }) => { compactions++; return await invoke("session.compact", { trigger: "plugin", instructions }) as { skip?: string; messages?: Array<{ role: string; text: string }> }; };
 	await invoke("session.start", { cwd: home, isInteractive: true });
 	await invoke("turn.start");
+	await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "explicit" });
 	await invoke("turn.start", { agentId: "sub-1" });
 	await invoke("turn.complete", { agentId: "sub-1" });
-	await invoke("session.measure");
 	assert.equal(compactions, 0, "a subagent turn cannot release the main turn's latch");
 	await invoke("turn.complete");
 	assert.equal(compactions, 1, "the main turn still resets at its own end");
@@ -932,11 +1045,12 @@ test("Claude Mod treats DISABLE_COMPACT=off as not disabled", async (t) => {
 	await invoke("session.start", { cwd: home, isInteractive: true });
 	assert.deepEqual(notifications.filter((text) => text.includes("DISABLE_COMPACT")), [], "an explicit off is not a disable");
 	await invoke("turn.start");
+	await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "explicit" });
 	await invoke("turn.complete");
-	assert.equal(compactions, 1, "the automatic reset still runs");
+	assert.equal(compactions, 1, "the explicit reset still runs");
 });
 
-test("Claude Mod retries an unresolvable threshold inside the same window", async (t) => {
+test("Claude Mod retries an unresolvable warning threshold inside the same window", async (t) => {
 	const home = mkdtempSync(join(tmpdir(), "claude-retry-home-"));
 	t.after(() => rmSync(home, { recursive: true, force: true }));
 	const { host } = fakeEngine(home);
@@ -956,12 +1070,15 @@ test("Claude Mod retries an unresolvable threshold inside the same window", asyn
 	await invoke("session.start", { cwd: home, isInteractive: true });
 	await invoke("turn.start");
 	await invoke("turn.complete");
+	await handlers.get("prompt.submit")!(host, { text: "continue" }, async e => e);
 	assert.equal(limitsCalls, 1, "the first limits round trip failed");
 	assert.equal(compactions, 0, "one failed resolution does not disable the window");
 	await invoke("turn.start");
 	await invoke("turn.complete");
+	const retried = await handlers.get("prompt.submit")!(host, { text: "continue" }, async e => e) as { context: string[] };
+	assert.deepEqual(retried.context, [CLAUDE_WARNING_PROMPT]);
 	assert.equal(limitsCalls, 2, "the retry runs in the same window");
-	assert.equal(compactions, 1, "the retried resolution resets at the turn's end");
+	assert.equal(compactions, 0, "warning threshold resolution never resets");
 });
 
 /** Start from a real retained boot, as after notesoup reset or a plugin reload. */
@@ -1006,7 +1123,6 @@ test("Claude empty_brain defers until main turn completion, carries last_word, a
   assert.equal(accepted.isError, undefined);
   assert.match(accepted.result, /End your turn now/);
   await call({ last_word: "must not replace the first request" });
-  await invoke("session.measure");
   await invoke("turn.complete", { agentId: "child" });
   assert.equal(resets.length, 0, "neither tool execution nor a child completion resets a running main turn");
   await invoke("turn.complete");
@@ -1024,13 +1140,23 @@ test("Claude empty_brain defers until main turn completion, carries last_word, a
   assert.ok(FORCED_CONTINUATIONS.includes(forced.messages[1]!.text));
 });
 
+test("Claude empty_brain accepts 500 code points", async (t) => {
+  const { host, invoke } = await retainedFixture(t);
+  host.session.usage = async () => ({ context: { tokens: 100, window: 200_000 } });
+  const sticky = "🐟".repeat(500);
+  const accepted = await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "limit-wipe", last_word: `  ${sticky}  ` }) as { isError?: boolean };
+  assert.equal(accepted.isError, undefined);
+  const result = await invoke("session.compact", { trigger: "auto" }) as { messages: Array<{ text: string }> };
+  assert.equal(result.messages[2]!.text, `*You peel a sticky note off your forehead.*\n${sticky}`);
+});
+
 test("Claude empty_brain refuses unsupported calls without queuing a reset", async (t) => {
   const { host, invoke } = await retainedFixture(t);
   let resets = 0;
   host.session.compact = async () => { resets++; return {}; };
   await invoke("turn.start");
   const call = (params: Record<string, unknown>) => invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "bad-wipe", ...params }) as Promise<{ result: string; isError?: boolean }>;
-  for (const [params, reason] of [[{ agentId: "child" }, /only the main agent/], [{ last_word: "x".repeat(301) }, /Shorten it/], [{ last_word: 7 }, /must be a string/]] as const) {
+  for (const [params, reason] of [[{ agentId: "child" }, /only the main agent/], [{ last_word: "x".repeat(501) }, /Shorten it/], [{ last_word: 7 }, /must be a string/]] as const) {
     const refused = await call(params);
     assert.equal(refused.isError, true);
     assert.match(refused.result, reason);
@@ -1050,7 +1176,6 @@ test("Claude asks for one handoff per compaction and reuses it when the same win
   };
   // Every read path stays pure: no boot, warning, context, or measure draws a handoff.
   await invoke("prompt.context", {}, { blocks: [] });
-  await invoke("session.measure");
   await invoke("turn.start");
   await invoke("turn.complete");
   assert.equal(draws.length, 0, "only a reset draws, never a read");
@@ -1067,7 +1192,7 @@ test("Claude asks for one handoff per compaction and reuses it when the same win
     }
     return { skip: "test default" };
   };
-  assert.match(((await invoke("command.run", { command: "fresh-window", args: "" })) as { text: string }).text, /Brain being emptied/);
+  assert.equal(((await invoke("command.run", { command: "fresh-window", args: "" })) as { text: string }).text, "🥣 Dumping Brain");
   await Promise.resolve();
   await timers.shift()!();
   await invoke("turn.complete");
@@ -1263,6 +1388,7 @@ test("Claude session.end cannot be undone by an in-flight old reset", async (t) 
     await hold;
     return result;
   };
+  await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "in-flight" });
   const finishing = invoke("turn.complete");
   await ready;
   await invoke("session.end", { reason: "clear", sessionId: "hook-session" });

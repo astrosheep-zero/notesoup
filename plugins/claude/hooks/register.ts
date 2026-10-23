@@ -8,7 +8,7 @@ const OUTPUT_LIMIT = 1024 * 1024
 type Identity = { home: string; sessionId: string; cwd: string; agent: string; model: string }
 type SchemaRow = { name: string; description: string; inputSchema: Record<string, unknown> }
 type HistorySource = { sessionId: string; transcriptPath: string; headUuid?: string }
-type Engine = Pick<EngineInterface, "process" | "session" | "ui" | "clock" | "prompt" | "env" | "settings">
+type Engine = Pick<EngineInterface, "process" | "session" | "ui" | "clock" | "prompt" | "env" | "settings" | "command">
 /** The measured context, as much of it as the engine reported. */
 type ContextUsage = { tokens?: number; window?: number; percent?: number }
 /** Shared reset prose, fetched once per session so Pi and Claude cannot drift apart. */
@@ -20,15 +20,14 @@ type ClaudeLimits = {
 type ResetState = {
   identity?: Identity; history?: HistorySource; historyWindowHead?: string; generation: number; window: number; disabled: boolean; turnRunning: boolean; resetting: boolean
   manualPending: boolean; headless: boolean; usageFailureLogged: boolean; preparedBoot?: string; retainedBoot?: string
-  toolResetRequested?: boolean; lastWord?: string
+  toolResetRequested?: boolean; lastWord?: string; manualCompacting?: boolean
   continuation?: string; continuationWindow?: number
   compactDisabled: boolean; limitsFailureLogged: boolean; limitsAttempts: number; limitsWindow: number
   limits?: ClaudeLimits; warnedWindow?: number; warningPending?: number; texts?: SharedTexts; settingsFailureLogged: boolean
 }
-const HEADLESS = "No brain when headless"
 const COMPACT_DISABLED = "Brain can't be emptied with DISABLE_COMPACT"
 const NOTESOUP_DISABLED = "Notesoup is off with NOTESOUP_DISABLED"
-const THRESHOLDS_UNAVAILABLE = "Brain size unknown · no automatic emptying"
+const THRESHOLDS_UNAVAILABLE = "Brain size unknown · no budget warning"
 const SETTINGS_UNAVAILABLE = "Notesoup settings unreadable · using the default flush margins"
 /** Bounded retries: a transient helper failure must not disable thresholds for a whole window. */
 const MAX_LIMITS_ATTEMPTS = 3
@@ -130,15 +129,15 @@ async function contextUsage($: Engine, state: ResetState): Promise<ContextUsage 
   } catch {
     if (!state.usageFailureLogged) {
       state.usageFailureLogged = true
-      log($, "Brain fullness unknown · no automatic emptying")
+      log($, "Brain fullness unknown · no budget warning")
     }
     return undefined
   }
 }
 async function breakdownContext($: Engine): Promise<Record<string, unknown> | undefined> {
   try {
-    const context = (await $.session.usage({ breakdown: "summary" })).context
-    return typeof context === "object" && context !== null ? context as Record<string, unknown> : undefined
+    const breakdown = (await $.session.usage({ breakdown: "summary" })).context.breakdown
+    return typeof breakdown === "object" && breakdown !== null ? breakdown as unknown as Record<string, unknown> : undefined
   } catch { return undefined }
 }
 /** Everything the resolver may read: measured usage plus the raw settings and environment. */
@@ -255,6 +254,7 @@ function forgetSession(state: ResetState) {
   state.historyWindowHead = undefined
   state.window = 0
   state.turnRunning = state.resetting = state.manualPending = state.usageFailureLogged = false
+  state.manualCompacting = false
   state.preparedBoot = state.retainedBoot = undefined
   state.texts = state.limits = undefined
   state.continuation = undefined
@@ -345,8 +345,7 @@ export function register(on: On) {
     keepMemory = envFlag(await $.env.get("NOTESOUP_KEEP_MEMORY").catch(() => undefined))
     await refreshIdentity($, state)
     state.headless = !e.isInteractive
-    if (state.headless) log($, HEADLESS)
-    // Compaction is the capability the reset is built on; without it, automatic resets stop here.
+    // Compaction is the capability explicit resets and budget warnings depend on.
     state.compactDisabled = await compactDisabled($)
     if (state.compactDisabled) log($, COMPACT_DISABLED)
     registered.clear()
@@ -357,7 +356,7 @@ export function register(on: On) {
     const wipe = await $.tool.register({
       name: "empty_brain",
       description: "Clear your in-context memory and start a fresh context window. Your session, notes, and history survive. Pass `last_word` to stick a tiny note on your forehead for after the wipe.",
-      inputSchema: { type: "object", properties: { last_word: { type: "string", description: "A tiny sticky note, at most 250 characters. After the wipe it is slapped on your forehead; longer notes are refused." } }, additionalProperties: false },
+      inputSchema: { type: "object", properties: { last_word: { type: "string", description: "A tiny sticky note, at most 300 characters. After the wipe it is slapped on your forehead; longer notes are refused." } }, additionalProperties: false },
       isDeferred: false,
     } satisfies ToolSpec)
     registered.add(wipe.tool)
@@ -398,30 +397,30 @@ export function register(on: On) {
     if (state.disabled) return result
     if (!await refreshIdentity($, state)) return result
     state.turnRunning = false
-    await maybeReset($, state, true)
-    return result
-  })
-  on("session.measure", async ($, e, next) => {
-    const result = await next(e)
-    if (!state.disabled && await refreshIdentity($, state)) await maybeReset($, state, false)
+    if (state.manualPending) await reset($, state)
     return result
   })
   on("command.run", async ($, e, next) => {
     if (state.disabled) return next(e)
+    // Only our queued native command admits manual compaction. A user's /compact
+    // still reaches the veto, even while a reset is pending.
+    if (e.command === "compact" && state.resetting && state.headless && e.origin.kind === "plugin" && e.origin.name === "notesoup") {
+      state.manualCompacting = true
+      try { return await next(e) } finally { state.manualCompacting = false }
+    }
     if (e.command !== "empty" && e.command !== "fresh-window") return next(e)
     if (!await refreshIdentity($, state)) return { text: "🥣 Different brain now · try /fresh-window again" }
-    if (state.headless) return { text: `🥣 ${HEADLESS}` }
     if (state.compactDisabled) return { text: `🥣 ${COMPACT_DISABLED}` }
     if (state.resetting || state.manualPending) return { text: "🥣 Brain already being emptied" }
     if (state.turnRunning) {
       state.manualPending = true
-      return { text: "🥣 Brain being emptied" }
+      return { text: "🥣 Dumping Brain" }
     }
     // command.run holds a turn even when idle. Start one hidden close-out
     // turn after it returns; turn.complete is the verified self-hook path.
     state.manualPending = true
     manualSignal.wake?.()
-    return { text: "🥣 Brain being emptied" }
+    return { text: "🥣 Dumping Brain" }
   })
   on("session.compact", async ($, e, next) => {
     // Disabled means fully transparent: native compaction runs exactly as if the mod were absent.
@@ -439,11 +438,11 @@ export function register(on: On) {
       }
       return result
     }
-    // Native compaction never runs the summarizer while notesoup is on: manual and
-    // precompute are vetoed, an automatic compaction becomes the notes-only reset.
-    if (e.trigger === "manual") return { skip: "No compacting brains here · use /fresh-window" }
+    // Native compaction never runs the summarizer while notesoup is on: user
+    // manual and precompute are vetoed; auto becomes the notes-only reset.
+    const own = state.resetting && identity !== undefined && (e.trigger === "plugin" || (e.trigger === "manual" && state.manualCompacting === true))
+    if (e.trigger === "manual" && !own) return { skip: "No compacting brains here · use /fresh-window" }
     if (e.trigger === "precompute") return { skip: "No precomputing brains here" }
-    const own = state.resetting && e.trigger === "plugin" && identity !== undefined
     if (!own && e.trigger !== "auto") return passThrough()
     if (identity === undefined) return passThrough()
     const built = await resetMessages($, state, identity)
@@ -506,12 +505,11 @@ async function callNotesTool($: Engine, state: ResetState, e: ToolCallInput): Pr
   const name = tool.slice(PREFIX.length)
   if (name === "empty_brain") {
     if (agentId !== undefined) return errorResult("only the main agent can empty this brain")
-    if (state.headless) return errorResult(HEADLESS)
     if (state.compactDisabled) return errorResult(COMPACT_DISABLED)
     if (params.last_word !== undefined && typeof params.last_word !== "string") return errorResult("last_word must be a string")
     const lastWord = typeof params.last_word === "string" ? params.last_word.trim() || undefined : undefined
     const length = lastWord ? Array.from(lastWord).length : 0
-    if (length > 300) return errorResult(`last_word is ${length} characters; the sticky note holds 300. Shorten it and call again.`)
+    if (length > 500) return errorResult(`last_word is ${length} characters; the sticky note holds 500. Shorten it and call again.`)
     if (!state.toolResetRequested) {
       state.toolResetRequested = true
       state.lastWord = lastWord
@@ -531,7 +529,7 @@ async function callNotesTool($: Engine, state: ResetState, e: ToolCallInput): Pr
 
 /** Read the warning without consuming this window's delivery. */
 async function warningText($: Engine, state: ResetState): Promise<string | undefined> {
-  if (state.disabled || state.headless || state.compactDisabled || !state.identity || state.warnedWindow === state.window || state.warningPending === state.window) return undefined
+  if (state.disabled || state.compactDisabled || !state.identity || state.warnedWindow === state.window || state.warningPending === state.window) return undefined
   const generation = state.generation
   const usage = await contextUsage($, state)
   if (generation !== state.generation || usage === undefined) return undefined
@@ -545,7 +543,7 @@ async function warningText($: Engine, state: ResetState): Promise<string | undef
 
 /** Reserve across next(), but consume only context the chain actually accepted. */
 async function withWarning<T extends { context?: readonly string[]; drop?: string; deny?: string }>($: Engine, state: ResetState, deliver: (warning?: string) => T | Promise<T>): Promise<T> {
-  if (state.disabled || state.headless || state.compactDisabled || !await refreshIdentity($, state)) return deliver()
+  if (state.disabled || state.compactDisabled || !await refreshIdentity($, state)) return deliver()
   const generation = state.generation, window = state.window
   const warning = await warningText($, state)
   if (warning === undefined || generation !== state.generation || window !== state.window || state.warnedWindow === window || state.warningPending === window) return deliver()
@@ -600,7 +598,6 @@ async function finishManual($: Engine, state: ResetState, signal: { wake?: () =>
       const texts = await loadTexts($, state)
       if (generation !== state.generation) return
       if (texts?.warning === undefined) {
-        state.manualPending = false
         log($, "Brain still full: the close-out prompt didn't load")
         return
       }
@@ -608,56 +605,47 @@ async function finishManual($: Engine, state: ResetState, signal: { wake?: () =>
     }
   } catch {
     if (generation === state.generation) {
-      state.manualPending = false
       log($, "Brain still full: the close-out turn didn't start")
     }
   } finally { armManual($, state, signal) }
 }
 
 // The sandbox permits $ forwarding only to file-top-level helpers.
-async function maybeReset($: Engine, state: ResetState, complete: boolean) {
-  if (!state.identity || state.resetting || state.headless || state.compactDisabled) return
-  const generation = state.generation
-  const usage = await contextUsage($, state)
-  if (generation !== state.generation || state.turnRunning) return
-  let due = complete && state.manualPending
-  if (!due && usage !== undefined) {
-    const limits = await limitsOf($, state, usage)
-    const measured = limits === undefined ? undefined : measuredValue(limits, usage)
-    // Missing measurements do not trigger a reset.
-    if (limits !== undefined && measured !== undefined && measured >= limits.reset) due = true
-  }
-  if (due && generation === state.generation) {
-    state.manualPending = false
-    await reset($, state)
-  }
-}
 async function reset($: Engine, state: ResetState): Promise<void> {
-  if (!state.identity || state.headless || state.resetting) return
+  if (!state.identity || state.compactDisabled || state.resetting) return
   const generation = state.generation
   state.resetting = true
   state.preparedBoot = undefined
   try {
-    const result = await $.session.compact({ instructions: RESET_INSTRUCTIONS })
+    let failure: string | undefined
+    if (state.headless) {
+      const receipt = await $.command.run({ command: "compact" })
+      if (generation !== state.generation) return
+      // A command receipt is not SessionCompacted. Our admitted hook must have
+      // prepared the boot; session.messages() here still reads the completed
+      // turn's snapshot, not the next request's newly compacted context.
+      if (state.preparedBoot === undefined) failure = receipt.text ?? "notes boot was not retained"
+    } else {
+      const result = await $.session.compact({ instructions: RESET_INSTRUCTIONS })
+      failure = result.skip
+    }
     if (generation !== state.generation) return
-    if (result.skip !== undefined || state.preparedBoot === undefined) {
-      log($, `Brain not emptied · ${result.skip ?? "notes boot was not retained"}`)
+    if (failure !== undefined || state.preparedBoot === undefined) {
+      state.manualPending = true
+      log($, `Brain not emptied · ${failure ?? "notes boot was not retained"}`)
       return
     }
     state.retainedBoot = state.preparedBoot
     state.window++
+    state.manualPending = false
     state.toolResetRequested = undefined
     state.lastWord = undefined
     log($, "Brain emptied")
   } catch (error) {
     if (generation !== state.generation) return
     const text = String(error)
-    if (text.includes("headless (-p / SDK)")) {
-      state.headless = true
-      log($, HEADLESS)
-    } else if (/a turn is (running|in flight)/.test(text)) {
-      state.manualPending = true
-    } else {
+    state.manualPending = true
+    if (!/a turn is (running|in flight)/.test(text)) {
       log($, `Brain still full: ${text.replace(/[\r\n].*$/s, "")}`)
     }
   } finally {

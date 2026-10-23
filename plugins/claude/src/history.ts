@@ -56,9 +56,8 @@ function blocksOf(value: unknown): Row[] {
 	});
 }
 function decode(row: Row, seq: number): DecodedHistoryItem[] {
-	// Native duration bookkeeping has a UUID/parent but no message body. Keep its
-	// graph edge, not a fabricated empty message or serialized timing payload.
-	if (row.type === "system" && row.subtype === "turn_duration") return [];
+	// A system record without a body is graph metadata, not a message.
+	if (row.type === "system" && row.content == null) return [];
 	const common = { windowId: "", ...(typeof row.timestamp === "string" ? { createdAt: row.timestamp } : {}) };
 	let blocks: Row[], role: DecodedHistoryItem["role"];
 	if (row.type === "user" || row.type === "assistant") {

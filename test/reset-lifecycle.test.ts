@@ -964,6 +964,19 @@ test("empty_brain trims the last word, refuses an oversized one, and a blank per
 	assert.equal(boundary.entries.filter((entry) => entry.type === "custom_message" && entry.customType === RESET_LAST_WORD_TYPE).length, 0, "a blank last word persists no entry");
 });
 
+test("empty_brain accepts a 500-code-point sticky note without truncation", async () => {
+	assert.equal(MAX_LAST_WORD_CHARS, 500);
+	const h = harness();
+	h.sessionManager.appendMessage({ role: "user", content: [{ type: "text", text: "before reset" }], timestamp: Date.now() });
+	const sticky = "🐟".repeat(500);
+	const accepted = await h.callTool("empty_brain", { last_word: `  ${sticky}  ` });
+	assert.notEqual(accepted.isError, true);
+	const boundary = resultEntries(await h.emit("turn_end", fakeBoundaryEvent()));
+	const entry = boundary.entries.find((row) => row.type === "custom_message" && row.customType === RESET_LAST_WORD_TYPE);
+	assert.ok(entry && entry.type === "custom_message");
+	assert.equal(entry.content, `${LAST_WORD_PREFIX}${sticky}`);
+});
+
 test("empty_brain's schema admits whitespace-wrapped notes and leaves length to the handler", async () => {
 	const parameters = harness().toolParameters("empty_brain");
 	const padded = " ".repeat(300) + "x";

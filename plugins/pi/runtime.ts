@@ -73,10 +73,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 			const marker = branch.find((entry): entry is WindowMarker => isWindowMarker(entry) && entry.data.windowId === windowId);
 			if (!marker || !isCheckpointBackedReset(ctx, marker) || !resetBoundaryCommitted(ctx, marker.id, windowId)) continue;
 			pendingResetNotices.delete(windowId);
-			// The last word already lands as its own visible sticky-note entry; the
-			// committed notice stays a one-line marker instead of repeating it.
-			const forced = markerResetOrigin(marker) === "forced";
-			ctx.ui.notify(forced ? "🥣 Brain forcibly emptied: overflow" : "🥣 Fresh brain", forced ? "warning" : "info");
+			if (markerResetOrigin(marker) === "forced") ctx.ui.notify("🥣 Brain forcibly emptied: overflow", "warning");
 		}
 	};
 	pi.on("turn_start", (_event, ctx) => notifyCommittedResets(ctx));
@@ -189,7 +186,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 				cmdCtx.ui.notify("🥣 Brain already being emptied", "info");
 				return;
 			}
-			cmdCtx.ui.notify("🥣 Brain being emptied", "info");
+			cmdCtx.ui.notify("🥣 Dumping Brain", "info");
 			try {
 				pi.sendMessage({ customType: MANUAL_WIPE_TYPE, content: commandWarningContent(prompt !== undefined ? `/empty ${prompt}` : undefined), display: false }, { triggerTurn: true, deliverAs: "steer" });
 			} catch (error) {

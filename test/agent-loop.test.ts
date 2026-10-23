@@ -184,7 +184,7 @@ async function openFixture(options: {
 	await session.bindExtensions({
 		uiContext: {
 			notify(message: string, type?: "info" | "warning" | "error") {
-				if (message === "🥣 Fresh brain") {
+				if (message === "🥣 Brain forcibly emptied: overflow") {
 					const marker = sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE).at(-1);
 					const windowId = (marker as { data?: { windowId?: string } } | undefined)?.data?.windowId;
 					assert.ok(sessionManager.getBranch().some((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE && (entry.data as { windowId?: string })?.windowId === windowId), "notification follows the reset marker commit");
@@ -264,7 +264,7 @@ function assertUserContent(context: AgentContext | undefined, content: unknown):
 	assert.ok(context?.messages.some((message) => message.role === "user" && JSON.stringify(message.content) === JSON.stringify(content)), "carried input reaches the provider verbatim as user content");
 }
 
-/** The committed-reset success notice: fresh wording for the model's own wipe, forced for system resets. */
+/** Recognize reset completion notices, including the removed normal-reset wording. */
 const isResetSuccessNotice = (notice: string) => notice.includes("🥣 Fresh brain") || notice.includes("🥣 Brain forcibly emptied");
 
 function resetMarkers(fixture: Fixture) {
@@ -467,12 +467,12 @@ test("real AgentSession: final warning survives its reset boundary and notifies 
 		assert.equal(fixture.sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === WARNING_TYPE).length, 1);
 		assert.equal(resetMarkers(fixture).length, 1, "the reset commits in the same boundary as the final warning");
 		assert.equal(fixture.budgetNotices(), 1, "the old-window committed warning reaches the UI after reset");
-		assert.equal(fixture.notices.filter((notice) => notice === "🥣 Fresh brain").length, 1, "reset notification remains intact");
+		assert.equal(fixture.notices.filter(isResetSuccessNotice).length, 0, "normal reset completion stays silent");
 		assert.equal(fixture.notices.some((notice) => notice.includes("Context running low")), false, "early guidance stays silent");
 		await fixture.session.prompt("Continue after reset.");
 		await fixture.session.waitForIdle();
 		assert.equal(fixture.budgetNotices(), 1, "later turns cannot repeat the consumed final warning");
-		assert.equal(fixture.notices.filter((notice) => notice === "🥣 Fresh brain").length, 1, "the prior reset notification is also deduplicated");
+		assert.equal(fixture.notices.filter(isResetSuccessNotice).length, 0, "later turns do not announce normal reset completion");
 	} finally {
 		fixture.close();
 	}
@@ -492,7 +492,7 @@ test("real AgentSession: explicit tiny-session wipe ignores keepRecentTokens and
 		assert.equal(fixture.notices.length, 0, "startup boot is silent");
 		await fixture.session.prompt("OLD_CONTEXT_SENTINEL: retain this only in durable history.");
 		await fixture.session.waitForIdle();
-		assert.deepEqual(fixture.notices.filter(isResetSuccessNotice), ["🥣 Fresh brain"], "the reset notifies once, without repeating the last word");
+		assert.deepEqual(fixture.notices.filter(isResetSuccessNotice), [], "normal reset completion stays silent");
 		assert.equal(fixture.requests.length, 2, "the tool starts exactly one continuation");
 		assert.ok(text(fixture.requests[0]).includes("OLD_CONTEXT_SENTINEL"));
 		assertFreshRequest(fixture, 1, "OLD_CONTEXT_SENTINEL");
@@ -588,7 +588,7 @@ test("real AgentSession: /empty text is carried verbatim and answered after clos
 		const branch = fixture.sessionManager.getBranch();
 		const continuationIndex = branch.findIndex((entry) => entry.type === "custom_message" && entry.customType === CONTINUATION_TYPE);
 		assert.deepEqual(branch.slice(continuationIndex + 1, continuationIndex + 3).map((entry) => entry.type === "custom_message" ? entry.customType : entry.type), ["notesoup/reset-last-word", CARRIED_INPUT_TYPE]);
-		assert.ok(fixture.notices.some(isResetSuccessNotice));
+		assert.equal(fixture.notices.some(isResetSuccessNotice), false);
 	} finally { fixture.close(); }
 });
 
@@ -670,7 +670,7 @@ test("real AgentSession: manual hard-reserve reset stops clean and mixed-tool tu
 			assert.equal(fixture.requests.length, 2);
 			assert.equal(resetMarkers(fixture).length, 1, "the safety wipe is not repeated at settlement");
 			assert.equal(JSON.stringify(fixture.sessionManager.buildSessionProjection().messages).includes("HARD_RESERVE_OLD_SENTINEL"), false);
-			assert.ok(fixture.notices.some(isResetSuccessNotice));
+			assert.equal(fixture.notices.some(isResetSuccessNotice), !mixed, "only forced reset completion notifies");
 			if (mixed) {
 				assert.ok(existsSync(join(fixture.notesRoot, "pi", "session", fixture.sessionManager.getSessionId(), "pressure.md")), "the whole tool batch completes before the cut");
 				assert.equal(fixture.streamSignals.at(-1), true, "Pi's unavoidable tool follow-up is cancelled before provider work");
@@ -735,7 +735,7 @@ test("real AgentSession: streaming /empty steers a close-out and stops at settle
 		await started;
 		await fixture.session.prompt("/empty", { streamingBehavior: "steer" });
 		await fixture.session.prompt("/empty", { streamingBehavior: "followUp" });
-		assert.equal(fixture.notices.filter((notice) => notice.includes("Brain being emptied")).length, 1, "the user is notified once while output is ongoing");
+		assert.equal(fixture.notices.filter((notice) => notice.includes("Dumping Brain")).length, 1, "the user is notified once while output is ongoing");
 		assert.equal(resetMarkers(fixture).length, 0, "the ongoing turn is not interrupted");
 		releaseResponse();
 		await running;
