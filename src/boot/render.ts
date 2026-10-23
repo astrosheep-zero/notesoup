@@ -65,7 +65,7 @@ function notesIndex(snapshot: NotesSnapshot, tools: BootToolNames, agentName: st
 				return title === undefined ? `  ${locator}` : `  ${title}\n  ${locator}`;
 			});
 		if (pinned.length === 0 && fresh.length === 0) continue;
-		const parts = pinned.map((row) => `${row.path === "MAP.md" ? "map" : "cheatsheet"}\n\n${indent(pinnedBodyForBoot(row.address, row.body, row.path === "MAP.md" ? MAP_BOOT_MAX_CHARS : CHEATSHEET_BOOT_MAX_CHARS))}`);
+		const parts = pinned.map((row) => `${row.address}\n\n${indent(pinnedBodyForBoot(row.address, row.body, row.path === "MAP.md" ? MAP_BOOT_MAX_CHARS : CHEATSHEET_BOOT_MAX_CHARS))}`);
 		if (fresh.length > 0) parts.push(`recent\n\n${fresh.join("\n\n")}`);
 		shelves.push(section(home.label, parts.join("\n\n")));
 	}

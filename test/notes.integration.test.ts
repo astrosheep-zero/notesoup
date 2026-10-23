@@ -295,7 +295,7 @@ test("boot note acquisition is one closed snapshot and isolates one or all faile
 	] : []);
 	const mapAndUnicodeText = renderBootBlock({ ...renderData, notes: mapAndUnicode });
 	assert.match(mapAndUnicodeText, / {2}🐑字\n {2}unicode\.md · (?:just now|\d+s ago)/, "a headingless note is announced by its first line");
-	assert.ok(mapAndUnicodeText.includes("no @ — this session\n───────────────────\n\nmap\n\n  SESSION_MAP_BODY\n\nrecent\n\n  🐑字\n  unicode.md · just now"), "the session shelf keeps its typography");
+	assert.ok(mapAndUnicodeText.includes("no @ — this session\n───────────────────\n\nMAP.md\n\n  SESSION_MAP_BODY\n\nrecent\n\n  🐑字\n  unicode.md · just now"), "the session shelf keeps its typography");
 	assert.equal(mapAndUnicodeText.includes("crumpled.md"), false);
 	assert.equal(/MAP\.md ·/.test(mapAndUnicodeText), false, "maps never take feed seats");
 	assert.equal(mapAndUnicodeText.includes("@human — the human"), false, "empty shelves are omitted");
@@ -365,7 +365,7 @@ test("the boot binds its tools and bounds an over-cap MAP with a lookup pointer"
 	assert.ok(rendered.includes("M".repeat(MAP_BOOT_MAX_CHARS)), "the existing MAP cap keeps a bounded prefix");
 	assert.equal(rendered.includes("M".repeat(MAP_BOOT_MAX_CHARS + 1)), false, "the over-cap suffix is not inlined");
 	assert.ok(rendered.includes("`MAP.md`"), "the full MAP remains available by address");
-	assert.ok(rendered.includes("cheatsheet\n\n  REMEMBER_THIS_RULE\n\nmap"), "a real stored cheatsheet is pinned before the map");
+	assert.ok(rendered.includes("CHEATSHEET.md\n\n  REMEMBER_THIS_RULE\n\nMAP.md\n\n"), "a real stored cheatsheet is pinned before the map");
 	assert.equal(/CHEATSHEET\.md ·/.test(rendered), false, "the stored cheatsheet takes no recent seat");
 	for (const retired of ["history_windows", "history_list", "history_read"]) {
 		assert.equal(rendered.includes(retired), false, `${retired} no longer appears in the boot block`);

@@ -158,7 +158,7 @@ test("a rendered boot carries the new tags, its own MAP section, and no pre-rena
 	assert.ok(rendered.includes(`\n${NOTES_PROTOCOL_CLOSE_TAG}\n\n${MAPS_BLOCK}\n\nYOUR NOTES`), "the MAP block sits between the protocol and the shelves");
 	assert.equal(/context_window/.test(rendered), false, "the boot is free of the old spelling");
 	assert.ok(rendered.includes("@self — root only"), "a named agent's shelf says it is theirs alone");
-	assert.ok(rendered.includes("map\n\n  AGENT_MAP_BODY"), "the pinned MAP is headed by its own label");
+	assert.ok(rendered.includes("@agents/root/MAP.md\n\n  AGENT_MAP_BODY"), "the pinned MAP heading is its exact tool address");
 	assert.equal(rendered.includes("MAP — "), false, "the old MAP heading is gone");
 });
 
@@ -181,9 +181,12 @@ test("cheatsheets and maps are independently pinned, bounded, and excluded from 
 		}]],
 	]);
 	const rendered = (await boot("root", rows)).split("YOUR NOTES")[1]!;
-	assert.ok(rendered.includes("cheatsheet\n\n  SESSION_RULE"));
-	assert.ok(rendered.includes("cheatsheet\n\n  PROJECT_RULE\n\nmap\n\n  PROJECT_INDEX"));
-	assert.ok(rendered.includes("map\n\n  HUMAN_INDEX"));
+	assert.ok(rendered.includes("CHEATSHEET.md\n\n  SESSION_RULE"));
+	assert.ok(rendered.includes("@project/CHEATSHEET.md\n\n  PROJECT_RULE\n\n@project/MAP.md\n\n  PROJECT_INDEX"));
+	assert.ok(rendered.includes("@human/MAP.md\n\n  HUMAN_INDEX"));
+	assert.ok(rendered.includes("@self/CHEATSHEET.md\n\n  🐑"));
+	assert.ok(rendered.includes("@self/MAP.md\n\n  M"));
+	assert.equal(/^(?:map|cheatsheet)$/m.test(rendered), false, "pinned headings never suggest lowercase aliases");
 	assert.ok(rendered.includes("@project/n2.md ·"));
 	assert.equal(rendered.includes("TITLE_3"), false);
 	assert.equal(/(?:MAP|CHEATSHEET)\.md ·/.test(rendered), false);
