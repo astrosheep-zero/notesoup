@@ -18,10 +18,10 @@ One session dreams over one project at a time. New session notes record their pr
 
 ## The dream lock and Git audit
 
-`dream_begin` takes an exclusive `.dream.lock.<project>` in the notes home with a single O_CREAT|O_EXCL creation, then commits a baseline of the notes home to its Git repository (initialized on first use). `dream_end` commits the dream's changes and releases the lock, so `git show` reviews a dream and `git revert` rolls it back. A session shutdown releases the lock without the final commit.
+`dream_begin` takes one exclusive `.dream.lock` for the whole notes home with a single O_CREAT|O_EXCL creation, then commits a baseline of that home to its Git repository (initialized on first use). The lock is home-wide, not per-project: concurrent dreams cannot interleave changes in the shared Git history. `dream_end` commits the dream's changes and releases the lock, so `git show` reviews a dream and `git revert` rolls it back. A session shutdown releases the lock without the final commit.
 
 An existing lock refuses a new dream regardless of its age. If a Pi process crashed mid-dream, remove the stale lock by hand after confirming no dream is running:
 
 ```sh
-rm "${NOTESOUP_HOME:-$HOME/.agents/notes}/.dream.lock.<project>"
+rm "${NOTESOUP_HOME:-$HOME/.agents/notes}/.dream.lock"
 ```

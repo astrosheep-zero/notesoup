@@ -5,9 +5,9 @@ import { join } from "node:path";
 /** One held dream lock; only the holder that wrote the token removes it. */
 export type DreamLock = { path: string; token: string };
 
-/** The per-project lock file in the notes home; `.dream.lock*` is excluded from the Git audit. */
-export function dreamLockPath(home: string, project: string): string {
-	return join(home, `.dream.lock.${project}`);
+/** One lock per notes home: its Git history cannot audit concurrent dreams independently. */
+export function dreamLockPath(home: string): string {
+	return join(home, ".dream.lock");
 }
 
 /**

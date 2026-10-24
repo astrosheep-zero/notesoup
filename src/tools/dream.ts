@@ -37,7 +37,7 @@ function renderBeginData(data: DreamBeginData): string {
 
 export const dreamBegin = {
 	name: "dream_begin", label: "Dream begin",
-	description: "Dream: open one project's notes for consolidation, one project at a time. Lists its @projects/<name>/ notes and every session note born in it, crumpled ones included. Until dream_end, notes_write/notes_update can edit those addresses and reads leave no access stamp. Takes the project's dream lock and commits a Git baseline of the notes home.",
+	description: "Dream: open one project's notes for consolidation, one project at a time. Lists its @projects/<name>/ notes and every session note born in it, crumpled ones included. Until dream_end, notes_write/notes_update can edit those addresses and reads leave no access stamp. Holds the notes home's dream lock through dream_end so Git audits cannot interleave, and commits a baseline of the notes home.",
 	parameters: dreamBeginParameters, outputSchema: resultSchema(DreamBeginDataSchema),
 	async execute(params: Static<typeof dreamBeginParameters>, identity: NotesIdentity, state: DreamState): Promise<Outcome<DreamBeginData>> {
 		if (state.project !== undefined) return failure("already_dreaming", `Already dreaming over ${state.project}; call dream_end before opening another project.`);
@@ -45,8 +45,8 @@ export const dreamBegin = {
 		if (project !== identity.projectKey && !projectHomes(identity.home).some(home => home.name === project)) {
 			return failure("not_found", `No project named ${JSON.stringify(project)}; notes_list with glob @projects/*/** shows the names.`);
 		}
-		const lock = acquireDreamLock(dreamLockPath(identity.home, project));
-		if (!lock) return failure("already_dreaming", `Another dream holds ${dreamLockPath(identity.home, project)}. If none is running, delete that file by hand.`);
+		const lock = acquireDreamLock(dreamLockPath(identity.home));
+		if (!lock) return failure("already_dreaming", `Another dream holds ${dreamLockPath(identity.home)}. If none is running, delete that file by hand.`);
 		try {
 			const store = createNotesStore({ ...identity, dreaming: project });
 			const rows: NoteRow[] = [];

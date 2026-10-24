@@ -259,7 +259,7 @@ function frontmatterOf(meta: NoteMeta): string {
 /** Explicit session/project homes are read-only unless dreamed over; agent/model homes allow their owner. */
 function assertWritableHome(scope: Scope, who: string | undefined, identity: NotesIdentity): void {
 	if (who === undefined) return;
-	// A dreamed project is writable whole; its other sessions are checked per note by assertDreamSessionNote.
+	// A dreamed project is writable whole; project and session ownership is checked per note by assertDreamNote.
 	if (identity.dreaming !== undefined && (scope === "session" || (scope === "project" && who === identity.dreaming))) return;
 	if (scope === "session") throw new NoteError("invalid_scope", `@sessions/${who}/ is read-only; use a bare path to write to this session.`);
 	if (scope === "project") throw new NoteError("invalid_scope", `@projects/${who}/ is read-only; use @project/ to write to your own project.`);
@@ -269,11 +269,14 @@ function assertWritableHome(scope: Scope, who: string | undefined, identity: Not
 	throw new NoteError("invalid_scope", `${home} is someone else's home; you can write to this session, @project/, @human/, @self/, or @model/.`);
 }
 
-/** A dream reaches another session's note only when that note was born in the dreamed project. */
-function assertDreamSessionNote(scope: Scope, who: string | undefined, identity: NotesIdentity, raw: string | undefined, address: string): void {
-	if (scope !== "session" || who === undefined || identity.dreaming === undefined) return;
-	if (raw !== undefined && parseNote(raw).meta.project === identity.dreaming) return;
-	throw new NoteError("invalid_scope", raw === undefined
+/** Resolve aliases before checking that a dreamed note belongs to the open project. */
+function assertDreamNote(scope: Scope, who: string | undefined, identity: NotesIdentity, raw: string | undefined, address: string): void {
+	if (identity.dreaming === undefined || (scope !== "session" && scope !== "project")) return;
+	const project = scope === "project" ? who ?? identity.projectKey
+		: raw !== undefined ? parseNote(raw).meta.project
+		: who === undefined ? identity.projectKey : undefined;
+	if (project === identity.dreaming) return;
+	throw new NoteError("invalid_scope", raw === undefined && scope === "session" && who !== undefined
 		? `${address}: a dream edits other sessions' existing notes, it doesn't create new ones there.`
 		: `${address} belongs to another project, not the one being dreamed over (${identity.dreaming}).`);
 }
@@ -296,7 +299,7 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 			const now = writeStamp();
 			const cleanBody = stripLeadingFrontmatter(content);
 			const existingRaw = await readFileIfExists(path);
-			assertDreamSessionNote(scope, destination.who, identity, existingRaw, address);
+			assertDreamNote(scope, destination.who, identity, existingRaw, address);
 			const existing = existingRaw === undefined ? undefined : parseNote(existingRaw, now).meta;
 			const outcome = existing === undefined ? "created" : existing.crumpledAt === undefined ? "overwrote" : "uncrumpled";
 			const meta: NoteMeta = existing ?? {
@@ -356,8 +359,8 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 			const raw = await readFileIfExists(fromPath);
 			if (raw === undefined) throw new NoteError("not_found", `No note at ${noteIdentity(identity, address).address}.`);
 			const targetRaw = differentPaths ? await readFileIfExists(path) : undefined;
-			assertDreamSessionNote(from.scope, from.who, identity, raw, address);
-			if (differentPaths) assertDreamSessionNote(scope, destination.who, identity, targetRaw, stableOptions.renameTo!);
+			assertDreamNote(from.scope, from.who, identity, raw, address);
+			if (differentPaths) assertDreamNote(scope, destination.who, identity, targetRaw, stableOptions.renameTo!);
 			// Case and symlink aliases must not turn write-then-remove into deleting the result.
 			const sourceReal = targetRaw === undefined ? undefined : await realpath(fromPath);
 			const sameFile = sourceReal !== undefined && sourceReal === await realpath(path);
@@ -430,7 +433,7 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 		return withPathQueue(path, async () => {
 			const raw = await readFileIfExists(path);
 			if (raw === undefined) throw new NoteError("not_found", `No note at ${noteIdentity(identity, address).address}.`);
-			assertDreamSessionNote(target.scope, target.who, identity, raw, address);
+			assertDreamNote(target.scope, target.who, identity, raw, address);
 			const { meta } = parseNote(raw);
 			if (meta.crumpledAt === undefined) throw new NoteError("not_crumpled", `${noteIdentity(identity, address).address} isn't crumpled; crumple it before deleting.`);
 			await unlink(path);

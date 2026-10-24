@@ -44,7 +44,7 @@ test("a dream opens one other project, writes its notes, deletes only crumpled o
 	assert.ok(begun.data.files.every(f => typeof f.last_accessed === "string"), "the dream's list shows each note's last access");
 	assert.match(dreamBegin.render(begun), /\| accessed /);
 	assert.equal((await dreamBegin.execute({}, me, state)).ok, false, "only one dream at a time");
-	assert.ok(existsSync(join(home, ".dream.lock.beta")), "the project lock is held");
+	assert.ok(existsSync(join(home, ".dream.lock")), "the notes-home lock is held");
 	assert.equal((await dreamBegin.execute({ project: "beta" }, as("other", "alpha"), {})).ok, false, "another session can't dream the same project");
 
 	assert.ok((await notesWrite.execute({ address: "@projects/beta/rule", content: "merged" }, ident())).ok);
@@ -65,7 +65,7 @@ test("a dream opens one other project, writes its notes, deletes only crumpled o
 
 	const ended = await dreamEnd.execute({}, me, state);
 	assert.ok(ended.ok && ended.data.commit && ended.data.commit !== begun.data.baseline, "dream_end commits the changes");
-	assert.equal(existsSync(join(home, ".dream.lock.beta")), false, "the lock is released");
+	assert.equal(existsSync(join(home, ".dream.lock")), false, "the lock is released");
 	assert.equal(execFileSync("git", ["status", "--porcelain"], { cwd: home, encoding: "utf8" }), "", "the audit leaves a clean tree");
 	assert.equal((await notesWrite.execute({ address: "@projects/beta/rule", content: "x" }, ident())).ok, false, "closed again");
 	assert.equal((await dreamEnd.execute({}, me, state)).ok, false);
@@ -90,4 +90,55 @@ test("dream_begin refuses an unknown project", async (t) => {
 	const state: DreamState = {};
 	assert.equal((await dreamBegin.execute({ project: "nope" }, as("s", "alpha"), state)).ok, false);
 	assert.equal(state.project, undefined);
+});
+
+test("dream_forget resolves address aliases before authorizing deletion", async (t) => {
+	const { home, as } = fixture(t);
+	const alpha = as("alpha-session", "alpha");
+	await createNotesStore(alpha).write("@project/precious", "keep alpha");
+	await createNotesStore(alpha).update("@project/precious", undefined, { crumpled: true });
+	await createNotesStore(alpha).write("local", "keep alpha session");
+	await createNotesStore(alpha).update("local", undefined, { crumpled: true });
+	await createNotesStore(as("beta-session", "beta")).write("@project/trash", "delete beta");
+	await createNotesStore(as("beta-session", "beta")).update("@project/trash", undefined, { crumpled: true });
+
+	const state: DreamState = {};
+	assert.ok((await dreamBegin.execute({ project: "beta" }, alpha, state)).ok);
+	for (const address of ["@projects/alpha/precious", "@project/precious", "local"]) {
+		const refused = await dreamForget.execute({ address }, alpha, state);
+		assert.equal(refused.ok, false, `${address} is outside the beta dream`);
+		assert.ok(!refused.ok && refused.error.code === "invalid_scope");
+	}
+	assert.equal(await createNotesStore(alpha).read("@project/precious").then(note => note?.body), "keep alpha");
+	assert.equal(await createNotesStore(alpha).read("local").then(note => note?.body), "keep alpha session");
+	assert.ok((await dreamForget.execute({ address: "@projects/beta/trash" }, alpha, state)).ok, "the named note in the dreamed project remains deletable");
+	assert.equal(existsSync(join(home, "project", "beta", "trash.md")), false);
+	assert.ok((await dreamEnd.execute({}, alpha, state)).ok);
+});
+
+test("a notes-home lock prevents interleaved dream Git audits", async (t) => {
+	const { home, as } = fixture(t);
+	const alpha = as("alpha-session", "alpha"), beta = as("beta-session", "beta");
+	await createNotesStore(alpha).write("@project/note", "before alpha");
+	await createNotesStore(beta).write("@project/note", "before beta");
+	const alphaState: DreamState = {}, betaState: DreamState = {};
+	const begun = await dreamBegin.execute({ project: "alpha" }, alpha, alphaState);
+	assert.ok(begun.ok);
+	assert.ok((await notesWrite.execute({ address: "@project/note", content: "after alpha" }, dreamingIdentity(alpha, alphaState))).ok);
+
+	const refused = await dreamBegin.execute({ project: "beta" }, beta, betaState);
+	assert.equal(refused.ok, false, "a different project cannot share the home's Git audit");
+	assert.ok(!refused.ok && refused.error.code === "already_dreaming");
+	assert.deepEqual(betaState, {}, "a refused dream publishes no state");
+	assert.equal(execFileSync("git", ["rev-parse", "HEAD"], { cwd: home, encoding: "utf8" }).trim(), begun.data.baseline, "a refused begin creates no baseline");
+
+	const ended = await dreamEnd.execute({}, alpha, alphaState);
+	assert.ok(ended.ok && ended.data.commit !== undefined);
+	assert.notEqual(ended.data.commit, begun.data.baseline);
+	const changed = execFileSync("git", ["show", "--format=", "--name-only", ended.data.commit], { cwd: home, encoding: "utf8" });
+	assert.match(changed, /project\/alpha\/note\.md/);
+	assert.doesNotMatch(changed, /project\/beta\/note\.md/);
+	assert.equal(execFileSync("git", ["status", "--porcelain"], { cwd: home, encoding: "utf8" }), "");
+	assert.ok((await dreamBegin.execute({ project: "beta" }, beta, betaState)).ok, "the next dream can start after the home lock is released");
+	assert.ok((await dreamEnd.execute({}, beta, betaState)).ok);
 });

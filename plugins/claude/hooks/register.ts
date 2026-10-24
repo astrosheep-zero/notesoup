@@ -247,20 +247,23 @@ async function run($: { process: { run: (argv: readonly string[], init?: { cwd?:
   // reason (`timed out after …`), which a bare phrase would throw away.
   catch (error) { return { ok: false as const, error: `helper execution failed: ${describeFailure(error)}` } }
 }
+function clearManualRequest(state: ResetState): void {
+  state.manualPending = false
+  state.toolResetRequested = state.lastWord = undefined
+}
 /** Session start does not fire on /clear, /resume or /branch. Forget the old window on end. */
 function forgetSession(state: ResetState) {
   state.generation++
   state.identity = undefined
   state.historyWindowHead = undefined
   state.window = 0
-  state.turnRunning = state.resetting = state.manualPending = state.usageFailureLogged = false
+  state.turnRunning = state.resetting = state.usageFailureLogged = false
+  clearManualRequest(state)
   state.manualCompacting = false
   state.preparedBoot = state.retainedBoot = undefined
   state.texts = state.limits = undefined
   state.continuation = undefined
   state.continuationWindow = undefined
-  state.toolResetRequested = undefined
-  state.lastWord = undefined
   state.limitsAttempts = state.limitsWindow = 0
   state.settingsFailureLogged = state.limitsFailureLogged = false
   state.warnedWindow = state.warningPending = undefined
@@ -394,10 +397,13 @@ export function register(on: On) {
   on("turn.complete", async ($, e, next) => {
     const result = await next(e)
     if (e.agentId !== undefined) return result
-    if (state.disabled) return result
-    if (!await refreshIdentity($, state)) return result
     state.turnRunning = false
-    if (state.manualPending) await reset($, state)
+    if (state.disabled) return result
+    // A failed turn proves nothing about whether its notes were saved. Cancel
+    // the request instead of compacting now or springing it on a later turn.
+    if (e.reason !== "answer" && state.manualPending) cancelManualReset($, state, e.reason)
+    if (!await refreshIdentity($, state)) return result
+    if (e.reason === "answer" && state.manualPending) await reset($, state)
     return result
   })
   on("command.run", async ($, e, next) => {
@@ -459,9 +465,7 @@ export function register(on: On) {
       state.retainedBoot = built.boot
       state.preparedBoot = undefined
       state.window++
-      state.manualPending = false
-      state.toolResetRequested = undefined
-      state.lastWord = undefined
+      clearManualRequest(state)
       log($, "Brain emptied")
     }
     return { messages: built.messages }
@@ -610,6 +614,12 @@ async function finishManual($: Engine, state: ResetState, signal: { wake?: () =>
   } finally { armManual($, state, signal) }
 }
 
+/** A non-answer ends the request, never the context; the user can explicitly ask again. */
+function cancelManualReset($: Engine, state: ResetState, reason: "aborted" | "refusal" | "error"): void {
+  clearManualRequest(state)
+  log($, `Brain emptying cancelled · turn ended ${reason}; ask /fresh-window again`)
+}
+
 // The sandbox permits $ forwarding only to file-top-level helpers.
 async function reset($: Engine, state: ResetState): Promise<void> {
   if (!state.identity || state.compactDisabled || state.resetting) return
@@ -637,9 +647,7 @@ async function reset($: Engine, state: ResetState): Promise<void> {
     }
     state.retainedBoot = state.preparedBoot
     state.window++
-    state.manualPending = false
-    state.toolResetRequested = undefined
-    state.lastWord = undefined
+    clearManualRequest(state)
     log($, "Brain emptied")
   } catch (error) {
     if (generation !== state.generation) return
