@@ -7,6 +7,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AgentMessage, AgentTool, AgentToolCallOutcome, AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
+	createAgentSession,
+	DefaultResourceLoader,
+	ModelRuntime,
 	type ContextUsage,
 	type ExtensionAPI,
 	type ExtensionCommandContext,
@@ -254,6 +257,34 @@ export function context(
 	return Object.assign(fake as unknown as ExtensionContext, { notices, compactionRequests });
 }
 
+/** Real Pi usage accounting over the supplied manager; never issues a model request. */
+export async function nativeUsageContext(sessionManager: SessionManager, settingsManager: SettingsManager, contextWindow = 100_000) {
+	const agentDir = process.env.PI_CODING_AGENT_DIR;
+	assert.ok(agentDir, "install the isolated extension test environment first");
+	const runtime = await ModelRuntime.create({
+		authPath: join(agentDir, "auth.json"), modelsPath: null,
+		modelsStorePath: join(agentDir, "models"), refreshOnCreate: false,
+	});
+	const base = runtime.getModels("openai")[0];
+	assert.ok(base, "the installed SDK exposes a model for usage accounting");
+	const model = { ...base, contextWindow, maxTokens: 4096 };
+	const loader = new DefaultResourceLoader({
+		cwd: defaultCwd, agentDir, settingsManager,
+		noExtensions: true, noSkills: true, noThemes: true, noPromptTemplates: true,
+		agentsFilesOverride: () => ({ agentsFiles: [] }),
+	});
+	await loader.reload();
+	const { session } = await createAgentSession({
+		cwd: defaultCwd, agentDir, modelRuntime: runtime, model,
+		settingsManager, sessionManager, resourceLoader: loader, tools: [],
+	});
+	session.agent.streamFunction = async () => { throw new Error("usage fixtures must not request a model"); };
+	const ctx = context(sessionManager);
+	ctx.model = model;
+	ctx.getContextUsage = () => session.getContextUsage();
+	return { ctx, dispose: () => session.dispose() };
+}
+
 export function noticesOf(ctx: ExtensionContext): Notice[] {
 	return (ctx as ExtensionContext & { notices: Notice[] }).notices;
 }
@@ -447,7 +478,11 @@ export async function commitTurnEndBoundary(captured: Captured, sessionManager: 
 		context: { contextEntries: [], contextMessages: [], llmMessages: [], pendingMessages: [], canContinue: true },
 		outcome: "completed",
 		turnIndex: 0,
-		message: { role: "assistant", content: [], stopReason: "stop", timestamp: Date.now() } as unknown as AgentMessage,
+		message: {
+			role: "assistant", content: [], stopReason: "stop", timestamp: Date.now(),
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+		} as unknown as AgentMessage,
 		toolResults: [],
 		messageEntryId: "assistant-entry",
 		toolResultEntryIds: [],

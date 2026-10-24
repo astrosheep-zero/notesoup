@@ -129,17 +129,32 @@ export function projectRootWindow(messages: AgentMessage[], windowId: string): A
 /** Usage for the selected window, excluding provider usage recorded before its marker. */
 export function windowUsage(ctx: Pick<ExtensionContext, "sessionManager" | "getContextUsage" | "model">) {
 	const reset = currentReset(ctx);
-	if (!reset) return ctx.getContextUsage();
+	// Native checkpoints already cut the active projection and Pi invalidates usage
+	// after context edits. Preserve that authority, including unknown/unavailable usage.
+	if (!reset || isCheckpointBackedReset(ctx, reset)) return ctx.getContextUsage();
 	const contextWindow = ctx.model?.contextWindow ?? ctx.getContextUsage()?.contextWindow;
 	if (!contextWindow) return undefined;
 	const windowId = reset.data.windowId;
 	try {
-		const canonicalMessages = ctx.sessionManager.buildSessionProjection().messages;
-		// New resets already cut the durable Pi projection. Marker slicing is retained only
-		// for sessions written before native reset checkpoints existed.
-		const messages: AgentMessage[] = isCheckpointBackedReset(ctx, reset)
-			? canonicalMessages
-			: projectWindow(canonicalMessages, windowId);
+		const projection = ctx.sessionManager.buildSessionProjection();
+		const branch = ctx.sessionManager.getBranch();
+		let invalidatedThrough = -1;
+		for (let i = branch.length - 1; i >= 0; i--) {
+			if (branch[i].type === "context_edit" || branch[i].type === "compaction") {
+				invalidatedThrough = i;
+				break;
+			}
+		}
+		const staleIds = new Set(branch.slice(0, invalidatedThrough + 1).map((entry) => entry.id));
+		const staleMessages = new Set(projection.entries
+			.filter((entry) => staleIds.has(entry.sourceEntry.id))
+			.flatMap((entry) => entry.messages));
+		// Legacy marker-only windows still need slicing. Edits preserve assistant metadata,
+		// so clear stale usage only in this estimate, never in the persisted projection.
+		const messages = projectWindow(projection.messages, windowId).map((message) =>
+			message.role === "assistant" && staleMessages.has(message)
+				? { ...message, usage: { ...message.usage, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 } }
+				: message);
 		const { tokens } = estimateContextTokens(convertToLlm(messages));
 		return { tokens, contextWindow, percent: tokens / contextWindow * 100 };
 	} catch {
