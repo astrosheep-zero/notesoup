@@ -103,15 +103,21 @@ function renderIdentity(identity: { address: string; project_key?: string; proje
 	return text;
 }
 
-const ProjectReceiptSchema = {
+/** Display context a named project home adds to its receipts; ordinary homes omit both. */
+export const ProjectReceiptSchema = {
 	project_root: Type.Optional(Type.String()),
 	project_siblings: Type.Optional(Type.Array(Type.Object({ name: Type.String(), path: Type.String() }, { additionalProperties: false }))),
 };
 
-const ListedFileSchema = Type.Object({
+/** One note identity, shared by every receipt: read/list/search rows and all mutations alike. */
+export const NoteIdentitySchema = {
 	address: Type.String(),
 	project_key: Type.Optional(Type.String()),
 	...ProjectReceiptSchema,
+};
+
+const ListedFileSchema = Type.Object({
+	...NoteIdentitySchema,
 	updated_at: Type.String(),
 	last_accessed: Type.String(),
 	crumpled_at: Type.Optional(Type.String()),
@@ -134,15 +140,13 @@ const SnapshotSchema = {
 };
 
 export const NotesWriteDataSchema = Type.Object({
-	address: Type.String(),
-	project_key: Type.Optional(Type.String()),
+	...NoteIdentitySchema,
 	outcome: Type.Union([Type.Literal("created"), Type.Literal("overwrote"), Type.Literal("uncrumpled")]),
 }, { additionalProperties: false });
 export type NotesWriteData = Static<typeof NotesWriteDataSchema>;
 
 export const NotesUpdateDataSchema = Type.Object({
-	address: Type.String(),
-	project_key: Type.Optional(Type.String()),
+	...NoteIdentitySchema,
 	change_kind: Type.Union([Type.Literal("none"), Type.Literal("body"), Type.Literal("metadata"), Type.Literal("moved")]),
 	diff: Type.String(),
 	rename_from: Type.Optional(Type.String()),
@@ -150,9 +154,7 @@ export const NotesUpdateDataSchema = Type.Object({
 export type NotesUpdateData = Static<typeof NotesUpdateDataSchema>;
 
 export const NotesReadDataSchema = Type.Object({
-	address: Type.String(),
-	project_key: Type.Optional(Type.String()),
-	...ProjectReceiptSchema,
+	...NoteIdentitySchema,
 	metadata: NoteMetadataSchema,
 	...TextWindowSchema.properties,
 }, { additionalProperties: false });

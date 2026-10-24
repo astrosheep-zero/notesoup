@@ -440,6 +440,20 @@ test("notes receipts report resolved identity across scopes", async () => {
 	for (const row of searched.files) assertReceiptIdentity(row, row.address, notes.find((note) => note.address === row.address)!.scope, ctx);
 });
 
+test("mutation receipts keep their existing shape outside named project homes", async () => {
+	freshRoot();
+	const session = manager();
+	const captured = makeExtension(session);
+	const ctx = context(session);
+	const written = await call(captured, "notes_write", { address: "@project/decision", content: "body" }, ctx);
+	const updated = await call(captured, "notes_update", { address: "@project/decision", edits: [{ oldText: "body", newText: "changed" }] }, ctx);
+	assert.deepEqual(Object.keys(resultData<NotesWriteData>(written)).sort(), ["address", "outcome", "project_key"]);
+	assert.deepEqual(Object.keys(resultData<NotesUpdateData>(updated)).sort(), ["address", "change_kind", "diff", "project_key"]);
+	for (const [name, result] of [["notes_write", written], ["notes_update", updated]] as const) {
+		assert.equal(Check(captured.tools.get(name)!.outputSchema as TSchema, result.structuredContent), true, `${name} keeps its ordinary project receipt`);
+	}
+});
+
 test("list and search merge scopes and carry addresses; the path jail rejects escapes", async () => {
 	freshRoot();
 	const session = manager();

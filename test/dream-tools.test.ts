@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
+import { Check } from "typebox/value";
 import { createNotesStore, type NotesIdentity } from "../src/notes/index.js";
 import { abandonDream, dreamBegin, dreamEnd, dreamForget, dreamingIdentity, type DreamState } from "../src/tools/dream.js";
 import { notesRead, notesUpdate, notesWrite } from "../src/tools/notes.js";
@@ -186,6 +187,39 @@ test("dream_forget resolves address aliases before authorizing deletion", async 
 	assert.ok((await dreamForget.execute({ address: "@projects/beta/trash" }, alpha, state)).ok, "the named note in the dreamed project remains deletable");
 	assert.equal(existsSync(join(home, "project", "beta", "trash.md")), false);
 	assert.ok((await dreamEnd.execute({}, alpha, state)).ok);
+});
+
+test("named-project mutation receipts carry their project metadata and fit their own schemas", async (t) => {
+	const { home, as } = fixture(t);
+	// A same-basename checkout makes the dreamed home carry a sibling hint.
+	mkdirSync(join(home, "project", "beta-1"), { recursive: true });
+	writeFileSync(join(home, "project", "beta-1", ".project"), JSON.stringify({ id: "host/two/beta", path: "/work/two/beta" }));
+	const me = as("now", "alpha");
+	const state: DreamState = {};
+	const ident = () => dreamingIdentity(me, state);
+
+	assert.equal((await notesWrite.execute({ address: "@projects/beta-1/rule", content: "x" }, ident())).ok, false, "named projects stay read-only outside a dream");
+	assert.ok((await dreamBegin.execute({ project: "beta-1" }, me, state)).ok);
+
+	const written = await notesWrite.execute({ address: "@projects/beta-1/rule", content: "merged" }, ident());
+	assert.ok(written.ok);
+	assert.equal(written.data.project_root, "/work/two/beta");
+	assert.deepEqual(written.data.project_siblings, [{ name: "beta", path: "/work/beta" }]);
+	assert.equal(Check(notesWrite.outputSchema, written.data), true, "notes_write accepts its own named-project receipt");
+
+	const updated = await notesUpdate.execute({ address: "@projects/beta-1/rule", edits: [{ oldText: "merged", newText: "done" }] }, ident(), () => "");
+	assert.ok(updated.ok);
+	assert.equal(updated.data.project_root, "/work/two/beta");
+	assert.deepEqual(updated.data.project_siblings, [{ name: "beta", path: "/work/beta" }]);
+	assert.equal(Check(notesUpdate.outputSchema, updated.data), true, "notes_update accepts its own named-project receipt");
+
+	assert.ok((await notesUpdate.execute({ address: "@projects/beta-1/rule", crumpled: true }, ident(), () => "")).ok);
+	const forgotten = await dreamForget.execute({ address: "@projects/beta-1/rule" }, me, state);
+	assert.ok(forgotten.ok);
+	assert.equal(forgotten.data.project_root, "/work/two/beta");
+	assert.deepEqual(forgotten.data.project_siblings, [{ name: "beta", path: "/work/beta" }]);
+	assert.equal(Check(dreamForget.outputSchema, forgotten.data), true, "dream_forget accepts its own named-project receipt");
+	assert.ok((await dreamEnd.execute({}, me, state)).ok);
 });
 
 test("a notes-home lock prevents interleaved dream Git audits", async (t) => {

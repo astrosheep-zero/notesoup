@@ -5,7 +5,7 @@ import { projectHomes } from "../notes/project-home.js";
 import { gitCommit } from "../dream/git.js";
 import { acquireDreamLock, dreamLockPath, releaseDreamLock, type DreamLock } from "../dream/lock.js";
 import { failure, renderOutcome, resultSchema, success, type Outcome } from "./result.js";
-import { failureOf, listedFile, NotesListDataSchema, renderListData, snapshot } from "./notes.js";
+import { failureOf, listedFile, NoteIdentitySchema, NotesListDataSchema, renderListData, snapshot } from "./notes.js";
 
 /** The one open dream per session; the host owns where it lives. */
 type DreamOpening = { project: string; lock: DreamLock; generation: number };
@@ -118,7 +118,7 @@ export const dreamBegin = {
 } as const;
 
 export const dreamForgetParameters = Type.Object({ address: Type.String() }, { additionalProperties: false });
-export const DreamForgetDataSchema = Type.Object({ address: Type.String(), project_key: Type.Optional(Type.String()) }, { additionalProperties: false });
+export const DreamForgetDataSchema = Type.Object({ ...NoteIdentitySchema }, { additionalProperties: false });
 export type DreamForgetData = Static<typeof DreamForgetDataSchema>;
 
 export const dreamForget = {
