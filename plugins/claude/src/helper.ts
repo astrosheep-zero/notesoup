@@ -13,6 +13,7 @@ import { claudeHistoryGapNotice, claudeHistoryUnconfirmedSeq, CLAUDE_HISTORY_UNK
 import { resolveClaudeLimits } from "./thresholds.js";
 import { projectKey, snapshotNotesIdentity, type NotesIdentity } from "../../../src/notes/index.js";
 import type { Operation } from "../../../src/tools/result.js";
+import { notesToolContext, type NotesToolContext } from "../../../src/tools/notes-context.js";
 
 const MAX_REQUEST_BYTES = 512 * 1024;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
@@ -55,7 +56,7 @@ function boundOperation<TParams extends TSchema, TData, TContext extends readonl
 	};
 }
 
-const OPERATIONS: Record<string, BoundOperation<[NotesIdentity]>> = {
+const OPERATIONS: Record<string, BoundOperation<[NotesToolContext]>> = {
 	notes_write: boundOperation(notesWrite),
 	notes_update: boundOperation(notesUpdate),
 	notes_read: boundOperation(notesRead),
@@ -124,7 +125,7 @@ export async function dispatch(request: unknown): Promise<unknown> {
 				: await HISTORY_OPERATIONS[tool].call(params, projection, wrapText);
 			return { ...result, text: wrapText(result.text) };
 		}
-		return OPERATIONS[value.tool]!.call(value.params, id);
+		return OPERATIONS[value.tool]!.call(value.params, notesToolContext(id, (value.identity as ClaudeIdentityInput).cwd));
 	}
 	if (value.op === "history_state") {
 		const id = identity(value.identity as ClaudeIdentityInput);

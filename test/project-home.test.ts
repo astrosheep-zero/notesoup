@@ -11,6 +11,9 @@ import { assertAddress } from "../src/notes/address.js";
 import { normalizeRemote, projectKey } from "../src/notes/project-home.js";
 import { notesList, notesRead, notesSearch, notesUpdate, notesWrite } from "../src/tools/notes.js";
 import { success, type Outcome } from "../src/tools/result.js";
+import { notesToolContext } from "../src/tools/notes-context.js";
+
+const toolContext = (identity: NotesIdentity) => notesToolContext(identity, "/work/current");
 
 function fixture(t: TestContext) {
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "notesoup-project-home-")));
@@ -294,16 +297,16 @@ test("named projects read/list/search with root and sibling receipts, without to
 	const address = "@projects/api-1/decision.md";
 	const file = join(home, "project/api-1/decision.md");
 	const before = readFileSync(file, "utf8");
-	const read = data(await notesRead.execute({ address }, own));
+	const read = data(await notesRead.execute({ address }, toolContext(own)));
 	assert.equal(read.text, "needle second");
 	assert.equal(read.project_root, second);
 	assert.deepEqual(read.project_siblings, [{ name: "api", path: first }]);
 	assert.equal(Check(notesRead.outputSchema, read), true);
 	assert.match(notesRead.render(success(read)), /Same-basename projects: api \(/);
-	const listed = data(await notesList.execute({ glob: "@projects/*/**" }, own));
+	const listed = data(await notesList.execute({ glob: "@projects/*/**" }, toolContext(own)));
 	assert.deepEqual(listed.files.map(row => [row.address, row.project_root]).sort(), [["@projects/api-1/decision.md", second], ["@projects/api/decision.md", first]].sort());
 	assert.equal(Check(notesList.outputSchema, listed), true);
-	const searched = data(await notesSearch.execute({ glob: "@projects/api-1/**", query: "needle" }, own));
+	const searched = data(await notesSearch.execute({ glob: "@projects/api-1/**", query: "needle" }, toolContext(own)));
 	assert.equal(searched.files[0]?.project_root, second);
 	assert.equal(Check(notesSearch.outputSchema, searched), true);
 	assert.equal(readFileSync(file, "utf8"), before, "named-home reads never rewrite access metadata");
@@ -315,13 +318,13 @@ test("named project writes, edits, crumples and both move endpoints refuse, incl
 	await createNotesStore(own).write("@project/decision", "body");
 	const address = "@projects/api/decision";
 	for (const result of [
-		await notesWrite.execute({ address, content: "replacement" }, own),
-		await notesUpdate.execute({ address, edits: [{ oldText: "body", newText: "changed" }] }, own, () => ""),
-		await notesUpdate.execute({ address, crumpled: true }, own, () => ""),
-		await notesUpdate.execute({ address, rename_to: "@project/moved" }, own, () => ""),
-		await notesUpdate.execute({ address: "@project/decision", rename_to: "@projects/api/moved" }, own, () => ""),
+		await notesWrite.execute({ address, content: "replacement" }, toolContext(own)),
+		await notesUpdate.execute({ address, edits: [{ oldText: "body", newText: "changed" }] }, toolContext(own), () => ""),
+		await notesUpdate.execute({ address, crumpled: true }, toolContext(own), () => ""),
+		await notesUpdate.execute({ address, rename_to: "@project/moved" }, toolContext(own), () => ""),
+		await notesUpdate.execute({ address: "@project/decision", rename_to: "@projects/api/moved" }, toolContext(own), () => ""),
 	]) assert.match(refused(result), /read-only; use @project\//);
-	assert.equal(data(await notesRead.execute({ address }, own)).text, "body");
+	assert.equal(data(await notesRead.execute({ address }, toolContext(own))).text, "body");
 	assert.throws(() => assertAddress("@projects/api/../decision"));
 	assert.throws(() => assertAddress("@projects/api"));
 });

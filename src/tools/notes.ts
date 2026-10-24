@@ -6,6 +6,7 @@ import { createNotesStore, NoteError, noteIdentity, type NoteChange, type NoteMe
 import { prefixFit, TOOL_OUTPUT_LIMIT } from "./output.js";
 import { failure, fitsResult, resultSchema, readTextWindow, renderOutcome, renderTextWindow, structuredBytes, success, TextWindowRequestSchema, TextWindowSchema, type Outcome } from "./result.js";
 import { nullableString, InvalidQueryError, searchQueries, searchQuery } from "./schema.js";
+import { notesIdentityForCall, type NotesToolContext } from "./notes-context.js";
 
 const ORIGIN_VALUES = [Type.Literal("user"), Type.Literal("self"), Type.Literal("external")] as const;
 const ORIGIN = Type.Optional(Type.Union([...ORIGIN_VALUES], {
@@ -15,6 +16,7 @@ const CRUMPLED_PARAMETER = Type.Optional(Type.Boolean({ description: "(optional)
 const CRUMPLED_LIST_PARAMETER = Type.Optional(Type.Boolean({ description: "(optional) true = list only crumpled notes." }));
 const FILE_LIMIT_PARAMETER = Type.Optional(Type.Integer({ minimum: 1, description: "(optional, default as many as fit) Max notes." }));
 const GLOB_PARAMETER = nullableString("(optional) Glob over full addresses, or @default for the current homes.");
+const CWD_PARAMETER = Type.Optional(Type.String({ minLength: 1, description: "(optional) Select the current project for this call. A relative path resolves against the host session cwd; the path must be an existing directory." }));
 const QUERY_HOMES_DESCRIPTION = "Omit `glob` or use `@default` for this session and current shared homes; `**` searches all homes, `@sessions/*/**` searches all sessions.";
 const ADDRESS_DESCRIPTION = "Addresses: a bare path is this session's note; `@project/`, `@human/`, `@self/`, `@model/` are durable homes; `@projects/<name>/<path>` and `@sessions/<id>/<path>` read named project and session notes (read-only). Not file paths: never pass them to file tools.";
 
@@ -206,7 +208,7 @@ export function listedFile(row: Pick<NoteRow, "address" | "meta">, identity: Not
 	return { ...noteIdentity(identity, row.address), updated_at: localIso(row.meta.updatedAt), last_accessed: localIso(row.meta.lastAccessed), ...(row.meta.crumpledAt === undefined ? {} : { crumpled_at: row.meta.crumpledAt }) };
 }
 
-export const notesWriteParameters = Type.Object({ address: Type.String(), content: Type.String(), origin: ORIGIN }, { additionalProperties: false });
+export const notesWriteParameters = Type.Object({ address: Type.String(), content: Type.String(), origin: ORIGIN, cwd: CWD_PARAMETER }, { additionalProperties: false });
 
 function renderWriteData(data: NotesWriteData): string {
 	return `${data.outcome} ${renderIdentity(data)}`;
@@ -216,8 +218,9 @@ export const notesWrite = {
 	name: "notes_write", label: "Notes write",
 	description: `Create a note, or overwrite its whole body. Name it for what it holds and when to use it. ${ADDRESS_DESCRIPTION}`,
 	parameters: notesWriteParameters, outputSchema: resultSchema(NotesWriteDataSchema), executionMode: "sequential",
-	async execute(params: Static<typeof notesWriteParameters>, identity: NotesIdentity): Promise<Outcome<NotesWriteData>> {
+	async execute(params: Static<typeof notesWriteParameters>, context: NotesToolContext): Promise<Outcome<NotesWriteData>> {
 		try {
+			const identity = notesIdentityForCall(context, params.cwd);
 			const { outcome } = await createNotesStore(identity).write(params.address, params.content, { origin: params.origin });
 			return success({ ...noteIdentity(identity, params.address), outcome });
 		} catch (error) { return failureOf(error); }
@@ -232,6 +235,7 @@ export const notesUpdateParameters = Type.Object({
 	crumpled: CRUMPLED_PARAMETER,
 	replace_all: Type.Optional(Type.Boolean({ description: "(optional) true = replace every match of `oldText`." })),
 	rename_to: Type.Optional(Type.String({ description: "(optional) Move to this address, optionally with edits or metadata changes. Won't overwrite a live note; references aren't updated." })),
+	cwd: CWD_PARAMETER,
 }, { additionalProperties: false });
 
 function renderUpdateData(data: NotesUpdateData): string {
@@ -265,8 +269,9 @@ export const notesUpdate = {
 	name: "notes_update", label: "Notes update",
 	description: `Change part of a note's body, its origin or crumpled state, or its address. When a line goes stale, replace it; don't append the correction below it. Each \`oldText\` must match exactly once unless \`replace_all\` is true. ${ADDRESS_DESCRIPTION}`,
 	parameters: notesUpdateParameters, outputSchema: resultSchema(NotesUpdateDataSchema), executionMode: "sequential",
-	async execute(params: Static<typeof notesUpdateParameters>, identity: NotesIdentity, renderDiff: (change: NoteChange) => string = (change) => change.kind === "none" ? "" : `note ${change.kind}`): Promise<Outcome<NotesUpdateData>> {
+	async execute(params: Static<typeof notesUpdateParameters>, context: NotesToolContext, renderDiff: (change: NoteChange) => string = (change) => change.kind === "none" ? "" : `note ${change.kind}`): Promise<Outcome<NotesUpdateData>> {
 		try {
+			const identity = notesIdentityForCall(context, params.cwd);
 			const store = createNotesStore(identity);
 			// Empty filler is not a request: models that pass every parameter get the edit path.
 			const renameTo = params.rename_to === "" ? undefined : params.rename_to;
@@ -280,7 +285,7 @@ export const notesUpdate = {
 	render: renderUpdate,
 } as const;
 
-export const notesReadParameters = Type.Object({ address: Type.String(), ...TextWindowRequestSchema }, { additionalProperties: false });
+export const notesReadParameters = Type.Object({ address: Type.String(), ...TextWindowRequestSchema, cwd: CWD_PARAMETER }, { additionalProperties: false });
 
 function renderReadData(data: NotesReadData): string {
 	return `${renderIdentity(data)}\n${renderMetadata(data.metadata)}\n\n${renderTextWindow(data)}`;
@@ -290,8 +295,9 @@ export const notesRead = {
 	name: "notes_read", label: "Notes read",
 	description: `Read a note. ${ADDRESS_DESCRIPTION}`,
 	parameters: notesReadParameters, outputSchema: resultSchema(NotesReadDataSchema),
-	async execute(params: Static<typeof notesReadParameters>, identity: NotesIdentity): Promise<Outcome<NotesReadData>> {
+	async execute(params: Static<typeof notesReadParameters>, context: NotesToolContext): Promise<Outcome<NotesReadData>> {
 		try {
+			const identity = notesIdentityForCall(context, params.cwd);
 			const note = await createNotesStore(identity).read(params.address);
 			const resolved = noteIdentity(identity, params.address);
 			if (!note) return failure("not_found", `No note at ${resolved.address}.`);
@@ -305,7 +311,7 @@ export const notesRead = {
 	render: (result: Outcome<NotesReadData>): string => renderOutcome(result, renderReadData),
 } as const;
 
-export const notesListParameters = Type.Object({ glob: GLOB_PARAMETER, limit: FILE_LIMIT_PARAMETER, crumpled: CRUMPLED_LIST_PARAMETER }, { additionalProperties: false });
+export const notesListParameters = Type.Object({ glob: GLOB_PARAMETER, limit: FILE_LIMIT_PARAMETER, crumpled: CRUMPLED_LIST_PARAMETER, cwd: CWD_PARAMETER }, { additionalProperties: false });
 
 export function renderListData(data: NotesListData): string {
 	const lines = [`${data.files.length} ${data.files.length === 1 ? "note" : "notes"}`];
@@ -321,8 +327,9 @@ export const notesList = {
 	name: "notes_list", label: "Notes list",
 	description: `List notes, newest first. Not pageable; \`more\` counts the rest. ${QUERY_HOMES_DESCRIPTION} ${ADDRESS_DESCRIPTION}`,
 	parameters: notesListParameters, outputSchema: resultSchema(NotesListDataSchema),
-	async execute(params: Static<typeof notesListParameters>, identity: NotesIdentity): Promise<Outcome<NotesListData>> {
+	async execute(params: Static<typeof notesListParameters>, context: NotesToolContext): Promise<Outcome<NotesListData>> {
 		try {
+			const identity = notesIdentityForCall(context, params.cwd);
 			const { rows, status } = await createNotesStore(identity).listWithStatus({ glob: params.glob ?? undefined, crumpled: params.crumpled });
 			return snapshot(rows.map(row => listedFile(row, identity)), params.limit, status, renderListData);
 		} catch (error) { return failureOf(error); }
@@ -330,7 +337,7 @@ export const notesList = {
 	render: (result: Outcome<NotesListData>): string => renderOutcome(result, renderListData),
 } as const;
 
-export const notesSearchParameters = Type.Object({ query: Type.Optional(searchQuery()), glob: GLOB_PARAMETER, limit: FILE_LIMIT_PARAMETER, max_matches_per_file: Type.Optional(Type.Integer({ minimum: 1, description: "(optional, default all) Max matching lines per note." })), crumpled: CRUMPLED_LIST_PARAMETER }, { additionalProperties: false });
+export const notesSearchParameters = Type.Object({ query: Type.Optional(searchQuery()), glob: GLOB_PARAMETER, limit: FILE_LIMIT_PARAMETER, max_matches_per_file: Type.Optional(Type.Integer({ minimum: 1, description: "(optional, default all) Max matching lines per note." })), crumpled: CRUMPLED_LIST_PARAMETER, cwd: CWD_PARAMETER }, { additionalProperties: false });
 
 function renderSearchData(data: NotesSearchData): string {
 	const lines = [`${data.files.length} ${data.files.length === 1 ? "note" : "notes"}`];
@@ -368,8 +375,9 @@ export const notesSearch = {
 	name: "notes_search", label: "Notes search",
 	description: `Search note bodies for literal text, case-insensitive. Without a query, lists notes with no match lines. Returns matching lines with offsets for \`notes_read\`. Not pageable; \`more\` counts the rest. ${QUERY_HOMES_DESCRIPTION} ${ADDRESS_DESCRIPTION}`,
 	parameters: notesSearchParameters, outputSchema: resultSchema(NotesSearchDataSchema),
-	async execute(params: Static<typeof notesSearchParameters>, identity: NotesIdentity): Promise<Outcome<NotesSearchData>> {
+	async execute(params: Static<typeof notesSearchParameters>, context: NotesToolContext): Promise<Outcome<NotesSearchData>> {
 		try {
+			const identity = notesIdentityForCall(context, params.cwd);
 			const { rows, status } = await createNotesStore(identity).searchWithStatus(searchQueries(params.query), { glob: params.glob ?? undefined, crumpled: params.crumpled });
 			const files: NotesSearchData["files"] = rows.sort((a, b) => b.meta.updatedAt - a.meta.updatedAt || a.address.localeCompare(b.address)).map(row => ({
 				...listedFile(row, identity),

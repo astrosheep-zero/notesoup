@@ -1,4 +1,4 @@
-export type NoteErrorCode = "not_found" | "already_exists" | "ambiguous_edit" | "no_match" | "invalid_edit" | "nothing_to_do" | "not_crumpled" | "too_large" | "invalid_scope" | "invalid_origin" | "invalid_address" | "invalid_pattern" | "invalid_query" | "invalid_offset" | "io_error" | "internal_error";
+export type NoteErrorCode = "not_found" | "already_exists" | "ambiguous_edit" | "no_match" | "invalid_edit" | "nothing_to_do" | "not_crumpled" | "too_large" | "invalid_scope" | "invalid_origin" | "invalid_address" | "invalid_pattern" | "invalid_query" | "invalid_offset" | "invalid_cwd" | "io_error" | "internal_error";
 
 /** Typed store refusal. Edit locations are exposed in camelCase. */
 export class NoteError extends Error {

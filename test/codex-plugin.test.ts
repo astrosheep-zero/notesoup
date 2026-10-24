@@ -216,6 +216,24 @@ test("notes tools use the hook thread as the session home and the current turn m
 	assert.match(textOf(listed), /@model\/model\.md/);
 });
 
+test("Codex resolves relative cwd against the verified binding, not the MCP process", async (t) => {
+	const f = await fixture(t);
+	await writeFile(f.transcript, jsonl([row("session_meta", sessionMeta())]));
+	const base = join(f.home, "base"), other = join(f.home, "other");
+	await mkdir(base);
+	await mkdir(other);
+	await bind(f.data, { threadId: ROOT, rootSessionId: ROOT, home: f.home, cwd: base, transcriptPath: f.transcript });
+	const client = await connect(t, f.data, CLI, f.home);
+	const meta = metaFor(ROOT, ROOT);
+	const written = await call(client, { name: "notes_write", arguments: { address: "@project/selected", content: "from Codex", cwd: "../other" }, _meta: meta });
+	assert.equal(written.isError, undefined, textOf(written));
+	assert.equal((written.structuredContent as { project_key: string }).project_key, "other");
+	assert.match(readFileSync(join(f.home, "project", "other", "selected.md"), "utf8"), /from Codex/);
+	const read = await call(client, { name: "notes_read", arguments: { address: "@project/selected", cwd: "../other" }, _meta: meta });
+	assert.equal(read.isError, undefined, textOf(read));
+	assert.equal((read.structuredContent as { text: string }).text, "from Codex");
+});
+
 test("refusals precede reads and writes: unknown thread, stale root, bad model, bad params", async (t) => {
 	const f = await fixture(t);
 	await writeFile(f.transcript, jsonl([row("session_meta", sessionMeta())]));

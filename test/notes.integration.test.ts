@@ -18,6 +18,7 @@ import type { NoteRow, Scope } from "../src/notes/index.js";
 import { listNotes, physicalPath, scopeDir } from "./helpers/notes.js";
 import { MAX_READ_WINDOW_CHARS, TOOL_OUTPUT_MAX_BYTES } from "../src/tools/output.js";
 import { notesUpdate } from "../src/tools/notes.js";
+import { notesToolContext } from "../src/tools/notes-context.js";
 import type { NotesListData, NotesReadData, NotesSearchData, NotesUpdateData } from "../src/tools/notes.js";
 import {
 	assertWithinBudget,
@@ -639,7 +640,7 @@ test("an unexpected notes defect propagates with its own identity while real fil
 	// matched on, which turned any such defect into a wrong invalid_query.
 	const sentinel = new TypeError("query renderer invariant broken");
 	await assert.rejects(
-		() => notesUpdate.execute({ address: "propagate.md", edits: [{ oldText: "before", newText: "after" }] }, identity, () => { throw sentinel; }),
+		() => notesUpdate.execute({ address: "propagate.md", edits: [{ oldText: "before", newText: "after" }] }, notesToolContext(identity, "/work/current"), () => { throw sentinel; }),
 		(error: unknown) => error === sentinel,
 		"an unexpected failure escapes with the identical Error, message and stack",
 	);
@@ -647,7 +648,7 @@ test("an unexpected notes defect propagates with its own identity while real fil
 
 	const assertion = Object.assign(new Error("assertion failed"), { code: "ERR_ASSERTION" });
 	await assert.rejects(
-		() => notesUpdate.execute({ address: "propagate.md", edits: [{ oldText: "after", newText: "later" }] }, identity, () => { throw assertion; }),
+		() => notesUpdate.execute({ address: "propagate.md", edits: [{ oldText: "after", newText: "later" }] }, notesToolContext(identity, "/work/current"), () => { throw assertion; }),
 		(error: unknown) => (error as NodeJS.ErrnoException).code === "ERR_ASSERTION",
 		"a Node ERR_ code is a programmer failure, never an io_error",
 	);

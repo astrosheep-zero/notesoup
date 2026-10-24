@@ -38,8 +38,9 @@ export { DEFAULT_BOOT_TOOL_NAMES, renderProtocolBlock } from "./boot/text.js";
 export type { BootToolNames } from "./boot/text.js";
 
 // Operations: the schemas and typed outcomes a host registers as its own tools, over a
-// host-supplied notes identity or decoded history projection.
+// host-supplied notes tool context or decoded history projection.
 export { notesList, notesRead, notesSearch, notesUpdate, notesWrite } from "./tools/notes.js";
+export { notesIdentityForCall, notesToolContext, type NotesToolContext } from "./tools/notes-context.js";
 export { historyList, historyRead, historyWindows } from "./tools/history.js";
 export { projectHistory } from "./history/history.js";
 export type { HistoryProjection } from "./history/history.js";

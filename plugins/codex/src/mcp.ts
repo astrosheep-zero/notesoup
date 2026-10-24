@@ -10,6 +10,7 @@ import { wireResult, type Operation, type Outcome } from "../../../src/tools/res
 import { CodexIdentityError, notesIdentityFor, pluginDataRoot, readBinding, rootSessionIdOf, safeThreadId, turnModel, type ThreadBinding } from "./identity.js";
 import { readCodexHistory } from "./history.js";
 import { readStartState } from "./state.js";
+import { notesToolContext } from "../../../src/tools/notes-context.js";
 
 type Bound = {
 	readonly operation: Operation<TSchema, unknown, readonly unknown[]>;
@@ -130,7 +131,7 @@ export async function callTool(name: string, args: unknown, meta: Record<string,
 		const { binding, rootSessionId, model } = await identityFor(meta, env);
 		const native = await readNative(binding, rootSessionId, bound.history, meta, env);
 		if (!bound.history) {
-			const outcome = await bound.operation.execute(params, notesIdentityFor(binding, model)) as Outcome<unknown>;
+			const outcome = await bound.operation.execute(params, notesToolContext(notesIdentityFor(binding, model), binding.cwd)) as Outcome<unknown>;
 			return successFor(bound, outcome);
 		}
 		const projection = (native as Awaited<ReturnType<typeof readCodexHistory>>).projection;

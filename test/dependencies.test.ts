@@ -222,7 +222,7 @@ test("AST guard sees every literal module edge, not import-like prose or comment
 test("the core entry is host-neutral and the Pi plugin entry owns the extension", () => {
 	assert.deepEqual(Object.keys(core).sort(), [
 		"DEFAULT_BOOT_TOOL_NAMES", "NoteError", "createNotesStore", "deriveThresholds", "historyList", "historyRead", "historyWindows",
-		"loadNotesSnapshot", "noteIdentity", "notesList", "notesRead", "notesSearch", "notesUpdate", "notesWrite", "projectHistory",
+		"loadNotesSnapshot", "noteIdentity", "notesIdentityForCall", "notesList", "notesRead", "notesSearch", "notesToolContext", "notesUpdate", "notesWrite", "projectHistory",
 		"projectKey", "remainingBudget", "renderBootBlock", "renderProtocolBlock", "selectContinuation", "slugify",
 		"tokenBudgetGuidance", "unavailableNotesSnapshot", "warningPrompt", "WARNING_BODY",
 	].sort(), "the core exports a curated host-neutral surface and no extension");

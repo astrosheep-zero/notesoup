@@ -10,6 +10,7 @@ import { Check } from "typebox/value";
 import { createNotesStore, type NotesIdentity } from "../src/notes/index.js";
 import { abandonDream, dreamBegin, dreamEnd, dreamForget, dreamingIdentity, type DreamState } from "../src/tools/dream.js";
 import { notesRead, notesUpdate, notesWrite } from "../src/tools/notes.js";
+import { notesToolContext } from "../src/tools/notes-context.js";
 
 function fixture(t: test.TestContext) {
 	const home = mkdtempSync(join(tmpdir(), "dream-tools-"));
@@ -35,7 +36,7 @@ test("a dream opens one other project, writes its notes, deletes only crumpled o
 
 	const me = as("now", "alpha");
 	const state: DreamState = {};
-	const ident = () => dreamingIdentity(me, state);
+	const ident = () => notesToolContext(dreamingIdentity(me, state), "/work/alpha");
 
 	// Closed: named homes are read-only and forget refuses.
 	assert.equal((await notesWrite.execute({ address: "@projects/beta/rule", content: "x" }, ident())).ok, false);
@@ -150,10 +151,10 @@ test("notes_read reports the access before itself, so reading never makes an unr
 	const old = "2026-01-01T08:00:00.000+08:00";
 	mkdirSync(join(home, "human"), { recursive: true });
 	writeFileSync(join(home, "human", "stale.md"), `---\norigin: self\ncreatedAt: ${old}\nupdatedAt: ${old}\nlastAccessed: ${old}\naccessCount: 0\n---\n\nbody`);
-	const first = await notesRead.execute({ address: "@human/stale" }, me);
+	const first = await notesRead.execute({ address: "@human/stale" }, notesToolContext(me, "/work/alpha"));
 	assert.ok(first.ok);
 	assert.equal(Date.parse(first.data.metadata.last_accessed), Date.parse(old), "the first read shows the old access");
-	const second = await notesRead.execute({ address: "@human/stale" }, me);
+	const second = await notesRead.execute({ address: "@human/stale" }, notesToolContext(me, "/work/alpha"));
 	assert.ok(second.ok);
 	assert.ok(Date.parse(second.data.metadata.last_accessed) > Date.parse(old), "the first read still counted as an access");
 });
@@ -196,7 +197,7 @@ test("named-project mutation receipts carry their project metadata and fit their
 	writeFileSync(join(home, "project", "beta-1", ".project"), JSON.stringify({ id: "host/two/beta", path: "/work/two/beta" }));
 	const me = as("now", "alpha");
 	const state: DreamState = {};
-	const ident = () => dreamingIdentity(me, state);
+	const ident = () => notesToolContext(dreamingIdentity(me, state), "/work/alpha");
 
 	assert.equal((await notesWrite.execute({ address: "@projects/beta-1/rule", content: "x" }, ident())).ok, false, "named projects stay read-only outside a dream");
 	assert.ok((await dreamBegin.execute({ project: "beta-1" }, me, state)).ok);
@@ -230,7 +231,7 @@ test("a notes-home lock prevents interleaved dream Git audits", async (t) => {
 	const alphaState: DreamState = {}, betaState: DreamState = {};
 	const begun = await dreamBegin.execute({ project: "alpha" }, alpha, alphaState);
 	assert.ok(begun.ok);
-	assert.ok((await notesWrite.execute({ address: "@project/note", content: "after alpha" }, dreamingIdentity(alpha, alphaState))).ok);
+	assert.ok((await notesWrite.execute({ address: "@project/note", content: "after alpha" }, notesToolContext(dreamingIdentity(alpha, alphaState), "/work/alpha"))).ok);
 
 	const refused = await dreamBegin.execute({ project: "beta" }, beta, betaState);
 	assert.equal(refused.ok, false, "a different project cannot share the home's Git audit");

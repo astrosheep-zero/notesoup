@@ -11,6 +11,7 @@ import { renderBootBlock } from "../src/boot/render.js";
 import { loadNotesSnapshot } from "../src/boot/snapshot.js";
 import { NOTES_PROTOCOL_CLOSE_TAG, WINDOW_IDENTITY_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG } from "../src/boot/text.js";
 import { notesRead } from "../src/tools/notes.js";
+import { notesToolContext } from "../src/tools/notes-context.js";
 import { success } from "../src/tools/result.js";
 import { createNotesStore } from "../src/notes/index.js";
 import { dshFixture } from "./helpers/dsh.js";
@@ -370,13 +371,16 @@ test("dsh explicit resets survive auto:false; shared tool reads and expected err
 	assert.equal(foreignRead.isError, false);
 	if (!foreignRead.isError) {
 		assert.equal((foreignRead.value as { project_root: string }).project_root, foreign.path);
-		const shared = await notesRead.execute({ address }, identity);
+		const shared = await notesRead.execute({ address }, notesToolContext(identity, agent.session.header.cwd!));
 		assert.ok(shared.ok);
 		assert.deepEqual(foreignRead.value, shared.data);
 		assert.equal(foreignRead.content[0]?.type, "text");
 		assert.equal((foreignRead.content[0] as { text: string }).text, notesRead.render(success(shared.data)));
 	}
 	assert.equal(await readFile(foreignFile, "utf8"), before);
+	const overridden = await call("notes_write", { address: "@project/from-override", content: "selected by dsh", cwd: foreignRoot });
+	assert.equal(overridden.isError, false);
+	assert.equal((await createNotesStore({ ...identity, projectKey: foreign.name }).read("@project/from-override"))?.body, "selected by dsh");
 	const refused = await call("notes_write", { address, content: "no overwrite" });
 	assert.equal(refused.isError, true);
 	if (refused.isError) assert.equal(refused.error.info?.code, "invalid_scope");

@@ -20,6 +20,10 @@ return result.files;
 
 The text representation uses short mutation receipts, lists, search hits or raw text windows. It reports omissions and errors rather than hiding them. A refusal renders as one line, `error: <code>: <message>`, and the message carries every fact a caller needs to recover: the known window ids for `unknown_window_id`, the edit index and match lines for a note edit refusal.
 
+## Per-call project selection
+
+All five notes operations accept optional `cwd`. Omitted means the host session's current project. A relative value resolves against the host session/binding cwd, and an existing directory is required; invalid explicit paths produce `invalid_cwd`. The override lasts one call and consistently drives `@project`, default/current-project globs, mutation endpoints, receipts, and new session-note ownership. It does not change the notes root or the physical session notebook.
+
 ## Read windows
 
 Both read operations return these fields at the result root, alongside identity and metadata:
@@ -71,8 +75,8 @@ A note read reports unrecognized frontmatter under `metadata.extra`; a value too
 
 - The notes store owns addressing, file contents, metadata and mutations.
 - The history adapter owns native decoding, seq allocation and branch visibility.
-- Shared operations own the typed result, filtering, paging, character windows and refusal messages.
+- Shared operations own per-call cwd resolution, the typed result, filtering, paging, character windows and refusal messages.
 - Shared renderers derive text from that result.
-- Pi/Claude adapters supply host identity, projections, optional pure text decoration and transport packaging only.
+- Host adapters supply base cwd, default identity, projections, optional pure text decoration and transport packaging only; they do not implement separate cwd override algorithms.
 
 There is no second query implementation for codemode, no copy of session storage and no migration of user records.

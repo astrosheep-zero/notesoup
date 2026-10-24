@@ -86,13 +86,17 @@ export function recoverSnapshot(events: readonly SessionEvent[]): WindowSnapshot
 	return latest;
 }
 
+export function notesCwd(agent: Pick<Agent, "session" | "options">): string {
+	return agent.session.header.cwd ?? process.cwd();
+}
+
 /** Identity is extracted here, never in the filesystem domain. */
 export function notesIdentity(agent: Pick<Agent, "session" | "options">, config: NotesConfig): NotesIdentity {
 	const home = config.notesHome ?? join(homedir(), ".agents", "notes");
 	return snapshotNotesIdentity({
 		home,
 		sessionId: agent.session.id,
-		projectKey: projectKey(agent.session.header.cwd ?? process.cwd(), home),
+		projectKey: projectKey(notesCwd(agent), home),
 		agent: slugify(config.agentName ?? "dsh"),
 		model: slugify(agent.session.requestHeader()?.config.model ?? agent.options.model ?? "unknown"),
 	});

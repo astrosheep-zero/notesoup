@@ -158,6 +158,21 @@ test("Claude helper delivers only shared rendered text and success", async () =>
   assert.match(missing.text, /^error: not_found: /, "the refusal renders as the shared error line");
 });
 
+test("Claude resolves relative cwd against the request identity, not the helper process", async (t) => {
+  const base = join(identity.home, "base"), other = join(identity.home, "other");
+  mkdirSync(base);
+  mkdirSync(other);
+  t.after(() => { rmSync(base, { recursive: true, force: true }); rmSync(other, { recursive: true, force: true }); });
+  const requestIdentity = { ...identity, cwd: base };
+  const written = await dispatch({ op: "tool", tool: "notes_write", identity: requestIdentity, params: { address: "@project/selected", content: "from Claude", cwd: "../other" } }) as ClaudeToolResult;
+  assert.equal(written.ok, true, written.text);
+  const project = resolveProjectHome(other, identity.home);
+  assert.match(readFileSync(join(project.dir, "selected.md"), "utf8"), /from Claude/);
+  const read = await dispatch({ op: "tool", tool: "notes_read", identity: requestIdentity, params: { address: "@project/selected", cwd: "../other" } }) as ClaudeToolResult;
+  assert.equal(read.ok, true, read.text);
+  assert.match(read.text, /from Claude/);
+});
+
 test("Claude helper rejects malformed or unknown requests", async () => {
   const malformed = JSON.parse(await handleLine("not json")) as { ok: boolean; error: string };
   assert.equal(malformed.ok, false);

@@ -20,6 +20,7 @@ import type { Scope } from "../src/notes/index.js";
 import { listNotes, physicalPath, scopeDir } from "./helpers/notes.js";
 import { notesList, notesSearch, type NotesListData, type NotesReadData, type NotesSearchData, type NotesUpdateData, type NotesWriteData } from "../src/tools/notes.js";
 import { notesIdentityFromPi } from "../plugins/pi/notes/adapter.js";
+import { notesToolContext } from "../src/tools/notes-context.js";
 import { call, context, explicitBoot, makeExtension, manager, resultData, resultError, resultRead } from "./helpers/extension.js";
 import { installExtensionTestHooks } from "./helpers/extension-test-environment.js";
 
@@ -97,6 +98,23 @@ test("note schemas drop status/stale and expose crumpled listing", () => {
 			assert.equal(Check(schema(name), { ...base, ...retired }), false, `${name} refuses the retired ${Object.keys(retired)[0]} as an unknown parameter`);
 		}
 	}
+});
+
+test("Pi resolves a per-call relative cwd against the session cwd", async () => {
+	freshRoot();
+	const session = manager();
+	const captured = makeExtension(session);
+	const base = join(testEnvironment.cwd, "base");
+	const other = join(testEnvironment.cwd, "other");
+	mkdirSync(base);
+	mkdirSync(other);
+	const ctx = context(session, undefined, undefined, true, base);
+	const result = resultData<NotesWriteData>(await call(captured, "notes_write", { address: "@project/selected", content: "other project", cwd: "../other" }, ctx));
+	assert.equal(result.project_key, projectKey(other, process.env.NOTESOUP_HOME!));
+	const read = resultData<NotesReadData>(await call(captured, "notes_read", { address: "@project/selected", cwd: other }, ctx));
+	assert.equal(read.text, "other project");
+	const missing = resultError(await call(captured, "notes_read", { address: "@project/selected" }, ctx));
+	assert.equal(missing.code, "not_found", "the override does not retarget later calls");
 });
 
 test("write lands a real markdown file with harness frontmatter and a pure body", async () => {
@@ -391,12 +409,12 @@ test("empty results distinguish hidden notes and unavailable homes", async () =>
 	mkdirSync(join(broken, ".."), { recursive: true });
 	rmSync(broken, { recursive: true });
 	writeFileSync(broken, "not a directory");
-	const partialResult = await notesList.execute({ glob: "**" }, identity);
+	const partialResult = await notesList.execute({ glob: "**" }, notesToolContext(identity, ctx.cwd));
 	assert.ok(partialResult.ok);
 	const partial = partialResult.data;
 	assert.deepEqual(partial.homes_unavailable, ["@project"]);
 	assert.deepEqual(partial.files, []);
-	const searchResult = await notesSearch.execute({ query: "needle", glob: "**" }, identity);
+	const searchResult = await notesSearch.execute({ query: "needle", glob: "**" }, notesToolContext(identity, ctx.cwd));
 	assert.ok(searchResult.ok);
 	assert.deepEqual(searchResult.data.homes_unavailable, ["@project"]);
 	writeFileSync(join(process.env.NOTESOUP_HOME!, "agents"), "not a directory");

@@ -12,6 +12,7 @@ import { HistoryPageItemSchema, HistoryRoleSchema, projectHistory } from "../src
 import { createNotesStore } from "../src/notes/store.js";
 import type { NotesIdentity } from "../src/notes/identity.js";
 import { notesWrite, notesUpdate, notesRead } from "../src/tools/notes.js";
+import { notesToolContext } from "../src/tools/notes-context.js";
 import { historyWindows, historyList, historyRead } from "../src/tools/history.js";
 import { historyRoles } from "../src/tools/schema.js";
 import { MAX_READ_WINDOW_CHARS, TOOL_OUTPUT_MAX_BYTES } from "../src/tools/output.js";
@@ -224,32 +225,33 @@ test("structuredBytes has no size for a value with no JSON representation", () =
 
 test("shared note operations return canonical outcomes with a body-only read window", async (t) => {
 	const notesIdentity = identity(t);
-	const written = data(await notesWrite.execute({ address: "@project/test.md", content: "alpha\nbeta" }, notesIdentity));
+	const toolContext = notesToolContext(notesIdentity, "/work/explicit");
+	const written = data(await notesWrite.execute({ address: "@project/test.md", content: "alpha\nbeta" }, toolContext));
 	assert.equal(written.address, "@project/test.md");
 	assert.equal(written.project_key, notesIdentity.projectKey);
 	assert.equal(written.outcome, "created");
 
-	const updated = data(await notesUpdate.execute({ address: "@project/test.md", edits: [{ oldText: "alpha", newText: "gamma" }] }, notesIdentity, (change) => {
+	const updated = data(await notesUpdate.execute({ address: "@project/test.md", edits: [{ oldText: "alpha", newText: "gamma" }] }, toolContext, (change) => {
 		assert.equal(change.kind, "body");
 		return "caller-rendered-diff";
 	}));
 	assert.equal(updated.change_kind, "body");
 	assert.equal(updated.diff, "caller-rendered-diff");
-	const defaultReceipt = data(await notesUpdate.execute({ address: "@project/test.md", edits: [{ oldText: "gamma", newText: "delta" }] }, notesIdentity));
+	const defaultReceipt = data(await notesUpdate.execute({ address: "@project/test.md", edits: [{ oldText: "gamma", newText: "delta" }] }, toolContext));
 	assert.equal(defaultReceipt.diff, "note body");
-	await notesWrite.execute({ address: "owned.md", content: "first", origin: "user" }, notesIdentity);
-	await notesWrite.execute({ address: "owned.md", content: "rewritten" }, notesIdentity);
-	assert.equal(data(await notesRead.execute({ address: "owned.md" }, notesIdentity)).metadata.origin, "user", "tool overwrites preserve an omitted origin");
-	const invalid = refusal(await notesUpdate.execute({ address: "owned.md", edits: [{ oldText: "", newText: "x" }] }, notesIdentity));
+	await notesWrite.execute({ address: "owned.md", content: "first", origin: "user" }, toolContext);
+	await notesWrite.execute({ address: "owned.md", content: "rewritten" }, toolContext);
+	assert.equal(data(await notesRead.execute({ address: "owned.md" }, toolContext)).metadata.origin, "user", "tool overwrites preserve an omitted origin");
+	const invalid = refusal(await notesUpdate.execute({ address: "owned.md", edits: [{ oldText: "", newText: "x" }] }, toolContext));
 	assert.equal(invalid.code, "invalid_edit");
-	const moved = data(await notesUpdate.execute({ address: "owned.md", rename_to: "@project/renamed.md", edits: [{ oldText: "rewritten", newText: "final" }], origin: "external" }, notesIdentity));
+	const moved = data(await notesUpdate.execute({ address: "owned.md", rename_to: "@project/renamed.md", edits: [{ oldText: "rewritten", newText: "final" }], origin: "external" }, toolContext));
 	assert.equal(moved.change_kind, "moved");
 	assert.equal(moved.rename_from, "owned.md");
 	assert.match(moved.diff, /rename owned\.md -> @project\/renamed\.md/);
-	const renamed = data(await notesRead.execute({ address: moved.address }, notesIdentity));
+	const renamed = data(await notesRead.execute({ address: moved.address }, toolContext));
 	assert.equal(renamed.text, "final");
 	assert.equal(renamed.metadata.origin, "external");
-	const unchanged = data(await notesUpdate.execute({ address: "@project/test.md", edits: [{ oldText: "delta", newText: "delta" }] }, notesIdentity));
+	const unchanged = data(await notesUpdate.execute({ address: "@project/test.md", edits: [{ oldText: "delta", newText: "delta" }] }, toolContext));
 	assert.equal(unchanged.change_kind, "none");
 	assert.equal(unchanged.diff, "");
 
@@ -257,7 +259,7 @@ test("shared note operations return canonical outcomes with a body-only read win
 	const stored = await createNotesStore(notesIdentity).read("@project/test.md");
 	assert.ok(stored, "the note is on disk");
 	const body = Array.from(stored.body);
-	const read = data(await notesRead.execute({ address: "@project/test.md" }, notesIdentity));
+	const read = data(await notesRead.execute({ address: "@project/test.md" }, toolContext));
 	assert.equal(read.text, stored.body, "a complete read is the whole body and nothing else");
 	assert.equal(read.total_chars, body.length);
 	assert.equal(read.next_offset_chars, null);
@@ -265,14 +267,14 @@ test("shared note operations return canonical outcomes with a body-only read win
 	assert.equal(notesRead.render(success(read)).includes("READ WINDOW"), false, "a read presents no metadata block");
 
 	// A negative offset resolves against the body, never against the serialized file.
-	const tail = data(await notesRead.execute({ address: "@project/test.md", offset_chars: -4 }, notesIdentity));
+	const tail = data(await notesRead.execute({ address: "@project/test.md", offset_chars: -4 }, toolContext));
 	assert.equal(tail.text, body.slice(-4).join(""));
 	assert.equal(tail.total_chars, body.length, "metadata length never enters the body cursor");
 	assert.equal(tail.next_offset_chars, null);
 
-	assert.equal(refusal(await notesRead.execute({ address: "@project/missing.md" }, notesIdentity)).code, "not_found");
-	assert.equal(refusal(await notesWrite.execute({ address: "../escape", content: "x" }, notesIdentity)).code, "invalid_address");
-	assert.equal(refusal(await notesRead.execute({ address: "@project/test.md", offset_chars: 99_999 }, notesIdentity)).code, "invalid_offset");
+	assert.equal(refusal(await notesRead.execute({ address: "@project/missing.md" }, toolContext)).code, "not_found");
+	assert.equal(refusal(await notesWrite.execute({ address: "../escape", content: "x" }, toolContext)).code, "invalid_address");
+	assert.equal(refusal(await notesRead.execute({ address: "@project/test.md", offset_chars: 99_999 }, toolContext)).code, "invalid_offset");
 });
 
 test("shared history operations read typed events through the addresses the adapter allocated", async () => {

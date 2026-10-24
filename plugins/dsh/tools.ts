@@ -8,7 +8,8 @@ import { notesList, notesRead, notesSearch, notesUpdate, notesWrite } from "../.
 import { historyList, historyRead, historyWindows } from "../../src/tools/history.js";
 import { success, type Operation } from "../../src/tools/result.js";
 import { historyProjection } from "./history.js";
-import { notesIdentity } from "./window.js";
+import { notesCwd, notesIdentity } from "./window.js";
+import { notesToolContext } from "../../src/tools/notes-context.js";
 import { measureBudget } from "./budget.js";
 import { preflight, type NotesoupCompactionEngine } from "./engine.js";
 
@@ -70,12 +71,12 @@ export function registerTools(ctx: Context, engine: NotesoupCompactionEngine): v
 		}
 		if (!exec.parent && nestedResets.get(exec.agent)?.delete(exec.rootCallId) && !result.isError) state.pendingReset = true;
 	});
-	const identity = (agent: Agent) => notesIdentity(agent, engine.config);
-	register(ctx, notesWrite, (agent) => [identity(agent)] as const);
-	register(ctx, notesUpdate, (agent) => [identity(agent)] as const);
-	register(ctx, notesRead, (agent) => [identity(agent)] as const);
-	register(ctx, notesList, (agent) => [identity(agent)] as const);
-	register(ctx, notesSearch, (agent) => [identity(agent)] as const);
+	const toolContext = (agent: Agent) => notesToolContext(notesIdentity(agent, engine.config), notesCwd(agent));
+	register(ctx, notesWrite, (agent) => [toolContext(agent)] as const);
+	register(ctx, notesUpdate, (agent) => [toolContext(agent)] as const);
+	register(ctx, notesRead, (agent) => [toolContext(agent)] as const);
+	register(ctx, notesList, (agent) => [toolContext(agent)] as const);
+	register(ctx, notesSearch, (agent) => [toolContext(agent)] as const);
 	register(ctx, historyList, async (agent) => [await historyProjection(ctx, agent.session.id)] as const);
 	register(ctx, historyRead, async (agent) => [await historyProjection(ctx, agent.session.id)] as const);
 	register(ctx, historyWindows, async (agent) => [await historyProjection(ctx, agent.session.id), agent.session.id] as const);
