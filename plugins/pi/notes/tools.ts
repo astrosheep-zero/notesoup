@@ -12,7 +12,7 @@ function renderDiff(change: NoteChange): string {
 
 /** Register the five shared note operations and the three hidden dream tools; an open dream widens the note identity. */
 export function registerNotesTools(pi: ExtensionAPI) {
-	// One open dream per session, in memory: shutdown releases its lock without the end commit.
+	// One pending or open dream per session: shutdown releases ownership without the end commit.
 	const dreams = new Map<string, DreamState>();
 	pi.on("session_shutdown", () => {
 		for (const state of dreams.values()) abandonDream(state);

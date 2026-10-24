@@ -1,7 +1,9 @@
 import { notesIdentityFromPi } from "../plugins/pi/notes/adapter.js";
 import { DEFAULT_BOOT_TOOL_NAMES } from "../src/boot/text.js";
 import assert from "node:assert/strict";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { dirname, join } from "node:path";
 import test from "node:test";
 
@@ -10,6 +12,7 @@ import { loadNotesSnapshot } from "../src/boot/snapshot.js";
 import { renderBootBlock } from "../src/boot/render.js";
 import { MAP_BOOT_MAX_CHARS, MAPS_BLOCK, NOTES_PROTOCOL_CLOSE_TAG, NOTES_PROTOCOL_OPEN_TAG } from "../src/boot/text.js";
 import { PI_PRE_RESET_HINTS } from "../plugins/pi/text.js";
+import type { DreamBeginData } from "../src/tools/dream.js";
 import { localIso } from "../src/notes/frontmatter.js";
 import type { NoteRow, Scope } from "../src/notes/index.js";
 import { listNotes, physicalPath, scopeDir } from "./helpers/notes.js";
@@ -26,6 +29,7 @@ import {
 	resultData,
 	resultError,
 	resultRead,
+	runHandlers,
 } from "./helpers/extension.js";
 import { installExtensionTestHooks } from "./helpers/extension-test-environment.js";
 
@@ -35,6 +39,54 @@ const testEnvironment = installExtensionTestHooks("notesoup-integration");
 function textOf(result: AgentToolResult<unknown>): string {
 	const first = result.content[0];
 	return first && first.type === "text" ? first.text : "";
+}
+
+for (const scanFails of [false, true]) {
+	test(`Pi shutdown cancels a pending dream after its gated scan ${scanFails ? "fails" : "resumes"}`, async (t) => {
+		const session = manager();
+		const captured = makeExtension(session);
+		const ctx = context(session);
+		const me = notesIdentityFromPi(ctx);
+		const otherCtx = context(manager(), undefined, undefined, true, join(testEnvironment.cwd, "other-project"));
+		const other = notesIdentityFromPi(otherCtx);
+		assert.notEqual(other.projectKey, me.projectKey);
+		const lockPath = join(me.home, ".dream.lock");
+		const original = fs.readdir;
+		let enter!: () => void;
+		let release!: () => void;
+		const entered = new Promise<void>(resolve => { enter = resolve; });
+		const gate = new Promise<void>(resolve => { release = resolve; });
+		let gated = false;
+		t.mock.method(fs, "readdir", async (...args: Parameters<typeof fs.readdir>) => {
+			if (!gated && args[0] === join(me.home, "project", me.projectKey)) {
+				gated = true;
+				enter();
+				await gate;
+				if (scanFails) throw new TypeError("scan failed after shutdown");
+			}
+			return original(...args);
+		});
+		syncBuiltinESMExports();
+		t.after(() => { release(); t.mock.restoreAll(); syncBuiltinESMExports(); });
+
+		const opening = call(captured, "dream_begin", {}, ctx);
+		await entered;
+		assert.ok(existsSync(lockPath), "begin acquired ownership before the controlled scan await");
+		assert.equal(resultError(await call(captured, "dream_begin", {}, ctx)).code, "already_dreaming");
+		await runHandlers(captured, "session_shutdown", { type: "session_shutdown" }, ctx);
+		assert.equal(existsSync(lockPath), false, "the registered shutdown handler releases pending ownership");
+		assert.equal(resultError(await call(captured, "dream_end", {}, ctx)).code, "not_dreaming");
+
+		const newer = resultData<DreamBeginData>(await call(captured, "dream_begin", {}, otherCtx));
+		assert.equal(newer.project, other.projectKey, "another project can immediately begin after shutdown");
+		const newerToken = readFileSync(lockPath, "utf8");
+		release();
+		assert.equal(resultError(await opening).code, "cancelled", "the stale opener cannot return success or resurrect state");
+		assert.equal(readFileSync(lockPath, "utf8"), newerToken, "stale cleanup cannot release the newer owner's token");
+		assert.equal(resultError(await call(captured, "dream_end", {}, ctx)).code, "not_dreaming");
+		resultData(await call(captured, "dream_end", {}, otherCtx));
+		assert.equal(existsSync(lockPath), false);
+	});
 }
 
 test("notes_list and notes_search are recent-first snapshots with narrowing hints", async () => {

@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
 import { createNotesStore, type NotesIdentity } from "../src/notes/index.js";
-import { dreamBegin, dreamEnd, dreamForget, dreamingIdentity, type DreamState } from "../src/tools/dream.js";
+import { abandonDream, dreamBegin, dreamEnd, dreamForget, dreamingIdentity, type DreamState } from "../src/tools/dream.js";
 import { notesRead, notesUpdate, notesWrite } from "../src/tools/notes.js";
 
 function fixture(t: test.TestContext) {
@@ -69,6 +71,76 @@ test("a dream opens one other project, writes its notes, deletes only crumpled o
 	assert.equal(execFileSync("git", ["status", "--porcelain"], { cwd: home, encoding: "utf8" }), "", "the audit leaves a clean tree");
 	assert.equal((await notesWrite.execute({ address: "@projects/beta/rule", content: "x" }, ident())).ok, false, "closed again");
 	assert.equal((await dreamEnd.execute({}, me, state)).ok, false);
+});
+
+test("pending openings exclude concurrent begins and stale cleanup preserves a newer generation", async (t) => {
+	const { home, as } = fixture(t);
+	const me = as("s", "alpha");
+	const state: DreamState = {};
+	const old = dreamBegin.execute({}, me, state);
+	const pending = state.pending;
+	assert.ok(pending, "ownership is visible before the first await");
+	assert.equal(state.project, undefined, "opening does not publish dream permissions yet");
+	assert.equal(dreamingIdentity(me, state), me);
+	const concurrent = await dreamBegin.execute({ project: "beta" }, me, state);
+	assert.ok(!concurrent.ok && concurrent.error.code === "already_dreaming");
+	assert.equal(state.pending, pending);
+
+	abandonDream(state);
+	assert.equal(existsSync(join(home, ".dream.lock")), false);
+	const newer = dreamBegin.execute({ project: "beta" }, me, state);
+	const newerPending = state.pending;
+	assert.ok(newerPending && newerPending.generation > pending.generation);
+	const token = readFileSync(join(home, ".dream.lock"), "utf8");
+	const cancelled = await old;
+	assert.ok(!cancelled.ok && cancelled.error.code === "cancelled");
+	assert.equal(readFileSync(join(home, ".dream.lock"), "utf8"), token);
+	const begun = await newer;
+	assert.ok(begun.ok);
+	assert.equal(state.project, "beta");
+	assert.equal(state.pending, undefined);
+	assert.ok((await dreamEnd.execute({}, me, state)).ok);
+	assert.equal(existsSync(join(home, ".dream.lock")), false);
+});
+
+test("a thrown scan releases pending ownership before propagating the defect", async (t) => {
+	const { home, as } = fixture(t);
+	const state: DreamState = {};
+	const sentinel = new TypeError("scan defect");
+	const original = fs.readdir;
+	t.mock.method(fs, "readdir", async (...args: Parameters<typeof fs.readdir>) => {
+		if (args[0] === join(home, "project", "alpha")) throw sentinel;
+		return original(...args);
+	});
+	syncBuiltinESMExports();
+	t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+	await assert.rejects(dreamBegin.execute({}, as("s", "alpha"), state), error => error === sentinel);
+	assert.equal(existsSync(join(home, ".dream.lock")), false);
+	assert.equal(state.pending, undefined);
+	assert.equal(state.project, undefined);
+	assert.equal(state.lock, undefined);
+	t.mock.restoreAll();
+	syncBuiltinESMExports();
+	assert.ok((await dreamBegin.execute({}, as("s", "alpha"), state)).ok, "the same state can retry after a failed scan");
+	assert.ok((await dreamEnd.execute({}, as("s", "alpha"), state)).ok);
+});
+
+test("baseline failure releases pending ownership and permits a retry", async (t) => {
+	const { home, as } = fixture(t);
+	const me = as("s", "alpha");
+	const state: DreamState = {};
+	writeFileSync(join(home, ".git"), "not a Git repository");
+	const failed = await dreamBegin.execute({}, me, state);
+	assert.ok(!failed.ok && failed.error.code === "audit_failed");
+	assert.equal(existsSync(join(home, ".dream.lock")), false);
+	assert.equal(state.pending, undefined);
+	assert.equal(state.project, undefined);
+	assert.equal(state.lock, undefined);
+	const ended = await dreamEnd.execute({}, me, state);
+	assert.ok(!ended.ok && ended.error.code === "not_dreaming");
+	rmSync(join(home, ".git"));
+	assert.ok((await dreamBegin.execute({}, me, state)).ok);
+	assert.ok((await dreamEnd.execute({}, me, state)).ok);
 });
 
 test("notes_read reports the access before itself, so reading never makes an unread note look fresh", async (t) => {
