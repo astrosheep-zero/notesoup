@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { execFileSync, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -21,6 +25,18 @@ function sources(directory: string): string[] {
 	return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => entry.isDirectory() ? sources(join(directory, entry.name)) : entry.name.endsWith(".ts") ? [join(directory, entry.name)] : []);
 }
 
+function run(command: string, args: string[], cwd: string): Promise<{ status: number | null; stdout: string; stderr: string }> {
+	return new Promise((resolve, reject) => {
+		const child = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+		let stdout = "";
+		let stderr = "";
+		child.stdout.setEncoding("utf8").on("data", (chunk: string) => { stdout += chunk; });
+		child.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
+		child.on("error", reject);
+		child.on("close", (status) => resolve({ status, stdout, stderr }));
+	});
+}
+
 const options: ts.CompilerOptions = { module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext, target: ts.ScriptTarget.ES2022 };
 
 test("the host-neutral core resolves without any SDK or plugin dependency", () => {
@@ -32,11 +48,65 @@ test("the host-neutral core resolves without any SDK or plugin dependency", () =
 	const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 	const shared = sources(join(root, "src"));
 	for (const domain of ["notes", "boot", "history", "budget", "tools", "dream"]) assert.ok(shared.some((file) => file.startsWith(join(root, "src", domain) + "/")), `${domain} is included`);
-	assert.deepEqual(dependencyViolations(root, shared, parsed.options, new Set(["typebox"])), []);
-	for (const name of ["@earendil-works/pi-agent-core", "@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "typebox"]) {
+	const sharedRuntime = new Set(["typebox"]);
+	assert.deepEqual(dependencyViolations(root, shared, parsed.options, sharedRuntime), []);
+	for (const name of sharedRuntime) {
+		assert.equal(typeof manifest.dependencies?.[name], "string", `${name} is a declared runtime dependency`);
+		assert.equal(manifest.devDependencies?.[name], undefined, `${name} is not a development-only dependency`);
+		assert.equal(manifest.peerDependencies?.[name], undefined, `${name} is not a host-supplied peer`);
+		assert.equal(manifest.peerDependenciesMeta?.[name], undefined, `${name} has no peer metadata`);
+	}
+	for (const name of ["@earendil-works/pi-agent-core", "@earendil-works/pi-ai", "@earendil-works/pi-coding-agent"]) {
 		assert.equal(manifest.dependencies?.[name], undefined, `${name} is supplied by the host`);
 		assert.equal(manifest.peerDependencies[name], "*", `${name} follows Pi's host dependency contract`);
+		assert.equal(manifest.peerDependenciesMeta[name]?.optional, true, `${name} stays an optional peer`);
 	}
+});
+
+test("a clean production tarball install loads both public entries", async (t) => {
+	const root = repository();
+	const work = mkdtempSync(join(tmpdir(), "notesoup-install-"));
+	t.after(() => rmSync(work, { recursive: true, force: true }));
+	const pack = (directory: string) => {
+		const name = execFileSync("npm", ["pack", "--pack-destination", work, "--ignore-scripts", "--silent"], { cwd: directory, encoding: "utf8" }).trim().split(/\r?\n/).at(-1);
+		assert.ok(name, `npm pack produced a tarball in ${directory}`);
+		return name;
+	};
+	const notesoupTarball = pack(root);
+	// `npm test` builds `dist` before any test runs; skipping prepack avoids rebuilding it while other test files import it.
+	const typeboxDirectory = join(root, "node_modules/typebox");
+	const typeboxManifest = JSON.parse(readFileSync(join(typeboxDirectory, "package.json"), "utf8"));
+	const typeboxTarball = readFileSync(join(work, pack(typeboxDirectory)));
+	const integrity = `sha512-${createHash("sha512").update(typeboxTarball).digest("base64")}`;
+	const shasum = createHash("sha1").update(typeboxTarball).digest("hex");
+	// A loopback registry serves the pinned TypeBox tarball so the install needs no external network.
+	let base = "";
+	const server = createServer((request, response) => {
+		if (request.url === "/typebox") {
+			const version = { ...typeboxManifest, dist: { tarball: `${base}/typebox/-/typebox-${typeboxManifest.version}.tgz`, integrity, shasum } };
+			response.writeHead(200, { "content-type": "application/json" });
+			response.end(JSON.stringify({ name: "typebox", "dist-tags": { latest: typeboxManifest.version }, versions: { [typeboxManifest.version]: version } }));
+			return;
+		}
+		if (request.url === `/typebox/-/typebox-${typeboxManifest.version}.tgz`) {
+			response.writeHead(200, { "content-type": "application/octet-stream" });
+			response.end(typeboxTarball);
+			return;
+		}
+		response.writeHead(404);
+		response.end();
+	});
+	await new Promise<void>((listening) => server.listen(0, "127.0.0.1", listening));
+	t.after(() => server.close());
+	base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+	const consumer = join(work, "consumer");
+	mkdirSync(consumer);
+	writeFileSync(join(consumer, "package.json"), JSON.stringify({ name: "notesoup-consumer", version: "1.0.0", private: true }));
+	const install = await run("npm", ["install", "--registry", base, "--no-audit", "--no-fund", "--ignore-scripts", join(work, notesoupTarball)], consumer);
+	assert.equal(install.status, 0, `npm install failed:\n${install.stdout}\n${install.stderr}`);
+	assert.ok(existsSync(join(consumer, "node_modules/typebox/package.json")), "TypeBox is installed as a production dependency");
+	const imported = await run(process.execPath, ["--input-type=module", "--eval", 'const root = await import("notesoup"); const notes = await import("notesoup/notes"); if (!("notesRead" in root) || typeof notes.createNotesStore !== "function") throw new Error("public entries are incomplete");'], consumer);
+	assert.equal(imported.status, 0, `importing the installed entries failed:\n${imported.stdout}\n${imported.stderr}`);
 });
 
 test("each plugin resolves only its own host, the core, and the public notes entry", () => {
