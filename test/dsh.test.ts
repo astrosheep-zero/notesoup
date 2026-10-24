@@ -62,20 +62,20 @@ test("dsh boot freezes across note writes, rotates before the next wire request,
 	assert.equal(mock.requests[0]!.tools?.some((tool) => tool.name === "dream"), false);
 });
 
-test("dsh reload adopts persisted bytes before first assembly; missing records reconstruct from checkpoints and root system", async (t) => {
-	const { engine, create, mock } = await dshFixture(t);
+test("dsh same-session reload adopts persisted bytes before first assembly; missing records reconstruct from checkpoints and root system", async (t) => {
+	const { engine, create, reload, mock } = await dshFixture(t);
 	const agent = await create();
 	mock.script.push({ tool: "empty_brain", input: {} }, { text: "after" });
 	await run(agent, "before");
 	const snapshot = engine.windows.get(agent.session).snapshot;
 	await createNotesStore(notesIdentity(agent, engine.config)).write("@self/later", "not in the frozen boot");
 	const seed = agent.session.snapshotEvents();
-	const resumed = await create(seed, "session-reloaded");
+	const resumed = await reload(agent, seed);
 	await run(resumed, "continue");
 	assert.equal(engine.windows.get(resumed.session).snapshot.boot, snapshot.boot);
 	assert.equal(system(mock.requests[2]!), system(mock.requests[1]!));
 	const missing = withoutRecords(seed);
-	const reconstructed = await create(missing, "session-without-record");
+	const reconstructed = await reload(resumed, missing);
 	await run(reconstructed, "continue again");
 	assert.equal(engine.windows.get(reconstructed.session).snapshot.window, 1);
 	assert.equal(engine.windows.get(reconstructed.session).snapshot.boot, snapshot.boot);
@@ -84,14 +84,55 @@ test("dsh reload adopts persisted bytes before first assembly; missing records r
 	await run(root, "root stays");
 	const rootBoot = engine.windows.get(root.session).snapshot.boot;
 	await createNotesStore(notesIdentity(root, engine.config)).write("@self/later", "changed again");
-	const rootReloaded = await create(withoutRecords(root.session.snapshotEvents()), "session-root-reloaded");
+	const rootReloaded = await reload(root, withoutRecords(root.session.snapshotEvents()));
 	await run(rootReloaded, "resume root");
 	assert.equal(engine.windows.get(rootReloaded.session).snapshot.boot, rootBoot);
 	assert.equal(engine.windows.get(rootReloaded.session).snapshot.window, 0);
 });
 
-test("dsh reload keeps its window ordinal from a boot written before the tag rename", async (t) => {
-	const { engine, create, mock } = await dshFixture(t);
+test("dsh native fork rebinds boot and notes tools to the child without changing inherited history", async (t) => {
+	const { ctx, engine, create, fork, mock } = await dshFixture(t);
+	const parent = await create();
+	const parentNotes = createNotesStore(notesIdentity(parent, engine.config));
+	await parentNotes.write("MAP.md", "- parent-handoff.md — parent's session note");
+	await parentNotes.write("parent-handoff.md", "parent-only recovery");
+	mock.script.push({ tool: "empty_brain", input: {} }, { text: "after" });
+	await run(parent, "inherited conversation before reset");
+	const parentSnapshot = engine.windows.get(parent.session).snapshot;
+	assert.equal(parentSnapshot.window, 1);
+	assert.ok(parentSnapshot.boot.includes("parent-handoff.md"));
+	const parentEvents = structuredClone(parent.session.snapshotEvents());
+
+	const childId = "session-native-child";
+	const childNotes = createNotesStore({ ...notesIdentity(parent, engine.config), sessionId: childId });
+	await childNotes.write("MAP.md", "- child-handoff.md — child's session note");
+	await childNotes.write("child-handoff.md", "child-only recovery");
+	const child = await fork(parent, childId);
+	assert.equal(child.session.header.parentSession, parent.session.id);
+	assert.equal(child.session.inheritedEventCount, parentEvents.length);
+	const snapshot = engine.windows.get(child.session).snapshot;
+	assert.equal(snapshot.window, parentSnapshot.window);
+	assert.equal(snapshot.windowId, `dsh:${childId}:1`);
+	assert.ok(snapshot.boot.includes(`\ndsh:${childId}\n`));
+	assert.ok(snapshot.boot.includes("- child-handoff.md — child's session note"));
+	assert.equal(snapshot.boot.includes("parent-handoff.md"), false);
+	assert.equal(recoverSnapshot(child.session.ownEvents())?.windowId, snapshot.windowId, "the rebound snapshot is persisted in the child");
+	assert.deepEqual(child.session.snapshotEvents().slice(0, parentEvents.length), parentEvents);
+
+	const read = await ctx.tools.execute({ name: "notes_read", arguments: { address: "child-handoff.md" }, agent: child, callId: ToolCallId("fork-note"), signal: new AbortController().signal });
+	assert.equal(read.isError, false);
+	if (!read.isError) assert.equal((read.value as { text: string }).text, "child-only recovery");
+	const history = await ctx.tools.execute({ name: "history_list", arguments: { query: "inherited conversation before reset", roles: ["user"] }, agent: child, callId: ToolCallId("fork-history"), signal: new AbortController().signal });
+	assert.equal(history.isError, false);
+	if (!history.isError) assert.equal((history.value as { items: unknown[] }).items.length, 1);
+	await run(child, "continue in child");
+	assert.ok(system(mock.requests.at(-1)!).includes(snapshot.boot));
+	assert.equal(engine.windows.get(parent.session).snapshot, parentSnapshot);
+	assert.deepEqual(parent.session.snapshotEvents(), parentEvents);
+});
+
+test("dsh same-session reload keeps frozen bytes and ordinal from a boot written before the tag rename", async (t) => {
+	const { engine, create, reload, mock } = await dshFixture(t);
 	const agent = await create();
 	mock.script.push({ tool: "empty_brain", input: {} }, { text: "after" });
 	await run(agent, "before");
@@ -99,8 +140,10 @@ test("dsh reload keeps its window ordinal from a boot written before the tag ren
 	assert.ok(snapshot.boot.includes(WINDOW_IDENTITY_OPEN_TAG), "the current boot carries the renamed tag");
 	const legacy = withLegacyIdentityTags(withoutRecords(agent.session.snapshotEvents()));
 	assert.ok(JSON.stringify(legacy).includes("<context_window>\\nAgent name: dsh"), "the seed reproduces an old-spelling boot");
-	const resumed = await create(legacy, "session-legacy-tags");
+	await createNotesStore(notesIdentity(agent, engine.config)).write("@self/later", "not in the legacy frozen boot");
+	const resumed = await reload(agent, legacy);
 	await run(resumed, "continue");
+	assert.equal(engine.windows.get(resumed.session).snapshot.boot, snapshot.boot.replaceAll(WINDOW_IDENTITY_OPEN_TAG, "<context_window>").replaceAll(WINDOW_IDENTITY_CLOSE_TAG, "</context_window>"));
 	assert.equal(engine.windows.get(resumed.session).snapshot.window, 1, "an old-tag boot still yields its window ordinal");
 	assert.equal(engine.windows.get(resumed.session).snapshot.windowId, snapshot.windowId, "and its window id");
 });
@@ -115,8 +158,9 @@ function withLegacyIdentityTags(events: readonly SessionEvent[]): SessionEvent[]
 		.replaceAll(WINDOW_IDENTITY_CLOSE_TAG, "</context_window>");
 	return events.map((event) => {
 		const copy = structuredClone(event) as SessionEvent;
-		if (copy.type !== "user/message") return copy;
-		const data = copy.data as { content?: unknown };
+		const message = copy.type === "system/message" ? copy.data.message : copy.type === "user/message" ? copy.data : undefined;
+		if (!message) return copy;
+		const data = message as { content?: unknown };
 		if (typeof data.content === "string") data.content = legacy(data.content);
 		else if (Array.isArray(data.content)) for (const block of data.content as Array<{ text?: unknown }>) {
 			if (typeof block.text === "string") block.text = legacy(block.text);

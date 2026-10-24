@@ -111,9 +111,10 @@ export class Windows {
 		const existing = this.states.get(agent.session);
 		if (existing) return existing;
 		const restored = recoverSnapshot(agent.session.snapshotEvents());
-		const snapshot = restored ?? await this.mint(agent, 0, agent.session.header.createdAt);
+		const sameSession = restored !== undefined && restored.windowId === windowId(agent.session.id, restored.window);
+		const snapshot = sameSession ? restored : await this.mint(agent, restored?.window ?? 0, agent.session.header.createdAt);
 		signal?.throwIfAborted();
-		if (!restored) appendPluginRecord(agent.session, WINDOW_RECORD, snapshot);
+		if (!sameSession) appendPluginRecord(agent.session, WINDOW_RECORD, snapshot);
 		const state = { snapshot, pendingReset: false, warned: false, reminded: false };
 		restoreWarnings(state, agent.session.snapshotEvents());
 		this.states.set(agent.session, state);
