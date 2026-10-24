@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { slugify } from "./paths.js";
 
@@ -79,11 +79,11 @@ function readMarker(dir: string): ProjectHome | undefined {
 		throw error;
 	}
 	try {
-		const value = JSON.parse(raw) as Partial<ProjectMarker>;
-		if (typeof value.id !== "string" || value.id.length === 0 || typeof value.path !== "string" || value.path.length === 0) return undefined;
+		const value = JSON.parse(raw) as Partial<ProjectMarker> | null;
+		if (!value || typeof value.id !== "string" || value.id.length === 0 || typeof value.path !== "string" || value.path.length === 0) throw new Error("Expected non-empty id and path");
 		return { name: basename(dir), dir, id: value.id, path: value.path };
-	} catch {
-		return undefined;
+	} catch (cause) {
+		throw new Error(`Invalid project marker at ${join(dir, ".project")}`, { cause });
 	}
 }
 
@@ -115,8 +115,35 @@ function updateMarker(home: ProjectHome, marker: ProjectMarker): ProjectHome {
 	return { ...home, ...marker };
 }
 
+const claimSleep = new Int32Array(new SharedArrayBuffer(4));
+
+function awaitClaim<T>(path: string, attempt: () => T | undefined): T {
+	const deadline = performance.now() + 5_000;
+	for (;;) {
+		const result = attempt();
+		if (result !== undefined) return result;
+		const remaining = deadline - performance.now();
+		if (remaining <= 0) throw new Error(`Timed out waiting for project claim at ${path}`);
+		Atomics.wait(claimSleep, 0, 0, Math.min(10, remaining));
+	}
+}
+
 /** Resolve and claim the readable home for one repository identity. */
 export function resolveProjectHome(cwd: string, home: string): ProjectHome {
+	mkdirSync(projectRoot(home), { recursive: true });
+	// Serialize the scan as well as publication: an unmarked directory seen under
+	// this lock is legacy, not another resolver between mkdir and marker write.
+	const lock = join(home, ".project-claim");
+	awaitClaim(lock, () => {
+		try { mkdirSync(lock); return true; } catch (error) {
+			if (errno(error) === "EEXIST") return undefined;
+			throw error;
+		}
+	});
+	try { return claimProjectHome(cwd, home); } finally { rmdirSync(lock); }
+}
+
+function claimProjectHome(cwd: string, home: string): ProjectHome {
 	const root = canonicalRoot(cwd);
 	const remote = originRemote(root);
 	const id = remote ?? root;
@@ -134,20 +161,24 @@ export function resolveProjectHome(cwd: string, home: string): ProjectHome {
 	}
 
 	const base = slugify(basename(root));
-	// Existing unmarked homes are taken; only directories appearing after this scan can be raced.
+	// The claim lock makes this a stable snapshot of legacy, unmarked names.
 	const taken = new Set(readdirSync(markerRoot));
 	for (let suffix = 0; ; suffix++) {
 		const name = suffix === 0 ? base : `${base}-${suffix}`;
 		if (taken.has(name)) continue;
 		const dir = join(markerRoot, name);
 		try {
-			mkdirSync(dir, { recursive: true });
-			writeFileSync(join(dir, ".project"), JSON.stringify({ id, path: root }), { flag: "wx" });
-			return { name, dir, id, path: root };
+			mkdirSync(dir);
 		} catch (error) {
-			if (errno(error) === "EEXIST") continue;
-			throw error;
+			if (errno(error) !== "EEXIST") throw error;
+			// A writer outside this protocol may have won after the snapshot.
+			// Never mistake its incomplete publication for a different identity.
+			let winner = awaitClaim(join(dir, ".project"), () => readMarker(dir));
+			if (winner.id !== id && !(remote && winner.id === root)) continue;
+			if (winner.id !== id || winner.path !== root) winner = updateMarker(winner, { id, path: root });
+			return winner;
 		}
+		return updateMarker({ name, dir, id, path: root }, { id, path: root });
 	}
 }
 
