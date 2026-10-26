@@ -51,7 +51,7 @@ const GOLDEN_FORCED_CONTINUATIONS = [
 ];
 
 const GOLDEN_MAPS = `<notesoup:maps>
-Every home's root can hold two pages that never wait on a shelf: \`CHEATSHEET.md\` and \`MAP.md\`.
+Every notebook's root can hold two pages that never wait on a shelf: \`CHEATSHEET.md\` and \`MAP.md\`.
 Both get jammed straight into your brain the moment you wake up. No asking, no skipping. Whoever
 wakes up next reads them, and next is you. So keep them short, and keep them true.
 
@@ -61,7 +61,7 @@ wakes up next reads them, and next is you. So keep them short, and keep them tru
 - **\`MAP.md\`** is only the note index. One line per durable note: the address, then a gist short
   enough to tell whether the thing is worth opening. Rules belong in \`CHEATSHEET.md\`, not here.
 
-Each home keeps its own: \`@project\`, \`@human\`, \`@self\`, \`@model\`. Missing pages are skipped;
+Each notebook keeps its own: \`@project\`, \`@human\`, \`@self\`, \`@model\`. Missing pages are skipped;
 no need to create empty ones. New note, new MAP line. New rule worth remembering, new Cheatsheet
 line. And when a line stops being true, kill it — every window after you reads that page as fact.
 </notesoup:maps>`;
@@ -80,7 +80,7 @@ function note(scope: Scope, path: string, address: string, body: string): NoteRo
 	};
 }
 
-/** Render one boot with only the named homes carrying rows. */
+/** Render one boot with only the named notebooks carrying rows. */
 async function boot(agentName: string, rows: ReadonlyMap<Scope, NoteRow[]>): Promise<string> {
 	const notes = await loadNotesSnapshot({ ...identity, agent: agentName }, openedAt, (scope) => rows.get(scope) ?? []);
 	return renderBootBlock({

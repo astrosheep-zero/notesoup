@@ -8,7 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { Check } from "typebox/value";
 import { createNotesStore, type NotesIdentity } from "../src/notes/index.js";
 import { assertAddress } from "../src/notes/address.js";
-import { normalizeRemote, projectKey } from "../src/notes/project-home.js";
+import { normalizeRemote, projectKey } from "../src/notes/project-namespace.js";
 import { notesList, notesRead, notesSearch, notesUpdate, notesWrite } from "../src/tools/notes.js";
 import { success, type Outcome } from "../src/tools/result.js";
 import { notesToolContext } from "../src/tools/notes-context.js";
@@ -16,7 +16,7 @@ import { notesToolContext } from "../src/tools/notes-context.js";
 const toolContext = (identity: NotesIdentity) => notesToolContext(identity, "/work/current");
 
 function fixture(t: TestContext) {
-	const root = realpathSync(mkdtempSync(join(tmpdir(), "notesoup-project-home-")));
+	const root = realpathSync(mkdtempSync(join(tmpdir(), "notesoup-project-notebook-")));
 	t.after(() => rmSync(root, { recursive: true, force: true }));
 	const home = join(root, "notes");
 	const repo = (path: string, origin?: string): string => {
@@ -66,7 +66,7 @@ if (pause) {
 	};
 	syncBuiltinESMExports();
 }
-const { projectKey } = await import(${JSON.stringify(new URL("../src/notes/project-home.js", import.meta.url).href)});
+const { projectKey } = await import(${JSON.stringify(new URL("../src/notes/project-namespace.js", import.meta.url).href)});
 fs.writeFileSync(join(control, "ready"), "");
 wait("start");
 const key = projectKey(cwd, home);
@@ -102,7 +102,7 @@ function racer(t: TestContext, root: string, cwd: string, home: string, pause = 
 	};
 }
 
-test("sixteen first claimants converge on one usable home for root and remote identities", async t => {
+test("sixteen first claimants converge on one usable notebook for root and remote identities", async t => {
 	for (const remote of [false, true]) await t.test(remote ? "normalized remote across different checkout names" : "canonical root", async t => {
 		const { root, home, repo, marker } = fixture(t);
 		const cwd = repo("api", remote ? "git@HOST:team/api.git" : undefined);
@@ -175,7 +175,7 @@ test("a directory appearing after the snapshot waits for its marker before adopt
 	});
 });
 
-test("an unfinished claim times out without silently allocating another home", async t => {
+test("an unfinished claim times out without silently allocating another notebook", async t => {
 	const { root, home, repo } = fixture(t);
 	const worker = racer(t, root, repo("api"), home, "snapshot");
 	await worker.wait("ready"); worker.release("start");
@@ -201,7 +201,7 @@ test("a stuck claim lock has a bounded timeout and is never stolen", async t => 
 	assert.equal(existsSync(join(home, ".project-claim")), true);
 });
 
-test("malformed marker evidence refuses instead of becoming an unmarked legacy home", t => {
+test("malformed marker evidence refuses instead of becoming an unmarked legacy notebook", t => {
 	const { home, repo } = fixture(t);
 	const cwd = repo("api");
 	mkdirSync(join(home, "project/api"), { recursive: true });
@@ -249,7 +249,7 @@ test("same-basename repositories get readable suffixes and unmarked legacy names
 	assert.equal(readFileSync(join(home, "project", "legacy", "keep.md"), "utf8"), "old notes");
 });
 
-test("linked worktrees and nested directories share the main checkout home and origin", t => {
+test("linked worktrees and nested directories share the main checkout notebook and origin", t => {
 	const { root, home, repo, marker } = fixture(t);
 	const main = repo("api", "ssh://git@HOST/team/api.git");
 	const worktree = join(root, "worktree");
@@ -262,7 +262,7 @@ test("linked worktrees and nested directories share the main checkout home and o
 	assert.deepEqual(marker("api"), { id: "host/team/api", path: main });
 });
 
-test("a moved checkout reuses its remote home and updates only the display root", async t => {
+test("a moved checkout reuses its remote notebook and updates only the display root", async t => {
 	const { root, home, repo, marker, identity } = fixture(t);
 	const old = repo("api", "https://host/team/api.git");
 	await createNotesStore(identity(old)).write("@project/decision", "keep me");
@@ -309,10 +309,10 @@ test("named projects read/list/search with root and sibling receipts, without to
 	const searched = data(await notesSearch.execute({ glob: "@projects/api-1/**", query: "needle" }, toolContext(own)));
 	assert.equal(searched.files[0]?.project_root, second);
 	assert.equal(Check(notesSearch.outputSchema, searched), true);
-	assert.equal(readFileSync(file, "utf8"), before, "named-home reads never rewrite access metadata");
+	assert.equal(readFileSync(file, "utf8"), before, "named-notebook reads never rewrite access metadata");
 });
 
-test("named project writes, edits, crumples and both move endpoints refuse, including the current home", async t => {
+test("named project writes, edits, crumples and both move endpoints refuse, including the current notebook", async t => {
 	const { repo, identity } = fixture(t);
 	const own = identity(repo("api"));
 	await createNotesStore(own).write("@project/decision", "body");

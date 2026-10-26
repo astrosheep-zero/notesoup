@@ -68,7 +68,7 @@ test("one relative cwd retargets every operation without changing later calls", 
 	assert.equal((await createNotesStore(alpha).read("@project/decision"))?.body, "alpha needle");
 
 	const defaultListed = data(await notesList.execute({ cwd }, context));
-	assert.deepEqual(defaultListed.files.map(file => file.address).sort(), ["@project/other.md", "@project/renamed.md"], "an omitted glob selects the override's current homes");
+	assert.deepEqual(defaultListed.files.map(file => file.address).sort(), ["@project/other.md", "@project/renamed.md"], "an omitted glob selects the override's current notebooks");
 	assert.ok(defaultListed.files.every(file => file.project_key === beta.projectKey));
 	const listed = data(await notesList.execute({ glob: "@project/**", cwd }, context));
 	assert.deepEqual(listed.files.map(file => file.address).sort(), ["@project/other.md", "@project/renamed.md"]);

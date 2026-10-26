@@ -13,7 +13,7 @@ import { PROTOCOL_WIPE_SENTENCE, renderProtocolBlock } from "../src/boot/text.js
 import { CLAUDE_WARNING_PROMPT } from "../plugins/claude/src/text.js";
 import { COUNTDOWN_LINE, FORCED_CONTINUATIONS, GUIDANCE_CLOSE_TAG, NORMAL_CONTINUATIONS, warningNotice } from "../src/budget/text.js";
 import { createNotesStore } from "../src/notes/index.js";
-import { resolveProjectHome } from "../src/notes/project-home.js";
+import { resolveProjectNamespace } from "../src/notes/project-namespace.js";
 import { notesIdentityFromPi } from "../plugins/pi/notes/adapter.js";
 import { context, manager } from "./helpers/extension.js";
 
@@ -166,7 +166,7 @@ test("Claude resolves relative cwd against the request identity, not the helper 
   const requestIdentity = { ...identity, cwd: base };
   const written = await dispatch({ op: "tool", tool: "notes_write", identity: requestIdentity, params: { address: "@project/selected", content: "from Claude", cwd: "../other" } }) as ClaudeToolResult;
   assert.equal(written.ok, true, written.text);
-  const project = resolveProjectHome(other, identity.home);
+  const project = resolveProjectNamespace(other, identity.home);
   assert.match(readFileSync(join(project.dir, "selected.md"), "utf8"), /from Claude/);
   const read = await dispatch({ op: "tool", tool: "notes_read", identity: requestIdentity, params: { address: "@project/selected", cwd: "../other" } }) as ClaudeToolResult;
   assert.equal(read.ok, true, read.text);
@@ -1284,7 +1284,7 @@ test("Claude session.end gives /clear, /resume and /branch a fresh boot and iden
       host.process.run = async (argv, init) => { requests.push(JSON.parse(init!.stdin!)); return run(argv, init); };
       const written = await invoke("tool.call", { tool: "mcp__notesoup__notes_write", tool_use_id: "new-session", address: "session.md", content: action }) as { result: string };
       assert.equal(written.result, "created session.md");
-      assert.equal(requests[0]!.identity?.sessionId, `after-${action}`, "tools also use the new session home");
+      assert.equal(requests[0]!.identity?.sessionId, `after-${action}`, "tools also use the new session notebook");
     });
   }
 });
@@ -1402,9 +1402,9 @@ test("Claude identity uses the documented current model and cwd, with a safe mod
   assert.equal(seen.at(-1)!.identity.model, "claude");
 });
 
-test("Claude current-cwd project resolution shares Pi's remote home across checkout spellings", async (t) => {
+test("Claude current-cwd project resolution shares Pi's remote notebook across checkout spellings", async (t) => {
   const { host, home, invoke } = await retainedFixture(t);
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "claude-project-home-")));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "claude-project-notebook-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const first = join(root, "api");
   const second = join(root, "renamed");
@@ -1427,7 +1427,7 @@ test("Claude current-cwd project resolution shares Pi's remote home across check
   assert.equal(written.result, "overwrote @project/shared.md (project api)");
   assert.equal((await createNotesStore(piIdentity).read("@project/shared"))?.body, "Claude body");
   assert.deepEqual(JSON.parse(readFileSync(join(home, "project/api/.project"), "utf8")), { id: "host/team/backend", path: second });
-  assert.equal(resolveProjectHome(second, home).name, piIdentity.projectKey);
+  assert.equal(resolveProjectNamespace(second, home).name, piIdentity.projectKey);
 });
 
 test("Claude session.end cannot be undone by an in-flight old reset", async (t) => {

@@ -6,7 +6,7 @@ import { allItems, contentText } from "../src/history/history.js";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveProjectHome } from "../src/notes/project-home.js";
+import { resolveProjectNamespace } from "../src/notes/project-namespace.js";
 import { renderBootBlock } from "../src/boot/render.js";
 import { loadNotesSnapshot } from "../src/boot/snapshot.js";
 import { NOTES_PROTOCOL_CLOSE_TAG, WINDOW_IDENTITY_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG } from "../src/boot/text.js";
@@ -227,7 +227,7 @@ test("dsh transaction keeps node zero, resets tiny spans, refuses partial spans,
 	session.append("turn/end", { turn: 2, reason: { kind: "completed" } });
 });
 
-test("dsh cancellation preserves the notebook; a close failure leaves a durable lock and landed boot recoverable", async (t) => {
+test("dsh cancellation preserves the page; a close failure leaves a durable lock and landed boot recoverable", async (t) => {
 	const { engine, create } = await dshFixture(t);
 	const agent = await create();
 	await run(agent, "one");
@@ -357,12 +357,12 @@ test("dsh explicit resets survive auto:false; shared tool reads and expected err
 	assert.equal(note.isError, false);
 	if (!note.isError) assert.equal((note.value as { text: string }).text, "decision");
 	const identity = notesIdentity(agent, engine.config);
-	assert.equal(identity.projectKey, resolveProjectHome(agent.session.header.cwd!, identity.home).name);
+	assert.equal(identity.projectKey, resolveProjectNamespace(agent.session.header.cwd!, identity.home).name);
 	const marker = JSON.parse(await readFile(join(identity.home, "project", identity.projectKey, ".project"), "utf8"));
 	assert.equal(typeof marker.id, "string");
 	const foreignRoot = await mkdtemp(join(tmpdir(), "ns-dsh-foreign-"));
 	t.after(() => rm(foreignRoot, { recursive: true, force: true }));
-	const foreign = resolveProjectHome(foreignRoot, identity.home);
+	const foreign = resolveProjectNamespace(foreignRoot, identity.home);
 	await createNotesStore({ ...identity, projectKey: foreign.name }).write("@project/reference", "foreign paper");
 	const foreignFile = join(foreign.dir, "reference.md");
 	const before = await readFile(foreignFile, "utf8");

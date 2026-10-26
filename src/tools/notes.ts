@@ -15,10 +15,10 @@ const ORIGIN = Type.Optional(Type.Union([...ORIGIN_VALUES], {
 const CRUMPLED_PARAMETER = Type.Optional(Type.Boolean({ description: "(optional) true = crumple (hide from list and search, still readable); false = restore." }));
 const CRUMPLED_LIST_PARAMETER = Type.Optional(Type.Boolean({ description: "(optional) true = list only crumpled notes." }));
 const FILE_LIMIT_PARAMETER = Type.Optional(Type.Integer({ minimum: 1, description: "(optional, default as many as fit) Max notes." }));
-const GLOB_PARAMETER = nullableString("(optional) Glob over full addresses, or @default for the current homes.");
+const GLOB_PARAMETER = nullableString("(optional) Glob over full addresses, or @default for the current notebooks.");
 const CWD_PARAMETER = Type.Optional(Type.String({ minLength: 1, description: "(optional) Select the current project for this call. A relative path resolves against the host session cwd; the path must be an existing directory." }));
-const QUERY_HOMES_DESCRIPTION = "Omit `glob` or use `@default` for this session and current shared homes; `**` searches all homes, `@sessions/*/**` searches all sessions.";
-const ADDRESS_DESCRIPTION = "Addresses: a bare path is this session's note; `@project/`, `@human/`, `@self/`, `@model/` are durable homes; `@projects/<name>/<path>` and `@sessions/<id>/<path>` read named project and session notes (read-only). Not file paths: never pass them to file tools.";
+const QUERY_NAMESPACES_DESCRIPTION = "Omit `glob` or use `@default` for this session and current shared notebooks; `**` searches all notebooks, `@sessions/*/**` searches all sessions.";
+const ADDRESS_DESCRIPTION = "Addresses: a bare path is this session's note; `@project/`, `@human/`, `@self/`, `@model/` are durable notebooks; `@projects/<name>/<path>` and `@sessions/<id>/<path>` read named project and session notes (read-only). Not file paths: never pass them to file tools.";
 
 /**
  * Typed refusal. Every fact a caller needs is already in the message; there is no separate context.
@@ -105,7 +105,7 @@ function renderIdentity(identity: { address: string; project_key?: string; proje
 	return text;
 }
 
-/** Display context a named project home adds to its receipts; ordinary homes omit both. */
+/** Display context a named project notebook adds to its receipts; ordinary notebooks omit both. */
 export const ProjectReceiptSchema = {
 	project_root: Type.Optional(Type.String()),
 	project_siblings: Type.Optional(Type.Array(Type.Object({ name: Type.String(), path: Type.String() }, { additionalProperties: false }))),
@@ -138,7 +138,7 @@ const SearchedFileSchema = Type.Object({
 
 const SnapshotSchema = {
 	more: Type.Integer({ description: "How many more were left out." }),
-	homes_unavailable: Type.Array(Type.String()),
+	namespaces_unavailable: Type.Array(Type.String()),
 };
 
 export const NotesWriteDataSchema = Type.Object({
@@ -185,7 +185,7 @@ export function snapshot<T extends { address: string }>(
 	shrink?: (item: T, fits: (candidate: T) => boolean) => T,
 ): Outcome<Snapshot<T>> {
 	const files: T[] = [];
-	const data = (selected: T[]): Snapshot<T> => ({ files: selected, more: rows.length - selected.length, homes_unavailable: status.homesUnavailable });
+	const data = (selected: T[]): Snapshot<T> => ({ files: selected, more: rows.length - selected.length, namespaces_unavailable: status.namespacesUnavailable });
 	const render = (outcome: Outcome<Snapshot<T>>) => renderOutcome(outcome, renderData);
 	const fits = (item: T) => fitsResult(success(data([...files, item])), render);
 	for (const item of rows.slice(0, limit)) {
@@ -201,7 +201,7 @@ export function snapshot<T extends { address: string }>(
 		break;
 	}
 	const outcome = success(data(files));
-	return fitsResult(outcome, render) ? outcome : failure("output_too_large", `The list of unreachable homes is itself over ${TOOL_OUTPUT_LIMIT}; narrow \`glob\` to fewer homes.`);
+	return fitsResult(outcome, render) ? outcome : failure("output_too_large", `The list of unreachable notebooks is itself over ${TOOL_OUTPUT_LIMIT}; narrow \`glob\` to fewer notebooks.`);
 }
 
 export function listedFile(row: Pick<NoteRow, "address" | "meta">, identity: NotesIdentity): NotesListData["files"][number] {
@@ -319,13 +319,13 @@ export function renderListData(data: NotesListData): string {
 		lines.push(`- ${renderIdentity(file)} | updated ${file.updated_at} | accessed ${file.last_accessed}${file.crumpled_at === undefined ? "" : ` | crumpled ${file.crumpled_at}`}`);
 	}
 	if (data.more > 0) lines.push(`${data.more} more matching notes omitted; narrow with glob`);
-	for (const home of data.homes_unavailable) lines.push(`${home} could not be read`);
+	for (const namespace of data.namespaces_unavailable) lines.push(`${namespace} could not be read`);
 	return lines.join("\n");
 }
 
 export const notesList = {
 	name: "notes_list", label: "Notes list",
-	description: `List notes, newest first. Not pageable; \`more\` counts the rest. ${QUERY_HOMES_DESCRIPTION} ${ADDRESS_DESCRIPTION}`,
+	description: `List notes, newest first. Not pageable; \`more\` counts the rest. ${QUERY_NAMESPACES_DESCRIPTION} ${ADDRESS_DESCRIPTION}`,
 	parameters: notesListParameters, outputSchema: resultSchema(NotesListDataSchema),
 	async execute(params: Static<typeof notesListParameters>, context: NotesToolContext): Promise<Outcome<NotesListData>> {
 		try {
@@ -346,7 +346,7 @@ function renderSearchData(data: NotesSearchData): string {
 		for (const match of file.matches) lines.push(`  line ${match.line} at offset_chars ${match.offset_chars}: ${match.text}`);
 	}
 	if (data.more > 0) lines.push(`${data.more} more matching notes omitted; narrow with glob`);
-	for (const home of data.homes_unavailable) lines.push(`${home} could not be read`);
+	for (const namespace of data.namespaces_unavailable) lines.push(`${namespace} could not be read`);
 	return lines.join("\n");
 }
 
@@ -373,7 +373,7 @@ function fitSearchFile(file: SearchFile, fits: (candidate: SearchFile) => boolea
 
 export const notesSearch = {
 	name: "notes_search", label: "Notes search",
-	description: `Search note bodies for literal text, case-insensitive. Without a query, lists notes with no match lines. Returns matching lines with offsets for \`notes_read\`. Not pageable; \`more\` counts the rest. ${QUERY_HOMES_DESCRIPTION} ${ADDRESS_DESCRIPTION}`,
+	description: `Search note bodies for literal text, case-insensitive. Without a query, lists notes with no match lines. Returns matching lines with offsets for \`notes_read\`. Not pageable; \`more\` counts the rest. ${QUERY_NAMESPACES_DESCRIPTION} ${ADDRESS_DESCRIPTION}`,
 	parameters: notesSearchParameters, outputSchema: resultSchema(NotesSearchDataSchema),
 	async execute(params: Static<typeof notesSearchParameters>, context: NotesToolContext): Promise<Outcome<NotesSearchData>> {
 		try {

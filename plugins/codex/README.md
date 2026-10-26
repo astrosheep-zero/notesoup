@@ -1,6 +1,6 @@
 # notesoup for Codex
 
-Native notes and history for Codex **0.160.1**. The plugin bundles one stdio MCP server with the five notes homes and three history tools, and one hook helper that injects the notes boot into each native context window. `new_context` and `get_context_remaining` stay Codex's own tools; notesoup does not replace Codex's reset or budget.
+Native notes and history for Codex **0.160.1**. The plugin bundles one stdio MCP server with the five notebooks and three history tools, and one hook helper that injects the notes boot into each native context window. `new_context` and `get_context_remaining` stay Codex's own tools; notesoup does not replace Codex's reset or budget.
 
 ## Install
 

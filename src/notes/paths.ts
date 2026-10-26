@@ -5,7 +5,7 @@ import type { NotesIdentity } from "./identity.js";
 
 export type Scope = "session" | "project" | "human" | "agent" | "model";
 
-/** The one legal home-name shape: lowercase [a-z0-9-] runs separated by single dashes. */
+/** The one legal namespace-name shape: lowercase [a-z0-9-] runs separated by single dashes. */
 export const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 /** Session identities use the same single-directory-component grammar as NotesIdentity, not slugs. */
@@ -22,7 +22,7 @@ export function slugify(value: string): string {
 /**
  * The one virtual-path grammar: a relative, `/`-separated path with no empty, `.` or `..`
  * segment. Both the address decoder and the physical-path builder enforce it here, so a
- * caller that reaches a path without going through an address still cannot escape a home.
+ * caller that reaches a path without going through an address still cannot escape a namespace.
  */
 export function assertVirtualPath(value: unknown): string {
 	if (typeof value !== "string" || value.length === 0) throw new NoteError("invalid_address", "The address is empty; give the note a path.");
@@ -32,8 +32,8 @@ export function assertVirtualPath(value: unknown): string {
 	return value;
 }
 
-/** Absolute directory holding the per-session note homes. */
-export function sessionHomesRoot(home: string): string {
+/** Absolute directory holding the per-session note namespaces. */
+export function sessionNamespacesRoot(home: string): string {
 	return join(home, "pi", "session");
 }
 
@@ -45,15 +45,15 @@ export function scopeDir(scope: Scope, identity: NotesIdentity, who?: string): s
 	if (scope === "project") return join(identity.home, "project", who ?? identity.projectKey);
 	if (scope === "agent") return join(identity.home, "agents", who ?? identity.agent);
 	if (scope === "model") return join(identity.home, "models", who ?? identity.model);
-	return join(sessionHomesRoot(identity.home), who ?? identity.sessionId);
+	return join(sessionNamespacesRoot(identity.home), who ?? identity.sessionId);
 }
 
-/** Every addressable home directory in a namespace; sessions keep their original identity spelling. */
-export async function namespaceSlugs(namespace: "sessions" | "project" | "agents" | "models", home: string): Promise<string[]> {
-	const root = namespace === "sessions" ? sessionHomesRoot(home) : join(home, namespace);
+/** Every addressable directory of a namespace family; sessions keep their original identity spelling. */
+export async function namespaceSlugs(family: "sessions" | "project" | "agents" | "models", home: string): Promise<string[]> {
+	const root = family === "sessions" ? sessionNamespacesRoot(home) : join(home, family);
 	try {
 		return (await readdir(root, { withFileTypes: true }))
-			.filter((entry) => entry.isDirectory() && (namespace === "sessions" ? isSessionId(entry.name) : SLUG_PATTERN.test(entry.name)))
+			.filter((entry) => entry.isDirectory() && (family === "sessions" ? isSessionId(entry.name) : SLUG_PATTERN.test(entry.name)))
 			.map((entry) => entry.name)
 			.sort();
 	} catch (error) {

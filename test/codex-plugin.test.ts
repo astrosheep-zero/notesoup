@@ -192,7 +192,7 @@ test("a copied plugin without src or node_modules still initializes and lists al
 
 /* ---------------------------------------------------------------- MCP tools */
 
-test("notes tools use the hook thread as the session home and the current turn model as @model", async (t) => {
+test("notes tools use the hook thread as the session notebook and the current turn model as @model", async (t) => {
 	const f = await fixture(t);
 	await writeFile(f.transcript, jsonl([row("session_meta", sessionMeta())]));
 	await bind(f.data, { threadId: ROOT, rootSessionId: ROOT, home: f.home, cwd: f.cwd, transcriptPath: f.transcript });

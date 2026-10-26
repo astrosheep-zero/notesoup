@@ -25,7 +25,7 @@ export function missingNativeFacts(reason: string): string {
 	return `notesoup: no boot injected because Codex's native window facts could not be read (${reason}). ${CODEX_SETUP_HINT} notesoup supports Codex 0.160.1 transcripts.`;
 }
 
-/** A boot can still identify itself when the note store itself refused; it must not pretend homes are empty. */
+/** A boot can still identify itself when the note store itself refused; it must not pretend notebooks are empty. */
 export function notesFailureBoot(reason: string): string {
-	return `notesoup: your notes did not load this time (${reason}). Try the notes_list tool; if it fails too, tell the human. Do not assume a home is empty from this failure.`;
+	return `notesoup: your notes did not load this time (${reason}). Try the notes_list tool; if it fails too, tell the human. Do not assume a notebook is empty from this failure.`;
 }

@@ -1,6 +1,6 @@
 export { createNotesStore, noteIdentity } from "./store.js";
 export { NoteError, type NoteErrorCode } from "./errors.js";
-export { projectKey } from "./project-home.js";
+export { projectKey } from "./project-namespace.js";
 export { slugify } from "./paths.js";
 export { snapshotNotesIdentity, type NotesIdentity } from "./identity.js";
 export { isFilesystemError } from "./fs-error.js";

@@ -135,7 +135,7 @@ test("write lands a real markdown file with harness frontmatter and a pure body"
 	for (const [key, value] of [["origin", "self"], ["accessCount", "0"]]) {
 		assert.match(raw, new RegExp(`^${key}: ${value}$`, "m"), `frontmatter carries ${key}=${value}`);
 	}
-	assert.equal(/^scope:/m.test(raw), false, "scope is derived from the file home, never persisted");
+	assert.equal(/^scope:/m.test(raw), false, "scope is derived from the file notebook, never persisted");
 	assert.equal(/^status:/m.test(raw), false, "status is gone from persisted notes");
 	assert.equal(/^stale:/m.test(raw), false, "the boolean stale flag is gone from persisted notes");
 	assert.equal(/^crumpledAt:/m.test(raw), false, "a fresh note is uncrumpled");
@@ -197,8 +197,8 @@ test("session-note project ownership is per note, persistent across sessions, an
 
 	await call(firstCaptured, "notes_write", { address: "new-from-project-b.md", content: "new note" }, movedContext);
 	assert.equal(parseNote(readFileSync(physicalPath("session", "new-from-project-b.md", movedContext), "utf8")).meta.project, projectB, "only a newly-created session note uses the current project key");
-	await call(firstCaptured, "notes_write", { address: "@project/project-note.md", content: "project home note" }, movedContext);
-	assert.equal(parseNote(readFileSync(physicalPath("project", "project-note.md", movedContext), "utf8")).meta.project, undefined, "project-home notes do not receive session ownership metadata");
+	await call(firstCaptured, "notes_write", { address: "@project/project-note.md", content: "project notebook note" }, movedContext);
+	assert.equal(parseNote(readFileSync(physicalPath("project", "project-note.md", movedContext), "utf8")).meta.project, undefined, "project-notebook notes do not receive session ownership metadata");
 	assert.equal((await listNotes(movedContext)).filter(row => row.scope === "session").length, 2, "project ownership remains frontmatter, not a separate note");
 });
 
@@ -217,7 +217,7 @@ test("linked git worktrees share the main checkout's project key", () => {
 	git(["worktree", "add", "-q", "--detach", worktree]);
 	assert.equal(projectKey(worktree, process.env.NOTESOUP_HOME!), projectKey(main, process.env.NOTESOUP_HOME!), "a linked worktree resolves to the main checkout's key");
 	assert.equal(projectKey(join(worktree, "gone", "deeper"), process.env.NOTESOUP_HOME!), projectKey(main, process.env.NOTESOUP_HOME!), "a nonexistent subdirectory still resolves through its worktree");
-	assert.equal(scopeDir("project", context(manager(), undefined, undefined, true, worktree)), scopeDir("project", context(manager(), undefined, undefined, true, main)), "@project uses the same physical home from both checkouts");
+	assert.equal(scopeDir("project", context(manager(), undefined, undefined, true, worktree)), scopeDir("project", context(manager(), undefined, undefined, true, main)), "@project uses the same physical notebook from both checkouts");
 });
 
 test("unrecognized metadata remains ordinary frontmatter; invalid project ownership stays unknown", async () => {
@@ -393,13 +393,13 @@ test("write and update receipts distinguish outcomes and no-op edits", async () 
 	assert.match(combined.diff, /origin/, "the diff still carries the frontmatter part");
 });
 
-test("empty results distinguish hidden notes and unavailable homes", async () => {
+test("empty results distinguish hidden notes and unavailable notebooks", async () => {
 	freshRoot();
 	const session = manager();
 	const captured = makeExtension(session);
 	const ctx = context(session);
 	const empty = resultData<NotesListData>(await call(captured, "notes_list", { glob: "@human/**" }, ctx));
-	assert.deepEqual(empty, { files: [], more: 0, homes_unavailable: [] });
+	assert.deepEqual(empty, { files: [], more: 0, namespaces_unavailable: [] });
 	await call(captured, "notes_write", { address: "@human/hidden.md", content: "needle" }, ctx);
 	await call(captured, "notes_update", { address: "@human/hidden.md", crumpled: true }, ctx);
 	const hidden = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle", glob: "@human/**" }, ctx));
@@ -412,14 +412,14 @@ test("empty results distinguish hidden notes and unavailable homes", async () =>
 	const partialResult = await notesList.execute({ glob: "**" }, notesToolContext(identity, ctx.cwd));
 	assert.ok(partialResult.ok);
 	const partial = partialResult.data;
-	assert.deepEqual(partial.homes_unavailable, ["@project"]);
+	assert.deepEqual(partial.namespaces_unavailable, ["@project"]);
 	assert.deepEqual(partial.files, []);
 	const searchResult = await notesSearch.execute({ query: "needle", glob: "**" }, notesToolContext(identity, ctx.cwd));
 	assert.ok(searchResult.ok);
-	assert.deepEqual(searchResult.data.homes_unavailable, ["@project"]);
+	assert.deepEqual(searchResult.data.namespaces_unavailable, ["@project"]);
 	writeFileSync(join(process.env.NOTESOUP_HOME!, "agents"), "not a directory");
 	const namespace = resultData<NotesListData>(await call(captured, "notes_list", { glob: "@agents/*/note.md" }, ctx));
-	assert.deepEqual(namespace.homes_unavailable, ["@agents"]);
+	assert.deepEqual(namespace.namespaces_unavailable, ["@agents"]);
 });
 
 test("notes receipts report resolved identity across scopes", async () => {
@@ -458,7 +458,7 @@ test("notes receipts report resolved identity across scopes", async () => {
 	for (const row of searched.files) assertReceiptIdentity(row, row.address, notes.find((note) => note.address === row.address)!.scope, ctx);
 });
 
-test("mutation receipts keep their existing shape outside named project homes", async () => {
+test("mutation receipts keep their existing shape outside named project notebooks", async () => {
 	freshRoot();
 	const session = manager();
 	const captured = makeExtension(session);
@@ -558,7 +558,7 @@ test("a read keeps its body window verbatim under the new presentation", async (
 	assert.equal(wholeText.includes("more characters"), false);
 });
 
-test("@ addresses select one home, keep boundaries, and never fall back", async () => {
+test("@ addresses select one notebook, keep boundaries, and never fall back", async () => {
 	const root = freshRoot();
 	const session = manager();
 	const captured = makeExtension(session);
@@ -566,8 +566,8 @@ test("@ addresses select one home, keep boundaries, and never fall back", async 
 	await call(captured, "notes_write", { address: "same.md", content: "session" }, ctx);
 	await call(captured, "notes_write", { address: "@project/same.md", content: "project" }, ctx);
 	await call(captured, "notes_write", { address: "@human/same.md", content: "human" }, ctx);
-	assert.ok(existsSync(physicalPath("project", "same.md", ctx)), "@project writes to the current project home");
-	assert.ok(existsSync(physicalPath("human", "same.md", ctx)), "@human writes to the human home");
+	assert.ok(existsSync(physicalPath("project", "same.md", ctx)), "@project writes to the current project notebook");
+	assert.ok(existsSync(physicalPath("human", "same.md", ctx)), "@human writes to the human notebook");
 	assert.match(resultRead(await call(captured, "notes_read", { address: "same.md" }, ctx)).content, /session$/);
 	assert.equal(resultError(await call(captured, "notes_read", { address: "@project/missing.md" }, ctx)).code, "not_found");
 	assert.match(resultError(await call(captured, "notes_read", { address: "@glboal/same.md" }, ctx)).message, /isn't a note address.*@project\/.*@human\//);
@@ -589,7 +589,7 @@ test("interior @ in a note path round-trips through write, list, search, read, u
 	const listed = resultData<NotesListData>(await call(captured, "notes_list", {}, ctx));
 	assert.deepEqual(listed.files.map((row) => row.address).sort(), ["@project/mail/alice@example.com.md", "release@v1.md"], "both addresses list in canonical form");
 	const globbed = resultData<NotesListData>(await call(captured, "notes_list", { glob: "@project/**" }, ctx));
-	assert.deepEqual(globbed.files.map((row) => row.address), ["@project/mail/alice@example.com.md"], "a home glob still narrows to that home");
+	assert.deepEqual(globbed.files.map((row) => row.address), ["@project/mail/alice@example.com.md"], "a notebook glob still narrows to that notebook");
 	const searched = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle" }, ctx));
 	assert.deepEqual(searched.files.map((row) => row.address).sort(), ["@project/mail/alice@example.com.md", "release@v1.md"], "searched addresses carry the interior @ back out");
 	assert.match(resultRead(await call(captured, "notes_read", { address: "@project/mail/alice@example.com.md" }, ctx)).content, /mail needle$/);
@@ -620,7 +620,7 @@ test("Pi adapter defaults to anonymous agent identity", async () => {
 		const listed = resultData<NotesListData>(await call(captured, "notes_list", {}, ctx));
 		assert.deepEqual(listed.files.map((row) => row.address), ["@self/private.md"]);
 		const explicit = resultData<NotesListData>(await call(captured, "notes_list", { glob: "@agents/*/private.md" }, ctx));
-		assert.deepEqual(explicit.files.map((row) => row.address), ["@self/private.md"], "explicit-id globs still match the current home");
+		assert.deepEqual(explicit.files.map((row) => row.address), ["@self/private.md"], "explicit-id globs still match the current notebook");
 		assert.equal(existsSync(join(root, "agents", "anonymous", "private.md")), true);
 	});
 });
@@ -634,7 +634,7 @@ test("Pi adapter resolves agent and switched model identity on each notes call a
 		await call(captured, "notes_write", { address: "@self/private.md", content: "agent note" }, ctx);
 		await call(captured, "notes_write", { address: "@model/private.md", content: "first model note" }, ctx);
 		ctx.model = context(session, undefined, undefined, true, testEnvironment.cwd, true, "other/Second.Model").model;
-		assert.equal(resultError(await call(captured, "notes_read", { address: "@model/private.md" }, ctx)).code, "not_found", "switched model does not fall back to previous home");
+		assert.equal(resultError(await call(captured, "notes_read", { address: "@model/private.md" }, ctx)).code, "not_found", "switched model does not fall back to previous notebook");
 		await call(captured, "notes_write", { address: "@model/private.md", content: "second model note" }, ctx);
 		const listed = resultData<NotesListData>(await call(captured, "notes_list", {}, ctx));
 		assert.deepEqual(listed.files.map((row) => row.address).sort(), ["@model/private.md", "@self/private.md"]);
@@ -643,7 +643,7 @@ test("Pi adapter resolves agent and switched model identity on each notes call a
 		assert.equal(boot.includes("@models/first-model/private.md"), false);
 		assert.match(resultRead(await call(captured, "notes_read", { address: "@models/first-model/private.md" }, ctx)).content, /first model note$/);
 		const refused = resultError(await call(captured, "notes_update", { address: "@models/first-model/private.md", crumpled: true }, ctx));
-		assert.match(refused.message, /someone else's home/);
+		assert.match(refused.message, /someone else's notebook/);
 		assert.match(readFileSync(join(root, "models/first-model/private.md"), "utf8"), /first model note$/);
 	});
 });
@@ -662,14 +662,14 @@ async function withAgent(name: string | undefined, run: () => Promise<void>): Pr
 	}
 }
 
-test("a symlinked checkout resolves the canonical root, so one checkout has one project home", () => {
+test("a symlinked checkout resolves the canonical root, so one checkout has one project notebook", () => {
 	const root = realpathSync(testEnvironment.cwd);
 	const real = join(root, "real-repo");
 	mkdirSync(join(real, ".git"), { recursive: true });
 	const linked = join(root, "linked-repo");
 	symlinkSync(real, linked);
 	assert.equal(projectKey(linked, process.env.NOTESOUP_HOME!), "real-repo", "the name comes from the canonical root");
-	assert.equal(projectKey(real, process.env.NOTESOUP_HOME!), "real-repo", "both spellings reuse one home");
+	assert.equal(projectKey(real, process.env.NOTESOUP_HOME!), "real-repo", "both spellings reuse one notebook");
 });
 
 test("a glob ? matches exactly one non-slash character", () => {

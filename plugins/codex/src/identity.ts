@@ -42,7 +42,7 @@ export function safeThreadId(value: unknown, field = "threadId"): string {
 export function pluginDataRoot(env: NodeJS.ProcessEnv = process.env): string {
 	const value = env.PLUGIN_DATA;
 	if (typeof value !== "string" || value.trim() === "" || !isAbsolute(value)) {
-		throw new CodexIdentityError("missing_plugin_data", "PLUGIN_DATA is unavailable. Install notesoup as a Codex plugin (or set PLUGIN_DATA for a standalone test) so hook bindings have one mutable home.");
+		throw new CodexIdentityError("missing_plugin_data", "PLUGIN_DATA is unavailable. Install notesoup as a Codex plugin (or set PLUGIN_DATA for a standalone test) so hook bindings have one mutable data directory.");
 	}
 	return resolve(value);
 }
@@ -52,7 +52,7 @@ export function notesHome(env: NodeJS.ProcessEnv = process.env): string {
 	return value !== undefined && value.trim() !== "" ? resolve(value) : join(homedir(), ".agents", "notes");
 }
 
-/** Native ids arrive provider-prefixed; @model is the last segment, slugged like every other home. */
+/** Native ids arrive provider-prefixed; @model is the last segment, slugged like every other notebook. */
 export function modelSlug(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
 	const id = value.trim();
@@ -138,7 +138,7 @@ export function turnModel(meta: Record<string, unknown>): string {
 	}
 	const model = typeof value === "object" && value !== null ? (value as Record<string, unknown>).model : undefined;
 	const slug = modelSlug(model);
-	if (slug === undefined) throw new CodexIdentityError("missing_model", "Codex did not supply this turn's model in MCP metadata, so notesoup cannot choose an @model home. Update Codex, or call notes from a model turn.");
+	if (slug === undefined) throw new CodexIdentityError("missing_model", "Codex did not supply this turn's model in MCP metadata, so notesoup cannot choose an @model notebook. Update Codex, or call notes from a model turn.");
 	return slug;
 }
 

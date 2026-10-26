@@ -7,7 +7,7 @@ import { createNotesStore, noteIdentity, NoteError, type NotesIdentity } from ".
 import { scopeDir } from "../src/notes/paths.js";
 
 function fixture(t: test.TestContext) {
-	const home = mkdtempSync(join(tmpdir(), "notes-query-homes-"));
+	const home = mkdtempSync(join(tmpdir(), "notes-query-namespaces-"));
 	t.after(() => rmSync(home, { recursive: true, force: true }));
 	const identity: NotesIdentity = { home, sessionId: "DSH.Run_1+local", projectKey: "current-project", agent: "current-agent", model: "current-model" };
 	const foreignIdentity: NotesIdentity = { ...identity, sessionId: "DSH.Run_2+@remote", projectKey: "other-project", agent: "other-agent", model: "other-model" };
@@ -22,8 +22,8 @@ async function populate(t: test.TestContext) {
 	const fixtureData = fixture(t);
 	const { notes, foreign, foreignIdentity } = fixtureData;
 	const current = ["shared.md", "@project/shared.md", "@human/shared.md", "@self/shared.md", "@model/shared.md"].sort();
-	for (const address of current) await notes.write(address, "needle in current home");
-	for (const address of ["shared.md", "@project/shared.md", "@self/shared.md", "@model/shared.md"]) await foreign.write(address, "needle in foreign home");
+	for (const address of current) await notes.write(address, "needle in current notebook");
+	for (const address of ["shared.md", "@project/shared.md", "@self/shared.md", "@model/shared.md"]) await foreign.write(address, "needle in foreign notebook");
 	const all = [...current,
 		`@sessions/${foreignIdentity.sessionId}/shared.md`,
 		"@projects/other-project/shared.md", "@agents/other-agent/shared.md", "@models/other-model/shared.md",
@@ -31,7 +31,7 @@ async function populate(t: test.TestContext) {
 	return { ...fixtureData, current, all };
 }
 
-test("default spellings stay local while explicit ** lists and searches each home once", async (t) => {
+test("default spellings stay local while explicit ** lists and searches each notebook once", async (t) => {
 	const { notes, current, all, identity } = await populate(t);
 	assert.deepEqual(addresses(await notes.list()), current);
 	for (const glob of [null, "", "@default"]) {
@@ -101,7 +101,7 @@ test("named session reads leave bytes untouched and explicit session mutations r
 	assert.equal(readFileSync(foreignFile, "utf8"), beforeForeign);
 });
 
-test("named project reads and relative identity rendering survive global enumeration of unmarked homes", async (t) => {
+test("named project reads and relative identity rendering survive global enumeration of unmarked notebooks", async (t) => {
 	const { home, identity, notes } = fixture(t);
 	const project = join(home, "project", "another-project");
 	mkdirSync(project, { recursive: true });
@@ -125,21 +125,21 @@ test("named project reads and relative identity rendering survive global enumera
 	await assert.rejects(() => notes.write(address, "no"), (error: unknown) => error instanceof NoteError && error.code === "invalid_scope");
 });
 
-test("global status isolates every failed namespace and reserved heads do not scan unrelated homes", async (t) => {
+test("global status isolates every failed namespace and reserved heads do not scan unrelated notebooks", async (t) => {
 	const { home, notes } = fixture(t);
 	await notes.write("@human/available.md", "needle");
 	mkdirSync(join(home, "pi"), { recursive: true });
 	for (const root of ["pi/session", "project", "agents", "models"]) writeFileSync(join(home, root), "not a directory");
-	const expected = { homesUnavailable: ["@sessions", "@projects", "@agents", "@models"] };
+	const expected = { namespacesUnavailable: ["@sessions", "@projects", "@agents", "@models"] };
 	const listed = await notes.listWithStatus({ glob: "**" });
 	assert.deepEqual(addresses(listed.rows), ["@human/available.md"]);
 	assert.deepEqual(listed.status, expected);
 	assert.deepEqual((await notes.searchWithStatus(["needle"], { glob: "**" })).status, expected);
-	assert.deepEqual((await notes.listWithStatus({ glob: "@human/**" })).status.homesUnavailable, []);
+	assert.deepEqual((await notes.listWithStatus({ glob: "@human/**" })).status.namespacesUnavailable, []);
 	await assert.rejects(() => notes.list({ glob: "**" }), (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOTDIR");
 });
 
-test("global status reports failed enumerated homes individually and keeps readable siblings", async (t) => {
+test("global status reports failed enumerated notebooks individually and keeps readable siblings", async (t) => {
 	if (process.getuid?.() === 0 || process.platform === "win32") return t.skip("chmod 000 does not refuse this user's reads");
 	const { notes, foreignIdentity, current, home, all } = await populate(t);
 	const failed = [scopeDir("session", foreignIdentity), scopeDir("project", foreignIdentity)];
@@ -147,15 +147,15 @@ test("global status reports failed enumerated homes individually and keeps reada
 	try {
 		const result = await notes.listWithStatus({ glob: "**" });
 		const unavailable = [`@sessions/${foreignIdentity.sessionId}`, "@projects/other-project"];
-		assert.deepEqual(result.status.homesUnavailable, unavailable);
+		assert.deepEqual(result.status.namespacesUnavailable, unavailable);
 		assert.deepEqual(addresses(result.rows), all.filter(address => !unavailable.some(prefix => address.startsWith(`${prefix}/`))));
-		assert.deepEqual((await notes.searchWithStatus(["needle"], { glob: "**" })).status.homesUnavailable, unavailable);
-		assert.deepEqual(addresses(await notes.list()), current, "local defaults do not enumerate unreadable foreign homes");
+		assert.deepEqual((await notes.searchWithStatus(["needle"], { glob: "**" })).status.namespacesUnavailable, unavailable);
+		assert.deepEqual(addresses(await notes.list()), current, "local defaults do not enumerate unreadable foreign notebooks");
 		// A namespace scan must not read project marker files or let one bad marker abort its siblings.
 		chmodSync(failed[1]!, 0o755);
 		writeFileSync(join(home, "project/other-project/.project"), "{}");
 		chmodSync(join(home, "project/other-project/.project"), 0o000);
-		assert.deepEqual((await notes.listWithStatus({ glob: "@projects/*/**" })).status.homesUnavailable, []);
+		assert.deepEqual((await notes.listWithStatus({ glob: "@projects/*/**" })).status.namespacesUnavailable, []);
 	} finally {
 		for (const dir of failed) chmodSync(dir, 0o755);
 	}

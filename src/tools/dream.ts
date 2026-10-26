@@ -1,7 +1,7 @@
 /** Dream operations: open one project's notes for consolidation, delete crumpled notes, close. */
 import { Type, type Static } from "typebox";
 import { createNotesStore, noteIdentity, type NoteRow, type NotesIdentity } from "../notes/index.js";
-import { projectHomes } from "../notes/project-home.js";
+import { projectNamespaces } from "../notes/project-namespace.js";
 import { gitCommit } from "../dream/git.js";
 import { acquireDreamLock, dreamLockPath, releaseDreamLock, type DreamLock } from "../dream/lock.js";
 import { failure, renderOutcome, resultSchema, success, type Outcome } from "./result.js";
@@ -71,7 +71,7 @@ export const dreamBegin = {
 			return failure("already_dreaming", `Already dreaming over ${project}; call dream_end before opening another project.`);
 		}
 		const project = params.project ?? identity.projectKey;
-		if (project !== identity.projectKey && !projectHomes(identity.home).some(home => home.name === project)) {
+		if (project !== identity.projectKey && !projectNamespaces(identity.home).some(namespace => namespace.name === project)) {
 			return failure("not_found", `No project named ${JSON.stringify(project)}; notes_list with glob @projects/*/** shows the names.`);
 		}
 		const lock = acquireDreamLock(dreamLockPath(identity.home));
@@ -88,11 +88,11 @@ export const dreamBegin = {
 					const result = await store.listWithStatus({ glob, crumpled });
 					if (!currentOpening(state, opening)) return cancelledOpening(state, opening);
 					rows.push(...result.rows.filter(row => row.scope === "project" || row.meta.project === project));
-					unavailable.push(...result.status.homesUnavailable);
+					unavailable.push(...result.status.namespacesUnavailable);
 				}
 			}
 			rows.sort((a, b) => b.meta.updatedAt - a.meta.updatedAt || a.address.localeCompare(b.address));
-			const listed = snapshot(rows.map(row => listedFile(row, identity)), undefined, { homesUnavailable: unavailable }, renderListData);
+			const listed = snapshot(rows.map(row => listedFile(row, identity)), undefined, { namespacesUnavailable: unavailable }, renderListData);
 			if (!listed.ok) {
 				releaseOpening(state, opening);
 				return listed;

@@ -1,6 +1,6 @@
 ---
 name: memory
-description: How notesoup's `notes_*` and `history_*` tools fit together — note addresses and homes, finding things again, and saving recovery state. Use when the context-window protocol is missing or unclear, or when unsure where a note belongs or how to find something again.
+description: How notesoup's `notes_*` and `history_*` tools fit together — note addresses and notebooks, finding things again, and saving recovery state. Use when the context-window protocol is missing or unclear, or when unsure where a note belongs or how to find something again.
 ---
 
 # Memory
@@ -32,13 +32,13 @@ Any other `@` prefix is refused. A path is relative and `/`-separated, with no e
 
 `@` addresses are not file paths: never pass them to file tools like `read`, `write`, `edit`, or `bash`. That creates a stray directory instead of a note.
 
-`CHEATSHEET.md` and `MAP.md` at the root of each `@` home are separate pages you wake up with; absent pages are skipped. Keep standing reminders in `CHEATSHEET.md`, to five lines. `MAP.md` holds only the note index: each durable note's address and gist, for lookup. Update it whenever you add, move or crumple a durable note. Do not create empty pages.
+`CHEATSHEET.md` and `MAP.md` at the root of each `@` notebook are separate pages you wake up with; absent pages are skipped. Keep standing reminders in `CHEATSHEET.md`, to five lines. `MAP.md` holds only the note index: each durable note's address and gist, for lookup. Update it whenever you add, move or crumple a durable note. Do not create empty pages.
 
 Write only what git and history cannot give back. Crumple notes that are no longer true; a stale note is worse than none.
 
 ## Finding things again
 
-For list/search, omit `glob` or use the collection alias `@default` for this session and current shared homes. Use `**` for all homes or `@sessions/*/**` for all sessions. Results carry readable note addresses; `@default` itself is not a read/write address.
+For list/search, omit `glob` or use the collection alias `@default` for this session and current shared notebooks. Use `**` for all notebooks or `@sessions/*/**` for all sessions. Results carry readable note addresses; `@default` itself is not a read/write address.
 
 - **A note**: `notes_list` with a `glob` when you know roughly where it lives, `notes_search` when you know a phrase; then `notes_read` the address.
 - **Something that happened**: `history_list` to browse or search this session's events; `history_read` the seq for the whole event.

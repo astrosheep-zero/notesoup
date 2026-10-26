@@ -1,4 +1,4 @@
-import type { NotesHome, NotesSnapshot } from "./snapshot.js";
+import type { NotesNamespace, NotesSnapshot } from "./snapshot.js";
 import { WINDOW_IDENTITY_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG, MAPS_BLOCK, CHEATSHEET_BOOT_MAX_CHARS, MAP_BOOT_MAX_CHARS, SHELF_FRESH_LIMIT, renderProtocolBlock, type BootToolNames } from "./text.js";
 
 function relativeTime(timestamp: number, now: number): string {
@@ -37,7 +37,7 @@ const NAMELESS_AGENT = "anonymous";
 
 /** One closed boot snapshot: five tabbed shelves, current hands first, durable last; each shelf keeps its pinned pages and its own freshest pages. */
 function notesIndex(snapshot: NotesSnapshot, tools: BootToolNames, agentName: string, modelName: string): string {
-	const homes: ReadonlyArray<{ scope: NotesHome["scope"]; label: string }> = [
+	const namespaces: ReadonlyArray<{ scope: NotesNamespace["scope"]; label: string }> = [
 		{ scope: "session", label: "no @ — this session" },
 		{ scope: "project", label: "@project — this project" },
 		{ scope: "agent", label: agentName === NAMELESS_AGENT ? "@self — every nameless agent shares this" : `@self — ${agentName} only` },
@@ -46,12 +46,12 @@ function notesIndex(snapshot: NotesSnapshot, tools: BootToolNames, agentName: st
 	];
 
 	const shelves: string[] = [];
-	for (const home of homes) {
-		if (snapshot.unavailable.some((failed) => failed.scope === home.scope)) {
-			shelves.push(section(home.label, indent(`This drawer wouldn't open. Try \`${tools.notesList}\` again.`)));
+	for (const namespace of namespaces) {
+		if (snapshot.unavailable.some((failed) => failed.scope === namespace.scope)) {
+			shelves.push(section(namespace.label, indent(`This drawer wouldn't open. Try \`${tools.notesList}\` again.`)));
 			continue;
 		}
-		const rows = (snapshot.homes.get(home.scope) ?? []).filter((row) => row.meta.crumpledAt === undefined);
+		const rows = (snapshot.namespaces.get(namespace.scope) ?? []).filter((row) => row.meta.crumpledAt === undefined);
 		const pinned = ["CHEATSHEET.md", "MAP.md"].flatMap((path) => {
 			const row = rows.find((row) => row.path === path);
 			return row?.body ? [row] : [];
@@ -67,7 +67,7 @@ function notesIndex(snapshot: NotesSnapshot, tools: BootToolNames, agentName: st
 		if (pinned.length === 0 && fresh.length === 0) continue;
 		const parts = pinned.map((row) => `${row.address}\n\n${indent(pinnedBodyForBoot(row.address, row.body, row.path === "MAP.md" ? MAP_BOOT_MAX_CHARS : CHEATSHEET_BOOT_MAX_CHARS))}`);
 		if (fresh.length > 0) parts.push(`recent\n\n${fresh.join("\n\n")}`);
-		shelves.push(section(home.label, parts.join("\n\n")));
+		shelves.push(section(namespace.label, parts.join("\n\n")));
 	}
 
 	return shelves.length > 0

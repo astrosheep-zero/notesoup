@@ -88,8 +88,8 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 	const notifyIncompleteNotes: IncompleteNotesNotifier = (ctx, windowId, snapshot) => {
 		if (snapshot.unavailable.length === 0 || incompleteNotesNotified.has(windowId)) return;
 		incompleteNotesNotified.add(windowId);
-		const homes = snapshot.unavailable.map((home) => home.label).join(", ");
-		ctx.ui.notify(`🥣 Some notes went missing: ${homes}`, "warning");
+		const namespaces = snapshot.unavailable.map((namespace) => namespace.label).join(", ");
+		ctx.ui.notify(`🥣 Some notes went missing: ${namespaces}`, "warning");
 	};
 	const budget = registerBudget(pi, () => enabled, settingsManager);
 

@@ -4,18 +4,18 @@ import { assertVirtualPath, isSessionId, SLUG_PATTERN, type Scope } from "./path
 
 export type NoteAddress = { scope: Scope; path: string; who?: string };
 
-export const ADDRESS_FORMS = "Use <path> for this session, or @project/, @human/, @self/, or @model/ followed by a path; @projects/<name>/<path> and @sessions/<id>/<path> read named homes.";
+export const ADDRESS_FORMS = "Use <path> for this session, or @project/, @human/, @self/, or @model/ followed by a path; @projects/<name>/<path> and @sessions/<id>/<path> read named notebooks.";
 
-/** The one home-head vocabulary: the scope each public `@head` names, and the home directory family a head with `home` lists. */
-export const HOME_HEADS: ReadonlyMap<string, { readonly scope: Scope; readonly home?: "sessions" | "project" | "agents" | "models" }> = new Map([
+/** The one namespace-head vocabulary: the scope each public `@head` names, and the directory family a head with `dir` lists. */
+export const NAMESPACE_HEADS: ReadonlyMap<string, { readonly scope: Scope; readonly dir?: "sessions" | "project" | "agents" | "models" }> = new Map([
 	["project", { scope: "project" }],
 	["human", { scope: "human" }],
 	["self", { scope: "agent" }],
 	["model", { scope: "model" }],
-	["sessions", { scope: "session", home: "sessions" }],
-	["projects", { scope: "project", home: "project" }],
-	["agents", { scope: "agent", home: "agents" }],
-	["models", { scope: "model", home: "models" }],
+	["sessions", { scope: "session", dir: "sessions" }],
+	["projects", { scope: "project", dir: "project" }],
+	["agents", { scope: "agent", dir: "agents" }],
+	["models", { scope: "model", dir: "models" }],
 ]);
 
 /**
@@ -55,7 +55,7 @@ export function assertGlobPattern(value: unknown): string | undefined {
 }
 
 /**
- * Decode one public note address into its physical home and virtual path. @self and @model
+ * Decode one public note address into its physical namespace and virtual path. @self and @model
  * are relative; projects/agents/models name a canonical slug, sessions a directory component.
  */
 export function assertAddress(value: unknown): NoteAddress {
@@ -65,10 +65,10 @@ export function assertAddress(value: unknown): NoteAddress {
 	let who: string | undefined;
 	if (value.startsWith("@")) {
 		const [rawHead, ...tail] = value.slice(1).split("/");
-		const head = HOME_HEADS.get(rawHead!);
+		const head = NAMESPACE_HEADS.get(rawHead!);
 		if (head === undefined) throw new NoteError("invalid_address", `${shown(value)} isn't a note address. ${ADDRESS_FORMS}`);
 		scope = head.scope;
-		if (head.home === undefined) path = tail.join("/");
+		if (head.dir === undefined) path = tail.join("/");
 		else {
 			who = tail[0] ?? "";
 			if (!(scope === "session" ? isSessionId(who) : SLUG_PATTERN.test(who))) throw new NoteError("invalid_address", `${shown(value)} isn't a note address. ${ADDRESS_FORMS}`);
@@ -91,9 +91,9 @@ export function canonicalAddressFor(identity: NotesIdentity, scope: Scope, path:
 }
 
 /**
- * Render the address a caller sees. The current agent and model homes read as @self/ and
- * @model/. Current session and project homes retain bare paths and @project/; explicitly
- * named session/project homes keep their read-only addresses, even for the current identity.
+ * Render the address a caller sees. The current agent and model notebooks read as @self/ and
+ * @model/. Current session and project notebooks retain bare paths and @project/; explicitly
+ * named session/project notebooks keep their read-only addresses, even for the current identity.
  */
 export function addressFor(identity: NotesIdentity, scope: Scope, path: string, who?: string): string {
 	if (scope === "session" && who === undefined) return path;

@@ -29,9 +29,9 @@ export type {
 	Scope,
 } from "./notes/index.js";
 
-// Boot: five homes captured once, rendered from explicit logical tool names.
+// Boot: five notebooks captured once, rendered from explicit logical tool names.
 export { loadNotesSnapshot, unavailableNotesSnapshot } from "./boot/snapshot.js";
-export type { NotesHome, NotesSnapshot } from "./boot/snapshot.js";
+export type { NotesNamespace, NotesSnapshot } from "./boot/snapshot.js";
 export { renderBootBlock } from "./boot/render.js";
 export type { BootRenderData, BootWindowTree } from "./boot/render.js";
 export { DEFAULT_BOOT_TOOL_NAMES, renderProtocolBlock } from "./boot/text.js";

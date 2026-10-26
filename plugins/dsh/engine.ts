@@ -129,8 +129,8 @@ export class NotesoupCompactionEngine extends CompactionEngine {
 		try {
 			const next = await this.windows.mint(agent, previous.window + 1, opened.time);
 			signal?.throwIfAborted();
-			if (session.surface.contentGeneration !== generation || session.surface.nodes.length !== shadowedSeqs.length + 1) throw new ManualCompactionError("changed", "notesoup: the surface changed while opening the next notebook; retry after current work finishes.");
-			// Mint BEFORE writing the checkpoint. A rejected append restores the previous notebook.
+			if (session.surface.contentGeneration !== generation || session.surface.nodes.length !== shadowedSeqs.length + 1) throw new ManualCompactionError("changed", "notesoup: the surface changed while opening the next page; retry after current work finishes.");
+			// Mint BEFORE writing the checkpoint. A rejected append restores the previous page.
 			// One draw per reset artifact: the checkpoint text and the steered copy share it.
 			const continuation = selectContinuation(origin);
 			state.snapshot = next;

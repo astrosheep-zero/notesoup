@@ -58,7 +58,7 @@ ${NOTES_PROTOCOL_CLOSE_TAG}`;
  * The two pinned pages are taught once per window between the protocol and the notes index.
  */
 export const MAPS_BLOCK = `<notesoup:maps>
-Every home's root can hold two pages that never wait on a shelf: \`CHEATSHEET.md\` and \`MAP.md\`.
+Every notebook's root can hold two pages that never wait on a shelf: \`CHEATSHEET.md\` and \`MAP.md\`.
 Both get jammed straight into your brain the moment you wake up. No asking, no skipping. Whoever
 wakes up next reads them, and next is you. So keep them short, and keep them true.
 
@@ -68,7 +68,7 @@ wakes up next reads them, and next is you. So keep them short, and keep them tru
 - **\`MAP.md\`** is only the note index. One line per durable note: the address, then a gist short
   enough to tell whether the thing is worth opening. Rules belong in \`CHEATSHEET.md\`, not here.
 
-Each home keeps its own: \`@project\`, \`@human\`, \`@self\`, \`@model\`. Missing pages are skipped;
+Each notebook keeps its own: \`@project\`, \`@human\`, \`@self\`, \`@model\`. Missing pages are skipped;
 no need to create empty ones. New note, new MAP line. New rule worth remembering, new Cheatsheet
 line. And when a line stops being true, kill it — every window after you reads that page as fact.
 </notesoup:maps>`;

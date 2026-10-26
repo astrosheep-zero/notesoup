@@ -94,7 +94,7 @@ test("same-file read/modify/write operations serialize across stores and markdow
 	assert.equal(readFileSync(file, "utf8").includes("mutated after call"), false);
 });
 
-test("stores snapshot explicit identity and do not leak homes across instances", async (t) => {
+test("stores snapshot explicit identity and do not leak notebooks across instances", async (t) => {
 	const { home, context } = fixture(t);
 	const mutable = { ...context };
 	const notes = createNotesStore(mutable);
@@ -127,7 +127,7 @@ test("list and search share scoped glob scans and search offsets count Unicode c
 	const listedAddresses = listed.map((row) => row.address).sort();
 	const searchedAddresses = searched.map((row) => row.address).sort();
 	assert.deepEqual(searchedAddresses, ["@human/shared.md", "@project/shared.md", "shared.md"]);
-	assert.deepEqual(searchedAddresses, listedAddresses, "list and search traverse the same filtered homes and files");
+	assert.deepEqual(searchedAddresses, listedAddresses, "list and search traverse the same filtered notebooks and files");
 
 	const sessionMatch = searched.find((row) => row.address === "shared.md")!.matches[0]!;
 	const body = (await notes.read("shared.md"))!.body;
@@ -258,7 +258,7 @@ test("same-file case and directory aliases cannot delete a moved note", async (t
 	}
 });
 
-test("glob is the single query selector for a named project home", async (t) => {
+test("glob is the single query selector for a named project notebook", async (t) => {
 	const { home, notes } = fixture(t);
 	mkdirSync(join(home, "project/other"), { recursive: true });
 	writeFileSync(join(home, "project/other/decision.md"), "needle");
@@ -305,7 +305,7 @@ test("one unreadable note is named without hiding its readable siblings", async 
 	chmodSync(join(home, "project", "project-12345678", "bad.md"), 0o000);
 	const result = await notes.listWithStatus({ glob: "@project/**" });
 	assert.deepEqual(result.rows.map((row) => row.address), ["@project/good.md"], "the readable sibling still lists");
-	assert.deepEqual(result.status.homesUnavailable, ["@project/bad.md"], "the unreadable note is named on its own");
+	assert.deepEqual(result.status.namespacesUnavailable, ["@project/bad.md"], "the unreadable note is named on its own");
 	await assert.rejects(() => notes.list({ glob: "@project/**" }), (error: unknown) => (error as NodeJS.ErrnoException).code === "EACCES", "a caller that asked for no status still sees the failure");
 });
 

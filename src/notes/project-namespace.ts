@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 import { slugify } from "./paths.js";
 
 export type ProjectMarker = { id: string; path: string };
-export type ProjectHome = ProjectMarker & { name: string; dir: string };
+export type ProjectNamespace = ProjectMarker & { name: string; dir: string };
 
 function errno(error: unknown): string | undefined {
 	return typeof error === "object" && error !== null ? (error as NodeJS.ErrnoException).code : undefined;
@@ -72,7 +72,7 @@ function originRemote(root: string): string | undefined {
 	return undefined;
 }
 
-function readMarker(dir: string): ProjectHome | undefined {
+function readMarker(dir: string): ProjectNamespace | undefined {
 	let raw: string;
 	try { raw = readFileSync(join(dir, ".project"), "utf8"); } catch (error) {
 		if (errno(error) === "ENOENT") return undefined;
@@ -91,19 +91,19 @@ function projectRoot(home: string): string {
 	return join(home, "project");
 }
 
-/** Read marked project homes. Unmarked legacy directories are deliberately omitted. */
-export function projectHomes(home: string): ProjectHome[] {
+/** Read marked project notebooks. Unmarked legacy directories are deliberately omitted. */
+export function projectNamespaces(home: string): ProjectNamespace[] {
 	const root = projectRoot(home);
 	let entries;
 	try { entries = readdirSync(root, { withFileTypes: true }); } catch (error) {
 		if (errno(error) === "ENOENT") return [];
 		throw error;
 	}
-	return entries.filter(entry => entry.isDirectory()).map(entry => readMarker(join(root, entry.name))).filter((entry): entry is ProjectHome => entry !== undefined).sort((a, b) => a.name.localeCompare(b.name));
+	return entries.filter(entry => entry.isDirectory()).map(entry => readMarker(join(root, entry.name))).filter((entry): entry is ProjectNamespace => entry !== undefined).sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function updateMarker(home: ProjectHome, marker: ProjectMarker): ProjectHome {
-	const markerPath = join(home.dir, ".project");
+function updateMarker(namespace: ProjectNamespace, marker: ProjectMarker): ProjectNamespace {
+	const markerPath = join(namespace.dir, ".project");
 	const temp = `${markerPath}.${process.pid}.${randomUUID()}.tmp`;
 	try {
 		writeFileSync(temp, JSON.stringify(marker));
@@ -112,7 +112,7 @@ function updateMarker(home: ProjectHome, marker: ProjectMarker): ProjectHome {
 		try { rmSync(temp, { force: true }); } catch { /* Preserve the marker update failure. */ }
 		throw error;
 	}
-	return { ...home, ...marker };
+	return { ...namespace, ...marker };
 }
 
 const claimSleep = new Int32Array(new SharedArrayBuffer(4));
@@ -128,8 +128,8 @@ function awaitClaim<T>(path: string, attempt: () => T | undefined): T {
 	}
 }
 
-/** Resolve and claim the readable home for one repository identity. */
-export function resolveProjectHome(cwd: string, home: string): ProjectHome {
+/** Resolve and claim the readable notebook for one repository identity. */
+export function resolveProjectNamespace(cwd: string, home: string): ProjectNamespace {
 	mkdirSync(projectRoot(home), { recursive: true });
 	// Serialize the scan as well as publication: an unmarked directory seen under
 	// this lock is legacy, not another resolver between mkdir and marker write.
@@ -140,19 +140,19 @@ export function resolveProjectHome(cwd: string, home: string): ProjectHome {
 			throw error;
 		}
 	});
-	try { return claimProjectHome(cwd, home); } finally { rmdirSync(lock); }
+	try { return claimProjectNamespace(cwd, home); } finally { rmdirSync(lock); }
 }
 
-function claimProjectHome(cwd: string, home: string): ProjectHome {
+function claimProjectNamespace(cwd: string, home: string): ProjectNamespace {
 	const root = canonicalRoot(cwd);
 	const remote = originRemote(root);
 	const id = remote ?? root;
 	const markerRoot = projectRoot(home);
 	mkdirSync(markerRoot, { recursive: true });
-	const homes = projectHomes(home);
-	let found = homes.find(candidate => candidate.id === id);
+	const namespaces = projectNamespaces(home);
+	let found = namespaces.find(candidate => candidate.id === id);
 	if (!found && remote) {
-		found = homes.find(candidate => candidate.id === root);
+		found = namespaces.find(candidate => candidate.id === root);
 		if (found) found = updateMarker(found, { id: remote, path: root });
 	}
 	if (found) {
@@ -210,19 +210,19 @@ function repositoryRoot(dir: string): string {
 
 export type ProjectReceipt = { project_root?: string; project_siblings?: Array<{ name: string; path: string }> };
 
-/** Display-only context for an explicitly named project home. */
+/** Display-only context for an explicitly named project notebook. */
 export function projectReceipt(home: string, name: string): ProjectReceipt {
 	const project = readMarker(join(projectRoot(home), name));
 	if (!project) return {};
 	const base = slugify(basename(project.path));
-	const siblings = projectHomes(home).filter(candidate => candidate.name !== name && slugify(basename(candidate.path)) === base);
+	const siblings = projectNamespaces(home).filter(candidate => candidate.name !== name && slugify(basename(candidate.path)) === base);
 	return {
 		project_root: project.path,
 		...(siblings.length === 0 ? {} : { project_siblings: siblings.map(({ name, path }) => ({ name, path })) }),
 	};
 }
 
-/** Names a project home, claiming it when the notes home has not seen this identity. */
+/** Names a project notebook, claiming it when the notes store has not seen this identity. */
 export function projectKey(cwd: string, home: string): string {
-	return resolveProjectHome(cwd, home).name;
+	return resolveProjectNamespace(cwd, home).name;
 }

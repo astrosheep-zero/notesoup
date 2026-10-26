@@ -11,7 +11,7 @@ The old name is retired: `@astrosheep/pi-context` is deprecated, and the package
 ## Why not just compaction?
 
 - **Reset ≠ summary.** Compaction is lossy compression you sit and wait for — and the next one summarizes the summary of the summary. A notesoup reset summarizes *nothing*: the window closes in O(1), because whatever mattered was already written to notes beforehand. Fast because there's nothing to compute; safe because the raw history never leaves disk.
-- **Notes are files you can open.** Plain Markdown in `~/.agents/notes`, in named homes (`@project`, `@human`, `@self`, `@model`, plus per-session). Readable, editable, greppable, git-able. Not an encrypted blob — and not a secret the model is instructed to keep from you. (Yes, that was a real instruction. No, we didn't port it.)
+- **Notes are files you can open.** Plain Markdown in `~/.agents/notes`, in named notebooks (`@project`, `@human`, `@self`, `@model`, plus per-session). Readable, editable, greppable, git-able. Not an encrypted blob — and not a secret the model is instructed to keep from you. (Yes, that was a real instruction. No, we didn't port it.)
 - **History never forgets.** Every closed window — messages, tool calls, tool output — stays fully searchable through the `history_*` tools. Notes are the agent's lossy index; history is the lossless record underneath. This is the half the original experiment never shipped.
 
 ## Install
@@ -100,7 +100,7 @@ npm test            # build from a clean dist, then run the suite
 npm run typecheck
 git diff --check
 node scripts/check-notes-package.mjs  # optional built /notes CRUD smoke; no install
-npx tsx scripts/boot-smoke.mts [cwd]  # optional live boot render against the real notes homes
+npx tsx scripts/boot-smoke.mts [cwd]  # optional live boot render against the real notes notebooks
 ```
 
 The repository splits host-neutral code from host plugins:

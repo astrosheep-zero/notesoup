@@ -123,7 +123,7 @@ function parseFrontmatter(raw: string): { fields: Record<string, unknown>; body:
 export function parseNote(raw: string, now = Date.now()): { meta: NoteMeta; body: string } {
 	const { fields, body } = parseFrontmatter(raw);
 	const meta = { ...fields } as Record<string, unknown>;
-	// scope is a legacy on-disk field: store callers derive it from the file's home and
+	// scope is a legacy on-disk field: store callers derive it from the file's notebook and
 	// overwrite it after parsing, so an absent or outdated value just falls back.
 	meta.scope = isScope(meta.scope) ? meta.scope : "session";
 	meta.origin = isOrigin(meta.origin) ? meta.origin : "self";
@@ -161,7 +161,7 @@ export function serializeNote(meta: NoteMeta, body: string): string {
 		else lines.push(`${key}: ${yamlScalar(value)}`);
 	}
 	for (const key of Object.keys(meta)) {
-		// scope is a legacy on-disk field. Store callers derive it from the home's location,
+		// scope is a legacy on-disk field. Store callers derive it from the notebook's location,
 		// but serialization intentionally drops it on the next write.
 		if (key === "scope" || (KNOWN_KEYS as readonly string[]).includes(key)) continue;
 		if (meta[key] === undefined) continue;

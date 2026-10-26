@@ -2,7 +2,7 @@ import type { NotesIdentity } from "../notes/identity.js";
 import { isFilesystemError } from "../notes/fs-error.js";
 import { createNotesStore, type NoteRow, type Scope } from "../notes/index.js";
 
-const NOTES_HOMES = [
+const NOTES_NAMESPACES = [
 	{ scope: "session", label: "this session" },
 	{ scope: "project", label: "@project" },
 	{ scope: "human", label: "@human" },
@@ -10,43 +10,43 @@ const NOTES_HOMES = [
 	{ scope: "model", label: "@model" },
 ] as const satisfies ReadonlyArray<{ scope: Scope; label: string }>;
 
-export type NotesHome = (typeof NOTES_HOMES)[number];
+export type NotesNamespace = (typeof NOTES_NAMESPACES)[number];
 export type NotesLoader = (scope: Scope) => NoteRow[] | Promise<NoteRow[]>;
 export type NotesSnapshot = {
 	/** Wall-clock instant captured when this boot began; rendering never consults Date.now(). */
 	readonly openedAt: number;
-	readonly homes: ReadonlyMap<Scope, readonly NoteRow[]>;
-	readonly unavailable: readonly NotesHome[];
+	readonly namespaces: ReadonlyMap<Scope, readonly NoteRow[]>;
+	readonly unavailable: readonly NotesNamespace[];
 };
 
-/** Identity resolution failed before any home could be loaded; boot can still explain the failure. */
+/** Identity resolution failed before any notebook could be loaded; boot can still explain the failure. */
 export function unavailableNotesSnapshot(openedAt: number): NotesSnapshot {
-	return { openedAt, homes: new Map(), unavailable: NOTES_HOMES };
+	return { openedAt, namespaces: new Map(), unavailable: NOTES_NAMESPACES };
 }
 
 /**
- * Acquire the five homes once for one boot. Only filesystem-style errno failures are isolated;
+ * Acquire the five notebooks once for one boot. Only filesystem-style errno failures are isolated;
  * malformed note data and unrelated construction errors remain visible to the caller.
  */
-export async function loadNotesSnapshot(identity: NotesIdentity, openedAt: number, loadHome?: NotesLoader): Promise<NotesSnapshot> {
-	const homes = new Map<Scope, readonly NoteRow[]>();
-	const unavailable: NotesHome[] = [];
-	if (!loadHome) {
+export async function loadNotesSnapshot(identity: NotesIdentity, openedAt: number, loadNamespace?: NotesLoader): Promise<NotesSnapshot> {
+	const namespaces = new Map<Scope, readonly NoteRow[]>();
+	const unavailable: NotesNamespace[] = [];
+	if (!loadNamespace) {
 		const { rows, status } = await createNotesStore(identity).listWithStatus();
-		for (const home of NOTES_HOMES) {
-			homes.set(home.scope, rows.filter(row => row.scope === home.scope));
-			if (status.homesUnavailable.some(address => home.scope === "session" ? !address.startsWith("@") : address === home.label || address.startsWith(`${home.label}/`))) unavailable.push(home);
+		for (const namespace of NOTES_NAMESPACES) {
+			namespaces.set(namespace.scope, rows.filter(row => row.scope === namespace.scope));
+			if (status.namespacesUnavailable.some(address => namespace.scope === "session" ? !address.startsWith("@") : address === namespace.label || address.startsWith(`${namespace.label}/`))) unavailable.push(namespace);
 		}
-		return { openedAt, homes, unavailable };
+		return { openedAt, namespaces, unavailable };
 	}
-	for (const home of NOTES_HOMES) {
+	for (const namespace of NOTES_NAMESPACES) {
 		try {
-			homes.set(home.scope, await loadHome(home.scope));
+			namespaces.set(namespace.scope, await loadNamespace(namespace.scope));
 		} catch (error) {
 			if (!isFilesystemError(error)) throw error;
-			homes.set(home.scope, []);
-			unavailable.push(home);
+			namespaces.set(namespace.scope, []);
+			unavailable.push(namespace);
 		}
 	}
-	return { openedAt, homes, unavailable };
+	return { openedAt, namespaces, unavailable };
 }

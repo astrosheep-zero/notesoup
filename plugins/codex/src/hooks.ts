@@ -35,7 +35,7 @@ export function bootWithinCap(boot: string): string | undefined {
 	const bytes = Buffer.byteLength(boot, "utf8");
 	return bytes <= MAX_BOOT_BYTES
 		? undefined
-		: `notesoup: this window's boot is ${bytes} bytes, over the ${MAX_BOOT_BYTES}-byte cap. No truncated or spilled boot was injected; slim the home MAPs and restart/resume the thread.`;
+		: `notesoup: this window's boot is ${bytes} bytes, over the ${MAX_BOOT_BYTES}-byte cap. No truncated or spilled boot was injected; slim the notebook MAPs and restart/resume the thread.`;
 }
 
 export async function readHookInput(stream: NodeJS.ReadableStream): Promise<string> {

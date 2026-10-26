@@ -3,14 +3,14 @@ import type { Dirent } from "node:fs";
 import { mkdir, readdir, readFile, realpath, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { earliestMatchOffsetChars } from "../text-match.js";
-import { assertAddress, assertGlobPattern, addressFor, canonicalAddressFor, globToRegExp, HOME_HEADS } from "./address.js";
+import { assertAddress, assertGlobPattern, addressFor, canonicalAddressFor, globToRegExp, NAMESPACE_HEADS } from "./address.js";
 import { isFilesystemError } from "./fs-error.js";
 import { snapshotNotesIdentity, type NotesIdentity } from "./identity.js";
 import { NoteError } from "./errors.js";
 import { MAX_NOTE_BYTES, MAX_NOTE_PATH_BYTES } from "./constants.js";
 import { isOrigin, localIso, parseNote, serializeNote, stripLeadingFrontmatter, type NoteMeta, type Origin } from "./frontmatter.js";
 import { namespaceSlugs, noteFileName, physicalPath, scopeDir, isSessionId, SLUG_PATTERN, type Scope } from "./paths.js";
-import { projectReceipt, type ProjectReceipt } from "./project-home.js";
+import { projectReceipt, type ProjectReceipt } from "./project-namespace.js";
 
 export type { NoteMeta, Origin, Scope };
 
@@ -28,7 +28,7 @@ export type NoteSearchRow = { address: string; scope: Scope; path: string; meta:
 export type EditOperation = { oldText: string; newText: string };
 export type WriteOptions = { origin?: Origin };
 export type EditOptions = { origin?: Origin; crumpled?: boolean; replaceAll?: boolean; renameTo?: string };
-/** Omitted/null/empty glob or bare @default selects current homes; explicit globs match full addresses.
+/** Omitted/null/empty glob or bare @default selects current notebooks; explicit globs match full addresses.
  * Only the current session also matches its bare-path alias (e.g. *.md or deep/**).
  */
 export type NotesQuery = { glob?: string | null; crumpled?: boolean };
@@ -41,8 +41,8 @@ export type NoteChange =
 	| { kind: "body" | "metadata"; before: string; after: string };
 export type NoteEditResult = { meta: NoteMeta; applied: number; resolvedScope: Scope; change: NoteChange; moved: boolean; replacedCrumpledTarget: boolean };
 export type NoteRenameResult = { meta: NoteMeta; replacedCrumpledTarget: boolean };
-/** A home, or one unreadable note inside it, that a status-reporting query could not read. */
-export type NoteQueryStatus = { homesUnavailable: string[] };
+/** A notebook, or one unreadable note inside it, that a status-reporting query could not read. */
+export type NoteQueryStatus = { namespacesUnavailable: string[] };
 export type NoteQueryResult<T> = { rows: T[]; status: NoteQueryStatus };
 
 /** Public note identity; named projects also carry their display root and sibling hints. */
@@ -104,8 +104,8 @@ async function walkMarkdown(dir: string, base = dir): Promise<string[]> {
 	try {
 		entries = await readdir(dir, { withFileTypes: true });
 	} catch (error) {
-		// A home that has never been created is normal. Other failures must reach the
-		// boot snapshot boundary instead of masquerading as an empty home.
+		// A notebook that has never been created is normal. Other failures must reach the
+		// boot snapshot boundary instead of masquerading as an empty notebook.
 		if (errno(error) === "ENOENT") return [];
 		throw error;
 	}
@@ -118,28 +118,28 @@ async function walkMarkdown(dir: string, base = dir): Promise<string[]> {
 	return paths;
 }
 
-/** Which homes one call iterates; reserved heads narrow traversal before any file is read. */
-type HomeRef = { scope: Scope; who?: string };
+/** Which namespaces one call iterates; reserved heads narrow traversal before any file is read. */
+type NamespaceRef = { scope: Scope; who?: string };
 
-async function homesForPattern(pattern: string | undefined, identity: NotesIdentity, status?: NoteQueryStatus): Promise<HomeRef[]> {
+async function namespacesForPattern(pattern: string | undefined, identity: NotesIdentity, status?: NoteQueryStatus): Promise<NamespaceRef[]> {
 	if (pattern === undefined) return SCOPE_ORDER.map((scope) => ({ scope }));
 
 	const families = [
-		{ scope: "session", home: "sessions", current: identity.sessionId },
-		{ scope: "project", home: "project", current: identity.projectKey },
-		{ scope: "agent", home: "agents", current: identity.agent },
-		{ scope: "model", home: "models", current: identity.model },
+		{ scope: "session", dir: "sessions", current: identity.sessionId },
+		{ scope: "project", dir: "project", current: identity.projectKey },
+		{ scope: "agent", dir: "agents", current: identity.agent },
+		{ scope: "model", dir: "models", current: identity.model },
 	] as const;
-	async function enumerate(family: typeof families[number], relative: boolean): Promise<HomeRef[]> {
+	async function enumerate(family: typeof families[number], relative: boolean): Promise<NamespaceRef[]> {
 		let names: string[];
 		try {
-			names = await namespaceSlugs(family.home, identity.home);
+			names = await namespaceSlugs(family.dir, identity.home);
 		} catch (error) {
 			if (!status || !isFilesystemError(error)) throw error;
-			status.homesUnavailable.push(`@${family.home === "project" ? "projects" : family.home}`);
+			status.namespacesUnavailable.push(`@${family.dir === "project" ? "projects" : family.dir}`);
 			return [];
 		}
-		// Include the current home even when missing or a non-directory, and only once.
+		// Include the current namespace even when missing or a non-directory, and only once.
 		return [...new Set([family.current, ...names])].map((who) => ({
 			scope: family.scope,
 			who: relative && who === family.current ? undefined : who,
@@ -149,21 +149,21 @@ async function homesForPattern(pattern: string | undefined, identity: NotesIdent
 	if (pattern.startsWith("@")) {
 		const [rawHead, ...tail] = pattern.slice(1).split("/");
 		if (!/[*?]/.test(rawHead!)) {
-			const head = HOME_HEADS.get(rawHead!);
+			const head = NAMESPACE_HEADS.get(rawHead!);
 			if (head === undefined || tail.length === 0) return [];
-			if (head.home === undefined) return [{ scope: head.scope }];
+			if (head.dir === undefined) return [{ scope: head.scope }];
 			const name = tail[0];
 			if (name && !/[*?]/.test(name)) return [{ scope: head.scope, who: assertWho(name, head.scope) }];
-			return enumerate(families.find((family) => family.home === head.home)!, false);
+			return enumerate(families.find((family) => family.dir === head.dir)!, false);
 		}
 	}
 	// Unreserved patterns see the full universe, not just the current identities.
-	const homes: HomeRef[] = [];
+	const namespaces: NamespaceRef[] = [];
 	for (const scope of SCOPE_ORDER) {
-		if (scope === "human") homes.push({ scope });
-		else homes.push(...await enumerate(families.find((family) => family.scope === scope)!, true));
+		if (scope === "human") namespaces.push({ scope });
+		else namespaces.push(...await enumerate(families.find((family) => family.scope === scope)!, true));
 	}
-	return homes;
+	return namespaces;
 }
 
 /** Relative pattern heads resolve to canonical names, so they match canonical addresses. */
@@ -256,8 +256,8 @@ function frontmatterOf(meta: NoteMeta): string {
 	return serializeNote(meta, "").slice(0, -2);
 }
 
-/** Explicit session/project homes are read-only unless dreamed over; agent/model homes allow their owner. */
-function assertWritableHome(scope: Scope, who: string | undefined, identity: NotesIdentity): void {
+/** Explicit session/project namespaces are read-only unless dreamed over; agent/model namespaces allow their owner. */
+function assertWritableNamespace(scope: Scope, who: string | undefined, identity: NotesIdentity): void {
 	if (who === undefined) return;
 	// A dreamed project is writable whole; project and session ownership is checked per note by assertDreamNote.
 	if (identity.dreaming !== undefined && (scope === "session" || (scope === "project" && who === identity.dreaming))) return;
@@ -265,8 +265,8 @@ function assertWritableHome(scope: Scope, who: string | undefined, identity: Not
 	if (scope === "project") throw new NoteError("invalid_scope", `@projects/${who}/ is read-only; use @project/ to write to your own project.`);
 	const current = scope === "agent" ? identity.agent : identity.model;
 	if (who === current) return;
-	const home = scope === "agent" ? `@agents/${who}/` : `@models/${who}/`;
-	throw new NoteError("invalid_scope", `${home} is someone else's home; you can write to this session, @project/, @human/, @self/, or @model/.`);
+	const address = scope === "agent" ? `@agents/${who}/` : `@models/${who}/`;
+	throw new NoteError("invalid_scope", `${address} is someone else's notebook; you can write to this session, @project/, @human/, @self/, or @model/.`);
 }
 
 /** Resolve aliases before checking that a dreamed note belongs to the open project. */
@@ -290,7 +290,7 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 		const destination = assertAddress(address);
 		assertWritablePath(destination.path);
 		const scope = destination.scope;
-		assertWritableHome(scope, destination.who, identity);
+		assertWritableNamespace(scope, destination.who, identity);
 		// Absent means "keep whatever the note already says": replacing a note must not silently
 		// re-attribute a user-written note to the agent that happened to rewrite it.
 		const origin = stableOptions.origin === undefined ? undefined : assertOrigin(stableOptions.origin);
@@ -331,7 +331,7 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 			if (raw === undefined) return undefined;
 			const now = Date.now();
 			const parsed = parseNote(raw, now);
-			// Named homes, and every read during a dream, leave no access stamp.
+			// Named notebooks, and every read during a dream, leave no access stamp.
 			if (identity.dreaming !== undefined || ((scope === "project" || scope === "session") && destination.who !== undefined)) return { meta: { ...parsed.meta, scope }, body: parsed.body, resolvedScope: scope, accessedBefore: parsed.meta.lastAccessed };
 			// A read records its own access, exactly as a write records an edit.
 			const meta: NoteMeta = { ...parsed.meta, scope, lastAccessed: now, accessCount: (typeof parsed.meta.accessCount === "number" ? parsed.meta.accessCount : 0) + 1 };
@@ -347,8 +347,8 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 		const destination = stableOptions.renameTo === undefined ? from : assertAddress(stableOptions.renameTo);
 		assertWritablePath(destination.path);
 		const scope = destination.scope;
-		assertWritableHome(from.scope, from.who, identity);
-		assertWritableHome(scope, destination.who, identity);
+		assertWritableNamespace(from.scope, from.who, identity);
+		assertWritableNamespace(scope, destination.who, identity);
 		if (operations.length === 0 && stableOptions.origin === undefined && stableOptions.crumpled === undefined && stableOptions.renameTo === undefined) {
 			throw new NoteError("nothing_to_do", "Nothing to change: provide edits, an origin, a crumpled state, or a new address.");
 		}
@@ -428,7 +428,7 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 	async function forget(address: string): Promise<NoteMeta> {
 		if (identity.dreaming === undefined) throw new NoteError("invalid_scope", "Only a dream can delete notes; begin one first.");
 		const target = assertAddress(address);
-		assertWritableHome(target.scope, target.who, identity);
+		assertWritableNamespace(target.scope, target.who, identity);
 		const path = physicalPath(target.scope, target.path, identity, target.who);
 		return withPathQueue(path, async () => {
 			const raw = await readFileIfExists(path);
@@ -446,30 +446,30 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 		const pattern = glob === "@default" ? undefined : glob;
 		const normalized = normalizePattern(pattern, identity);
 		const matcher = normalized === undefined ? undefined : globToRegExp(normalized);
-		const homes = await homesForPattern(pattern, identity, status);
-		for (const home of homes) {
-			const scope = home.scope;
-			const root = scopeDir(scope, identity, home.who);
+		const namespaces = await namespacesForPattern(pattern, identity, status);
+		for (const namespace of namespaces) {
+			const scope = namespace.scope;
+			const root = scopeDir(scope, identity, namespace.who);
 			let paths: string[];
 			try {
 				paths = await walkMarkdown(root);
 			} catch (error) {
 				if (!status || !isFilesystemError(error)) throw error;
-				status.homesUnavailable.push(addressFor(identity, scope, "", home.who).replace(/\/$/, "") || "session");
+				status.namespacesUnavailable.push(addressFor(identity, scope, "", namespace.who).replace(/\/$/, "") || "session");
 				continue;
 			}
 			for (const path of paths) {
-				if (matcher && !matcher.test(canonicalAddressFor(identity, scope, path, home.who))
-					&& !(scope === "session" && home.who === undefined && !pattern!.startsWith("@") && matcher.test(path))) continue;
-				const address = addressFor(identity, scope, path, home.who);
+				if (matcher && !matcher.test(canonicalAddressFor(identity, scope, path, namespace.who))
+					&& !(scope === "session" && namespace.who === undefined && !pattern!.startsWith("@") && matcher.test(path))) continue;
+				const address = addressFor(identity, scope, path, namespace.who);
 				const fullPath = join(root, path);
 				let raw: string;
 				try {
 					raw = await withPathQueue(fullPath, () => readFile(fullPath, "utf8"));
 				} catch (error) {
-					// One unreadable note is named on its own; its home's readable notes still list.
+					// One unreadable note is named on its own; its notebook's readable notes still list.
 					if (!status || !isFilesystemError(error)) throw error;
-					status.homesUnavailable.push(address);
+					status.namespacesUnavailable.push(address);
 					continue;
 				}
 				const { meta, body } = parseNote(raw);
@@ -491,11 +491,11 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 			rows.push({ ...row, sizeBytes: Buffer.byteLength(row.body, "utf8") });
 		}
 		rows.sort((a, b) => b.meta.updatedAt - a.meta.updatedAt || a.address.localeCompare(b.address));
-		return { rows, status: status ?? { homesUnavailable: [] } };
+		return { rows, status: status ?? { namespacesUnavailable: [] } };
 	}
 
 	function listWithStatus(options: NotesQuery = {}): Promise<NoteQueryResult<NoteRow>> {
-		return listRows(options, { homesUnavailable: [] });
+		return listRows(options, { namespacesUnavailable: [] });
 	}
 
 	async function search(queries: string[], options: NotesQuery = {}): Promise<NoteSearchRow[]> {
@@ -526,11 +526,11 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 			if (matches.length > 0) rows.push({ address, path, scope, meta, matches });
 		}
 		rows.sort((a, b) => a.address.localeCompare(b.address));
-		return { rows, status: status ?? { homesUnavailable: [] } };
+		return { rows, status: status ?? { namespacesUnavailable: [] } };
 	}
 
 	function searchWithStatus(queries: string[], options: NotesQuery = {}): Promise<NoteQueryResult<NoteSearchRow>> {
-		return searchRows(queries, options, { homesUnavailable: [] });
+		return searchRows(queries, options, { namespacesUnavailable: [] });
 	}
 
 	return { write, read, update, rename, forget, list, search, listWithStatus, searchWithStatus };

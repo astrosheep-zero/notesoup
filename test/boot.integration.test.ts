@@ -214,7 +214,7 @@ test("an aborted async boot repair emits no boot, continuation, or incomplete-no
 	await pending;
 
 	assert.equal(captured.sent.length, 0, "aborted snapshot work cannot append the reset boot or continuation");
-	assert.equal(noticesOf(ctx).some((notice) => notice.message.includes("went missing")), false, "aborted snapshot work cannot notify about missing homes");
+	assert.equal(noticesOf(ctx).some((notice) => notice.message.includes("went missing")), false, "aborted snapshot work cannot notify about missing notebooks");
 	assert.equal(sessionManager.getBranch().some((entry) => entry.type === "custom_message" && [BOOT_TYPE, CONTINUATION_TYPE].includes(entry.customType)), false);
 });
 

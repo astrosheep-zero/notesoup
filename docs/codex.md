@@ -1,6 +1,6 @@
 # Codex plugin (native mode)
 
-`plugins/codex/` makes notesoup a native Codex plugin: the five notes homes and the three history tools over a bundled stdio MCP server, plus a SessionStart/SubagentStart hook that writes the notes boot into the window Codex is actually opening. It does not wrap Codex's conversation or replace its context engine. Reset and budget stay native.
+`plugins/codex/` makes notesoup a native Codex plugin: the five notebooks and the three history tools over a bundled stdio MCP server, plus a SessionStart/SubagentStart hook that writes the notes boot into the window Codex is actually opening. It does not wrap Codex's conversation or replace its context engine. Reset and budget stay native.
 
 Targets **Codex 0.160.1 only**, with the rollout format source-checked against the official 0.160.1 tree. No live Codex host or config-parser evidence is claimed at this stage. The rollout decoder rejects any other `cli_version`; it is not a forward-compatible reader. A `.jsonl.zst` rollout needs **Node >=22.15** (`zstdDecompressSync`); the plugin invokes `node`, which must resolve to that version.
 
@@ -37,10 +37,10 @@ Keep the forms separate: `token_budget` is a table here, so do not also write `t
 
 - **A boot per native window.** The `SessionStart` hook reads the thread's native rollout, binds the thread to this Codex root session, cwd, model, transcript and current window, and returns the shared notes boot with a window marker. The boot is deduped by the host's own persisted `hooks.additional_context` record for that exact thread and window, never by a quoted marker. A compact creates a new native window and therefore a fresh boot.
 - **Codex's `new_context` and `get_context_remaining`.** They remain Codex's tools. notesoup has no MCP reset or budget fallback, and an MCP call cannot trigger a reset.
-- **Five notes homes** through `notes_write`, `notes_update`, `notes_read`, `notes_list` and `notes_search`. `NOTESOUP_HOME` overrides the root (default `~/.agents/notes`); a root thread's agent name is `NOTESOUP_AGENT` or `anonymous`.
+- **Five notebooks** through `notes_write`, `notes_update`, `notes_read`, `notes_list` and `notes_search`. `NOTESOUP_HOME` overrides the root (default `~/.agents/notes`); a root thread's agent name is `NOTESOUP_AGENT` or `anonymous`.
 - **Native history** through `history_windows`, `history_list` and `history_read`: the root thread's windows and a child's own ancestry. Window ids are `codex:<thread>:<native-window-uuid>`, and the boot's window tree uses those same UUIDs, so the shared `trunk:shortname` rule names the address history actually serves.
 - **Per-turn model identity.** `@model` follows the current turn's `x-codex-turn-metadata.model`, not the model recorded at thread start. The start model only labels the boot.
-- **Subagents and forks.** `SubagentStart` binds the child or fork to its own transcript while keeping the parent's root session. Its `@self` home is the slugged `agent_type` (for example `worker`), not the parent's.
+- **Subagents and forks.** `SubagentStart` binds the child or fork to its own transcript while keeping the parent's root session. Its `@self` notebook is the slugged `agent_type` (for example `worker`), not the parent's.
 
 Codex may prefix MCP tool names with a server namespace. Use the names that appear in the session's tool list; the boot says the same.
 
@@ -70,7 +70,7 @@ Codex 0.160.1 has no supported child post-compact boot or recovery hook. notesou
 | --- | --- |
 | Codex versions | 0.160.1 only; other `cli_version` values are refused. |
 | Node | >=22.15 for compressed rollouts. |
-| Boot size | Local cap 128 KiB. The hook sets `additionalContextLimit: 0` so the host does not spill or silently truncate the boot; an oversized boot becomes a warning and nothing is injected. Slim the home MAPs. |
+| Boot size | Local cap 128 KiB. The hook sets `additionalContextLimit: 0` so the host does not spill or silently truncate the boot; an oversized boot becomes a warning and nothing is injected. Slim the notebook MAPs. |
 | Tool output | Shared 32 KiB result bound; use continuation fields or narrower filters. |
 | History sources | Local rollout files only. No app-server history API, no remote history, no text from opaque/encrypted payloads. |
 | Reset/budget | Codex-native only. No MCP fallback, no notesoup budget warning or close-out turn. |

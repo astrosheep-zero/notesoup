@@ -38,7 +38,7 @@ test("a dream opens one other project, writes its notes, deletes only crumpled o
 	const state: DreamState = {};
 	const ident = () => notesToolContext(dreamingIdentity(me, state), "/work/alpha");
 
-	// Closed: named homes are read-only and forget refuses.
+	// Closed: named notebooks are read-only and forget refuses.
 	assert.equal((await notesWrite.execute({ address: "@projects/beta/rule", content: "x" }, ident())).ok, false);
 	assert.equal((await dreamForget.execute({ address: "@sessions/b2/trash" }, me, state)).ok, false);
 
@@ -192,7 +192,7 @@ test("dream_forget resolves address aliases before authorizing deletion", async 
 
 test("named-project mutation receipts carry their project metadata and fit their own schemas", async (t) => {
 	const { home, as } = fixture(t);
-	// A same-basename checkout makes the dreamed home carry a sibling hint.
+	// A same-basename checkout makes the dreamed notebook carry a sibling hint.
 	mkdirSync(join(home, "project", "beta-1"), { recursive: true });
 	writeFileSync(join(home, "project", "beta-1", ".project"), JSON.stringify({ id: "host/two/beta", path: "/work/two/beta" }));
 	const me = as("now", "alpha");

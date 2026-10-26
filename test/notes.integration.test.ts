@@ -108,7 +108,7 @@ test("notes_list and notes_search are recent-first snapshots with narrowing hint
 	const listed = resultData<NotesListData>(await call(captured, "notes_list", { limit: 2 }, ctx));
 	assert.deepEqual(listed.files.map((file) => file.address), ["new.md", "@project/design.md"]);
 	assert.equal(listed.more, 1);
-	assert.deepEqual(Object.keys(listed).sort(), ["files", "homes_unavailable", "more"]);
+	assert.deepEqual(Object.keys(listed).sort(), ["files", "more", "namespaces_unavailable"]);
 
 	const searched = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle", limit: 2 }, ctx));
 	assert.deepEqual(searched.files.map((file) => file.address), ["new.md", "@project/design.md"]);
@@ -184,7 +184,7 @@ test("notes_list is most-recently-updated first across merged scopes", async () 
 	// A same-path pair in two scopes keeps both rows; equal timestamps tie-break by scope name.
 	put("human", "a.md", base + 10);
 	assert.deepEqual((await files({})).filter((file) => file.address.endsWith("a.md")).map((file) => file.address), ["@human/a.md", "a.md"], "equal timestamps tie-break by full address");
-	assert.deepEqual((await files({ glob: "*.md" })).map((file) => file.address), ["a.md", "b.md"], "a bare glob narrows to the session home");
+	assert.deepEqual((await files({ glob: "*.md" })).map((file) => file.address), ["a.md", "b.md"], "a bare glob narrows to the session notebook");
 });
 
 test("notes are real files that persist across sessions and round-trip Unicode", async () => {
@@ -255,20 +255,20 @@ test("crumple lifecycle: metadata-only edits close and smooth a note without tou
 	assert.equal(missing.code, "not_found");
 });
 
-test("the filesystem notes loader treats an absent home as empty but surfaces a real directory read failure", async () => {
+test("the filesystem notes loader treats an absent notebook as empty but surfaces a real directory read failure", async () => {
 	const sm = manager();
 	const ctx = context(sm);
-	assert.deepEqual(await listNotes(ctx, { glob: "@human/**" }), [], "a home that has not been created is empty");
+	assert.deepEqual(await listNotes(ctx, { glob: "@human/**" }), [], "a notebook that has not been created is empty");
 	const blockedHome = scopeDir("human", ctx);
 	writeFileSync(blockedHome, "not a directory");
 	await assert.rejects(
 		() => listNotes(ctx, { glob: "@human/**" }),
 		(error: unknown) => (error as NodeJS.ErrnoException).code === "ENOTDIR",
-		"a non-ENOENT directory failure is not swallowed as an empty home",
+		"a non-ENOENT directory failure is not swallowed as an empty notebook",
 	);
 });
 
-test("boot note acquisition is one closed snapshot and isolates one or all failed homes", async () => {
+test("boot note acquisition is one closed snapshot and isolates one or all failed notebooks", async () => {
 	const sm = manager();
 	const ctx = context(sm);
 	const updated = Date.now();
@@ -299,7 +299,7 @@ test("boot note acquisition is one closed snapshot and isolates one or all faile
 		calls.set(scope, (calls.get(scope) ?? 0) + 1);
 		return rows.get(scope) ?? [];
 	});
-	assert.deepEqual([...calls.entries()], [["session", 1], ["project", 1], ["human", 1], ["agent", 1], ["model", 1]], "each selected home is loaded exactly once");
+	assert.deepEqual([...calls.entries()], [["session", 1], ["project", 1], ["human", 1], ["agent", 1], ["model", 1]], "each selected notebook is loaded exactly once");
 	const renderData = {
 		tools: DEFAULT_BOOT_TOOL_NAMES,
 		agentName: "root",
@@ -309,8 +309,8 @@ test("boot note acquisition is one closed snapshot and isolates one or all faile
 	};
 	const rendered = renderBootBlock(renderData);
 	assert.equal(renderBootBlock(renderData), rendered, "rendering the same boot data twice is deterministic");
-	assert.ok(rendered.includes("HUMAN_MAP_BODY") && rendered.includes("PROJECT_MAP_BODY") && rendered.includes("AGENT_MAP_BODY") && rendered.includes("SESSION_MAP_BODY"), "all home maps, including session, are pinned");
-	assert.ok(rendered.includes("session.md") && rendered.includes("@human/human.md"), "the fresh page carries rows from every home");
+	assert.ok(rendered.includes("HUMAN_MAP_BODY") && rendered.includes("PROJECT_MAP_BODY") && rendered.includes("AGENT_MAP_BODY") && rendered.includes("SESSION_MAP_BODY"), "all notebook maps, including session, are pinned");
+	assert.ok(rendered.includes("session.md") && rendered.includes("@human/human.md"), "the fresh page carries rows from every notebook");
 	assert.equal(rendered.includes("SESSION_POCKET_BODY"), false, "fresh-page bodies stay excluded");
 	assert.equal(rendered.includes("- MAP.md"), false, "a pinned session map does not take a feed seat");
 	assert.match(rendered, / {2}Session note\n {2}session\.md · (?:just now|\d+s ago)/, "a feed entry is the note's own title over its locator");
@@ -358,7 +358,7 @@ test("boot note acquisition is one closed snapshot and isolates one or all faile
 		if (scope === "human") throw readFailure("EIO");
 		return rows.get(scope) ?? [];
 	});
-	assert.deepEqual(oneFailed.unavailable.map((home) => home.label), ["@human"]);
+	assert.deepEqual(oneFailed.unavailable.map((namespace) => namespace.label), ["@human"]);
 	const oneFailedText = renderBootBlock({
 		tools: DEFAULT_BOOT_TOOL_NAMES,
 		agentName: "root",
@@ -366,9 +366,9 @@ test("boot note acquisition is one closed snapshot and isolates one or all faile
 		tree: renderData.tree,
 		notes: oneFailed,
 	});
-	assert.ok(oneFailedText.includes("PROJECT_MAP_BODY") && oneFailedText.includes("@human — the human\n──────────────────\n\n  This drawer wouldn't open. Try `notes_list` again."), "healthy homes and a per-section recovery notice survive one failure");
-	assert.equal(oneFailedText.includes("HUMAN_POCKET_BODY"), false, "the failed home's index is omitted");
-	assert.equal(oneFailedText.includes("Human note"), false, "the failed home takes no feed seats");
+	assert.ok(oneFailedText.includes("PROJECT_MAP_BODY") && oneFailedText.includes("@human — the human\n──────────────────\n\n  This drawer wouldn't open. Try `notes_list` again."), "healthy notebooks and a per-section recovery notice survive one failure");
+	assert.equal(oneFailedText.includes("HUMAN_POCKET_BODY"), false, "the failed notebook's index is omitted");
+	assert.equal(oneFailedText.includes("Human note"), false, "the failed notebook takes no feed seats");
 
 	const allFailed = await loadNotesSnapshot(notesIdentityFromPi(ctx), Date.now(), (scope) => {
 		throw readFailure(scope === "session" ? "EACCES" : "EIO");
@@ -381,8 +381,8 @@ test("boot note acquisition is one closed snapshot and isolates one or all faile
 		tree: renderData.tree,
 		notes: allFailed,
 	});
-	assert.ok(allFailedText.includes("pcw:test") && allFailedText.includes("root") && allFailedText.includes("next"), "identity survives an all-home failure");
-	assert.ok(allFailedText.includes("Your memory gets wiped when this window ends"), "protocol survives an all-home failure");
+	assert.ok(allFailedText.includes("pcw:test") && allFailedText.includes("root") && allFailedText.includes("next"), "identity survives an all-notebook failure");
+	assert.ok(allFailedText.includes("Your memory gets wiped when this window ends"), "protocol survives an all-notebook failure");
 	assert.equal(allFailedText.includes("scripted read failure"), false, "the model-facing notice does not expose OS/error details");
 	await assert.rejects(
 		() => loadNotesSnapshot(notesIdentityFromPi(ctx), Date.now(), () => { throw new TypeError("programmer failure"); }),
@@ -396,7 +396,7 @@ test("boot note acquisition is one closed snapshot and isolates one or all faile
 	);
 });
 
-test("the boot block gives awake agents the notes-home file layout", async () => {
+test("the boot block gives awake agents the notes file layout", async () => {
 	const session = manager();
 	const rendered = await explicitBoot(context(session), "pcw:test:root", undefined);
 	assert.equal(rendered.includes(process.env.NOTESOUP_HOME ?? ""), false, "the absolute notes home is never exposed");
