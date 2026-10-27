@@ -247,7 +247,7 @@ test("the configured extension source is the executable current entry", async ()
 		registerCommand(name: string) { commands.push(name); },
 	} as unknown as ExtensionAPI);
 	assert.deepEqual(tools.map((tool) => tool.name).sort(), ["dream_begin", "dream_end", "dream_forget", "empty_brain", "get_context_remaining", "history_list", "history_read", "history_windows", "notes_list", "notes_read", "notes_search", "notes_update", "notes_write"]);
-	assert.deepEqual(tools.filter((tool) => tool.exposure === "deferred").map((tool) => tool.name).sort(), ["dream_begin", "dream_end", "dream_forget"], "dream tools stay hidden until searched");
+	assert.deepEqual(tools.filter((tool) => tool.exposure === "deferred").map((tool) => tool.name).sort(), ["dream_begin", "dream_end", "dream_forget", "history_list", "history_read", "history_windows"], "dream and history tools stay hidden until searched");
 	assert.deepEqual(commands.sort(), ["empty", "fresh-window", "notesoup"]);
 });
 
