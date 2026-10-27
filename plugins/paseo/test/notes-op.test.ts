@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { notesOpTransformer } from "../client/notes-op-transformer.ts";
-import { DIFF_MAX_CHARS, PREVIEW_MAX_CHARS, READ_TEXT_MAX_CHARS, notesOpSchema } from "../shared/notes-op.ts";
+import { OUTPUT_DISPLAY_MAX_CHARS, notesOpSchema } from "../shared/notes-op.ts";
 import { claudeReadCompleted, claudeReadFailed, claudeUpdateCompleted, claudeWriteCompleted } from "./fixtures/claude-tool-calls.ts";
 
 function toolCall(overrides: Record<string, unknown>) {
@@ -18,75 +18,60 @@ function toolCall(overrides: Record<string, unknown>) {
 
 const transform = (overrides: Record<string, unknown>) => notesOpTransformer.transform({ item: toolCall(overrides) as never });
 
-test("notes_read renders the structured window, marks continuation as truncated", () => {
-  const result = transform({
-    detail: {
-      type: "unknown",
-      input: { address: "@self/foo.md" },
-      output: { structuredContent: { address: "@self/foo.md", text: "hello note", total_chars: 9999, next_offset_chars: 4000 } },
-    },
-  });
-  const data = notesOpSchema.parse(result!.items[0]!.data);
-  assert.deepEqual(data, { op: "read", address: "@self/foo.md", status: "completed", text: "hello note", totalChars: 9999, truncated: true });
+test("live and replay project the same complete delivered read, including continuation", () => {
+  const body = "笔记🦈\n".repeat(3000) + "\n[truncated; continue at offset_chars=15000]";
+  const content = [{ type: "text", text: `big.md\norigin self | created today | updated today\n\n${body}` }];
+  const replay = transform({ detail: { type: "unknown", input: { address: "big.md" }, output: { content } } });
+  const live = transform({ detail: { type: "unknown", input: { address: "big.md" }, output: {
+    content, structuredContent: { text: body, next_offset_chars: 15000 },
+  } } });
+  assert.equal(notesOpSchema.parse(replay!.items[0]!.data).text, body);
+  assert.deepEqual(live, replay);
 });
 
-test("notes_write carries outcome and a clipped content preview", () => {
-  const result = transform({
-    name: "notes_write",
-    detail: {
-      type: "unknown",
-      input: { address: "session.md", content: "x".repeat(PREVIEW_MAX_CHARS + 10) },
-      output: { structuredContent: { address: "session.md", outcome: "created" } },
-    },
+test("write and moved update project the entire input and delivered diff", () => {
+  const body = "long note\n".repeat(2000);
+  const write = transform({ name: "notes_write", detail: { type: "unknown",
+    input: { address: "a.md", content: body }, output: { content: [{ type: "text", text: "created a.md" }] },
+  } });
+  assert.equal(notesOpSchema.parse(write!.items[0]!.data).preview, body);
+  const diff = "+ 1 + new\n".repeat(2000) + "[diff truncated; update applied]";
+  const update = transform({ name: "notes_update", detail: { type: "unknown",
+    input: { address: "a.md", rename_to: "b.md" },
+    output: { content: [{ type: "text", text: `moved a.md -> b.md\ndiff:\n${diff}` }] },
+  } });
+  assert.deepEqual(notesOpSchema.parse(update!.items[0]!.data), {
+    op: "update", address: "b.md", renamedFrom: "a.md", status: "completed", diff,
   });
-  const data = notesOpSchema.parse(result!.items[0]!.data);
-  assert.equal(data.op, "write");
-  assert.equal(data.outcome, "created");
-  assert.equal(data.preview!.length, PREVIEW_MAX_CHARS);
-  assert.equal(data.truncated, true);
 });
 
-test("notes_update carries change kind, rename, and clipped diff", () => {
-  const result = transform({
-    name: "notes_update",
-    detail: {
-      type: "unknown",
-      input: { address: "@project/a.md" },
-      output: { structuredContent: { address: "@project/b.md", change_kind: "moved", rename_from: "@project/a.md", diff: "y".repeat(DIFF_MAX_CHARS + 10) } },
-    },
-  });
-  const data = notesOpSchema.parse(result!.items[0]!.data);
-  assert.equal(data.changeKind, "moved");
-  assert.equal(data.renamedFrom, "@project/a.md");
-  assert.equal(data.diff!.length, DIFF_MAX_CHARS);
-  assert.equal(data.truncated, true);
+test("oversized read, write and diff displays retain head and tail without changing history", () => {
+  const body = "START\n" + "🦈".repeat(500_000) + "\nEND";
+  for (const [name, field, receipt] of [
+    ["notes_read", "text", `a.md\nmetadata\n\n${body}`],
+    ["notes_write", "preview", "created a.md"],
+    ["notes_update", "diff", `updated a.md\ndiff:\n${body}`],
+  ] as const) {
+    const source = { name, detail: { type: "unknown", input: { address: "a.md", content: body },
+      output: { content: [{ type: "text", text: receipt }] } } };
+    const before = JSON.stringify(source);
+    const data = notesOpSchema.parse(transform(source)!.items[0]!.data);
+    const preview = data[field]!;
+    assert.ok(preview.length <= OUTPUT_DISPLAY_MAX_CHARS);
+    assert.ok(preview.startsWith("START\n") && preview.endsWith("\nEND"));
+    assert.match(preview, /middle is hidden/);
+    assert.equal(Buffer.from(preview).toString("utf8"), preview);
+    assert.equal(JSON.stringify(source), before);
+  }
 });
 
-test("wire errors and failed calls surface the refusal text", () => {
-  const refused = transform({
-    detail: { type: "unknown", input: { address: "@self/foo.md" }, output: { structuredContent: { error: "No note at @self/foo.md.", code: "not_found" } } },
-  });
-  assert.equal(notesOpSchema.parse(refused!.items[0]!.data).error, "No note at @self/foo.md.");
-
-  const failed = transform({
-    status: "failed",
-    error: { message: "boom" },
-    detail: { type: "unknown", input: { address: "@self/foo.md" }, output: { content: [{ type: "text", text: "io failed" }] } },
+test("failed calls surface the refusal text; running calls need only input", () => {
+  const failed = transform({ status: "failed", error: { message: "boom" },
+    detail: { type: "unknown", input: { address: "a.md" }, output: { content: [{ type: "text", text: "io failed" }] } },
   });
   assert.equal(notesOpSchema.parse(failed!.items[0]!.data).error, "io failed");
-});
-
-test("running calls render from input alone; long reads clip to the card budget", () => {
-  const running = transform({ status: "running", detail: { type: "unknown", input: { address: "@human/map.md" }, output: null } });
-  assert.deepEqual(notesOpSchema.parse(running!.items[0]!.data), { op: "read", address: "@human/map.md", status: "running" });
-
-  const long = transform({
-    detail: { type: "unknown", input: { address: "big.md" }, output: { structuredContent: { address: "big.md", text: "z".repeat(READ_TEXT_MAX_CHARS + 500), total_chars: 50000, next_offset_chars: null } } },
-  });
-  const data = notesOpSchema.parse(long!.items[0]!.data);
-  assert.equal(data.text!.length, READ_TEXT_MAX_CHARS);
-  assert.equal(data.truncated, true);
-  assert.ok(JSON.stringify(result_items(long)).length < 64 * 1024, "plugin payload stays under the timeline limit");
+  const running = transform({ status: "running", detail: { type: "unknown", input: { address: "a.md" }, output: null } });
+  assert.deepEqual(notesOpSchema.parse(running!.items[0]!.data), { op: "read", address: "a.md", status: "running" });
 });
 
 test("history replay has no structured payload: the rendered text is parsed instead", () => {
@@ -100,7 +85,6 @@ test("history replay has no structured payload: the rendered text is parsed inst
     detail: { type: "unknown", input: { address: "a.md", content: "the new body" }, output: { content: [{ type: "text", text: "overwrote a.md (project pi-context)" }] } },
   });
   const writeData = notesOpSchema.parse(write!.items[0]!.data);
-  assert.equal(writeData.outcome, "overwrote");
   assert.equal(writeData.preview, "the new body", "replay carries the call arguments, so the content preview comes from input on every path");
 
   const update = transform({
@@ -108,14 +92,13 @@ test("history replay has no structured payload: the rendered text is parsed inst
     detail: { type: "unknown", input: { address: "a.md" }, output: { content: [{ type: "text", text: "updated a.md\ndiff:\n- 1 - old\n+ 1 + new" }] } },
   });
   const updateData = notesOpSchema.parse(update!.items[0]!.data);
-  assert.equal(updateData.changeKind, "body");
   assert.equal(updateData.diff, "- 1 - old\n+ 1 + new");
 
   const moved = transform({
     name: "notes_update",
-    detail: { type: "unknown", input: { address: "a.md" }, output: { content: [{ type: "text", text: "moved a.md -> b.md" }] } },
+    detail: { type: "unknown", input: { address: "a.md", rename_to: "b.md" }, output: { content: [{ type: "text", text: "moved a.md -> b.md" }] } },
   });
-  assert.equal(notesOpSchema.parse(moved!.items[0]!.data).changeKind, "moved");
+  assert.equal(notesOpSchema.parse(moved!.items[0]!.data).address, "b.md");
 });
 
 test("non-notes tools, unknown shapes and missing addresses stay untouched", () => {
@@ -131,10 +114,10 @@ test("Claude completed calls use the adapter's output text for read, write previ
   const read = notesOpSchema.parse(transform(claudeReadCompleted)!.items[0]!.data);
   assert.deepEqual(read, { op: "read", address: "@self/foo.md", status: "completed", text: "body line one\nbody line two" });
   assert.deepEqual(notesOpSchema.parse(transform(claudeWriteCompleted)!.items[0]!.data), {
-    op: "write", address: "a.md", status: "completed", outcome: "overwrote", preview: "the new body",
+    op: "write", address: "a.md", status: "completed", preview: "the new body",
   });
   assert.deepEqual(notesOpSchema.parse(transform(claudeUpdateCompleted)!.items[0]!.data), {
-    op: "update", address: "a.md", status: "completed", changeKind: "body", diff: "- 1 - old\n+ 1 + new",
+    op: "update", address: "a.md", status: "completed", diff: "- 1 - old\n+ 1 + new",
   });
 });
 
@@ -162,21 +145,17 @@ test("Claude failures keep raw error content and transport messages instead of p
   assert.deepEqual(notesOpSchema.parse(update!.items[0]!.data), { op: "update", address: "a.md", status: "failed", error: "MCP connection closed" });
 });
 
-function result_items(result: { items: Array<{ data: unknown }> } | undefined) {
-  return result!.items.map((item) => item.data);
-}
-
 test("a crumple call is marked from the input alone", () => {
   const result = transform({
     name: "notes_update",
     detail: {
       type: "unknown",
       input: { address: "@self/stale.md", crumpled: true },
-      output: { structuredContent: { address: "@self/stale.md", change_kind: "metadata" } },
+      output: { content: [{ type: "text", text: "updated @self/stale.md" }] },
     },
   });
   const data = notesOpSchema.parse(result!.items[0]!.data);
   assert.equal(data.crumpled, true);
-  assert.equal(transform({ name: "notes_update", detail: { type: "unknown", input: { address: "@self/a.md", crumpled: false }, output: { structuredContent: { address: "@self/a.md", change_kind: "metadata" } } } })!
+  assert.equal(transform({ name: "notes_update", detail: { type: "unknown", input: { address: "@self/a.md", crumpled: false }, output: { content: [{ type: "text", text: "updated @self/a.md" }] } } })!
     .items[0]!.data.crumpled, undefined);
 });
