@@ -3,6 +3,7 @@ import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { COLLAPSED_PREVIEW_MAX_CHARS, outputPreview, type NotesOp } from "../shared/notes-op.ts";
+import { NoteInline, NoteMarkdown } from "./markdown.tsx";
 import { MONO, PaperCard } from "./paper-card.tsx";
 import { paperPalette, type PaperPalette } from "./paper-palette.ts";
 
@@ -59,16 +60,19 @@ export function NotesOpCard({ item, layout, theme }: PluginTimelineItemProps<Not
           {hasBody && <Icon name={expanded ? "ChevronUp" : "ChevronDown"} size={16} color={paper.inkMuted} />}
         </View>
         {peek !== undefined && (
-          <Text numberOfLines={2} style={{ color: data.diff !== undefined ? paper.added : paper.ink, fontSize: 13, lineHeight: 19 }}>
-            {data.diff !== undefined ? "+ " : ""}{outputPreview(peek, COLLAPSED_PREVIEW_MAX_CHARS).replace(/\s+/g, " ")}
-          </Text>
+          <NoteInline
+            text={`${data.diff !== undefined ? "+ " : ""}${outputPreview(peek, COLLAPSED_PREVIEW_MAX_CHARS).replace(/\s+/g, " ")}`}
+            paper={paper}
+            color={data.diff !== undefined ? paper.added : paper.ink}
+            numberOfLines={2}
+          />
         )}
         {data.error !== undefined && <Text selectable style={{ color: paper.removed, fontSize: 13, lineHeight: 19 }}>{data.error}</Text>}
       </Pressable>
       {expanded && hasBody && (
         <ScrollView style={{ maxHeight: layout.compact ? 280 : 400, borderTopWidth: 1, borderTopColor: paper.edge }} contentContainerStyle={{ gap: 5, paddingTop: 8 }} nestedScrollEnabled>
-          {data.text !== undefined && <Text selectable style={{ color: paper.ink, fontSize: 13, lineHeight: 19 }}>{outputPreview(data.text)}</Text>}
-          {data.preview !== undefined && <Text selectable style={{ color: paper.inkMuted, fontSize: 13, lineHeight: 19 }}>{outputPreview(data.preview)}</Text>}
+          {data.text !== undefined && <NoteMarkdown text={outputPreview(data.text)} paper={paper} />}
+          {data.preview !== undefined && <NoteMarkdown text={outputPreview(data.preview)} paper={paper} muted />}
           {data.diff !== undefined && <DiffBody diff={outputPreview(data.diff)} paper={paper} />}
           {data.renamedFrom !== undefined && <Text style={{ color: paper.inkMuted, fontSize: 11 }}>renamed from {data.renamedFrom}</Text>}
         </ScrollView>

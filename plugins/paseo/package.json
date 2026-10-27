@@ -7,6 +7,9 @@
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test test/*.test.ts"
   },
+  "dependencies": {
+    "marked": "^17.0.6"
+  },
   "devDependencies": {
     "@getpaseo/plugin": "0.11.2",
     "@types/node": "^22.19.19",
