@@ -345,9 +345,9 @@ test("dsh explicit resets survive auto:false; shared tool reads and expected err
 		assert.equal(read.isError, false);
 		if (!read.isError) assert.equal((read.value as { text: string }).text, "raw");
 	}
-	const missing = await call("history_list", { window_id: "missing" });
-	assert.equal(missing.isError, true);
-	if (missing.isError) assert.equal(missing.error.info?.code, "unknown_window_id");
+	const invalidHistory = await call("history_list", { window_id: "missing" });
+	assert.equal(invalidHistory.isError, true);
+	if (invalidHistory.isError) assert.equal(invalidHistory.error.info?.code, "INVALID_PARAMS");
 	const invalid = await call("notes_read", { address: "anything", max_chars: 0 });
 	assert.equal(invalid.isError, true);
 	if (invalid.isError) assert.equal(invalid.error.info?.code, "INVALID_PARAMS");

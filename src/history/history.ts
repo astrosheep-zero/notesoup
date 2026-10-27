@@ -45,8 +45,8 @@ export type HistoryWindow = { windowId: string; createdAt?: string; items: Histo
 
 /** Paired result seqs stay on the branch but redirect readers to the call's event. */
 export type HistoryProjection = { windows: HistoryWindow[]; highestSeq: number; branchSeqs: Set<number>; pairedResults: Map<number, number> };
-/** The filters one selection applies before paging: as-given window and roles, seq bounds, and parsed epoch-ms time bounds. */
-export type HistoryFilter = { window_id?: string | null; roles?: HistoryRole[] | null; after_seq?: number; before_seq?: number; sinceMs?: number; untilMs?: number };
+/** The filters one selection applies before paging: roles, seq bounds, and parsed epoch-ms time bounds. */
+export type HistoryFilter = { roles?: HistoryRole[] | null; after_seq?: number; before_seq?: number; sinceMs?: number; untilMs?: number };
 
 /** Native entries after the adapter allocates seqs and selects the active branch. */
 export type DecodedHistoryItem = {
@@ -210,7 +210,6 @@ export function nestedCallSummary(event: HistoryEvent): { nested_calls?: Static<
 /** Stable identity and a verbatim preview, starting at the search match when present. */
 export const HistoryPageItemSchema = Type.Object({
 	seq: Type.Integer({ minimum: 1 }),
-	window_id: Type.String(),
 	role: HistoryRoleSchema,
 	created_at: Type.Union([Type.String(), Type.Null()]),
 	...ToolSummarySchema.properties,
@@ -246,7 +245,6 @@ export function visibleItem(event: HistoryEvent, maxChars: number, matchOffset?:
 	const truncated = start > 0 || start + limit < chars.length;
 	return {
 		seq: event.seq,
-		window_id: event.windowId,
 		role: event.role,
 		created_at: event.createdAt ?? null,
 		...toolSummary(event),
@@ -260,19 +258,12 @@ export function allItems(projection: HistoryProjection): HistoryEvent[] {
 	return projection.windows.flatMap((current) => current.items);
 }
 
-export function unknownWindowId(projection: HistoryProjection, params: HistoryFilter): { message: string; known: string[] } | undefined {
-	if (typeof params.window_id !== "string") return undefined;
-	const known = projection.windows.map((current) => current.windowId);
-	return known.includes(params.window_id) ? undefined : { message: `No window "${params.window_id}" in this session`, known };
-}
-
 /**
- * Whether one event is inside the selection: its window, its seq bounds, and a half-open
+ * Whether one event is inside the selection: its seq bounds, and a half-open
  * [sinceMs, untilMs) window on created_at. A bounded time window drops events with no recorded
  * time or a time that cannot be read.
  */
 export function inSelection(event: HistoryEvent, params: HistoryFilter): boolean {
-	if (typeof params.window_id === "string" && params.window_id !== event.windowId) return false;
 	if (params.after_seq !== undefined && event.seq <= params.after_seq) return false;
 	if (params.before_seq !== undefined && event.seq >= params.before_seq) return false;
 	if (params.sinceMs === undefined && params.untilMs === undefined) return true;

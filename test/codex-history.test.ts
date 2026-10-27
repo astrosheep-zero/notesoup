@@ -7,7 +7,7 @@ import { test, type TestContext } from "node:test";
 import { readCodexHistory } from "../plugins/codex/src/history.js";
 import { readCodexTranscriptState } from "../plugins/codex/src/transcript.js";
 import { allItems, eventDocument } from "../src/history/history.js";
-import { historyList, historyRead, historyWindows } from "../src/tools/history.js";
+import { historyList, historyRead } from "../src/tools/history.js";
 
 /* Producer-shaped synthetic fixtures, not captured/private transcripts.
  * Frozen official rust-v0.160.1, d27764b82f7118f674371e6d6e76271d9d606edb:
@@ -127,14 +127,11 @@ test("two native checkpoints retain old raw history; replacement_history is not 
 	assert.equal(second.firstWindowId, W0);
 	assert.deepEqual(allItems(second.projection).filter((i) => i.seq <= 3), allItems(first.projection));
 	assert.doesNotMatch(allItems(second.projection).map(eventDocument).join("\n"), /COPIED CHECKPOINT TEXT/);
-	const windows = await historyWindows.execute({}, second.projection, second.threadId);
-	assert.ok(windows.ok);
-	assert.equal(windows.data.session_id, ROOT);
-	assert.deepEqual(windows.data.windows.map((w) => [w.window_id, w.first_seq, w.last_seq]), [
+	assert.deepEqual(second.projection.windows.map((w) => [w.windowId, w.items[0]?.seq, w.items.at(-1)?.seq]), [
 		[`codex:${ROOT}:${W0}`, 2, 3], [`codex:${ROOT}:${W1}`, 4, 6], [`codex:${ROOT}:${W2}`, 7, 8],
 	]);
-	const previous = await historyList.execute({ window_id: "@previous", roles: ["user"] }, second.projection);
-	assert.match(historyList.render(previous), /middle text/);
+	const earlier = await historyList.execute({ after_seq: 3, before_seq: 7, roles: ["user"] }, second.projection);
+	assert.match(historyList.render(earlier), /^seq 6 \| user\nmiddle text$/);
 	const old = await historyRead.execute({ seq: 2 }, second.projection);
 	assert.match(historyRead.render(old), /old raw text/);
 	const { projection: _projection, ...facts } = second;
@@ -219,9 +216,6 @@ test("child root session_id isn't thread identity; copied inference prefix isn't
 	const result = await readCodexHistory({ transcriptPath: path, threadId: CHILD });
 	assert.equal(result.rootSessionId, ROOT);
 	assert.equal(result.threadId, CHILD);
-	const windows = await historyWindows.execute({}, result.projection, result.threadId);
-	assert.ok(windows.ok);
-	assert.equal(windows.data.session_id, CHILD);
 	assert.equal(result.model, "child-model");
 	assert.equal(result.currentWindowId, WC);
 	assert.doesNotMatch(allItems(result.projection).map(eventDocument).join("\n"), /INHERITED/);

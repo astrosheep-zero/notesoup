@@ -346,8 +346,7 @@ test("off preserves an existing marker window and still cancels native compactio
 	assert.deepEqual(before, { cancel: true });
 	const projected = await runContextWithSystemHook(captured, ctx, sessionManager.buildSessionContext().messages);
 	assert.equal(JSON.stringify(projected?.messages ?? []).includes("old context must stay hidden"), false);
-	const windows = resultData<{ windows: Array<{ window_id: string }> }>(await call(captured, "history_windows", {}, ctx));
-	assert.equal(windows.windows.at(-1)?.window_id, windowId);
+	assert.equal(historyFromSession(ctx).windows.at(-1)?.windowId, windowId);
 });
 
 test("empty_brain uses one turn boundary and never calls ctx.compact", async () => {

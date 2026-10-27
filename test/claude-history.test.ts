@@ -8,7 +8,7 @@ import { renderBootBlock } from "../src/boot/render.js";
 import { unavailableNotesSnapshot } from "../src/boot/snapshot.js";
 import { DEFAULT_BOOT_TOOL_NAMES } from "../src/boot/text.js";
 import { allItems, eventDocument } from "../src/history/history.js";
-import { historyList, historyRead, historyWindows } from "../src/tools/history.js";
+import { historyList, historyRead } from "../src/tools/history.js";
 import { TOOL_OUTPUT_MAX_BYTES } from "../src/tools/output.js";
 import { dispatch, type ClaudeToolResult } from "../plugins/claude/src/helper.js";
 
@@ -67,7 +67,7 @@ test("Claude dialogue paging skips tool/thinking envelopes without losing array 
 		compact("boundary", "last"), row("boot", "boundary", "user", bootText(1))];
 	const projection = project(rows, "boot");
 	assert.equal(projection.highestSeq, 10);
-	const listed = await historyList.execute({ window_id: "@previous", roles: ["user", "assistant"], limit: 3 }, projection);
+	const listed = await historyList.execute({ before_seq: 9, roles: ["user", "assistant"], limit: 3 }, projection);
 	assert.ok(listed.ok);
 	assert.deepEqual(listed.data.items.map((item) => "seq" in item ? [item.seq, item.content] : []), [[1, "human question"], [2, "assistant answer"], [8, "human followup"]]);
 	const read = await historyRead.execute({ seq: 2 }, projection);
@@ -168,12 +168,10 @@ test("Claude native compaction and reset keep pre-reset history, preserved rewri
 	assert.equal(allItems(projection).find((event) => event.text === "before first reset")?.windowId, `claude:${sessionId}:0`);
 	assert.equal(allItems(projection).find((event) => event.text === "after first reset")?.windowId, `claude:${sessionId}:1`);
 	assert.equal(projection.highestSeq, 8);
-	const previous = await historyList.execute({ window_id: "@previous", roles: ["assistant"] }, projection);
-	assert.ok(previous.ok);
-	assert.deepEqual(previous.data.items.map((item) => "content" in item ? item.content : ""), ["after first reset"]);
-	const windows = await historyWindows.execute({}, projection, sessionId);
-	assert.ok(windows.ok);
-	assert.equal(windows.data.windows[0]?.first_seq, 1);
+	const earlier = await historyList.execute({ after_seq: 4, before_seq: 6, roles: ["assistant"] }, projection);
+	assert.ok(earlier.ok);
+	assert.deepEqual(earlier.data.items.map((item) => "content" in item ? item.content : ""), ["after first reset"]);
+	assert.equal(projection.windows[0]?.items[0]?.seq, 1);
 	assert.deepEqual(project(rows, "latest"), projection, "reload does not need an in-memory seq cache");
 });
 
@@ -185,9 +183,8 @@ test("Claude reset crosses native turn_duration graph metadata with no message c
 	assert.equal(projection.highestSeq, 5, "duration metadata does not allocate a message address");
 	assert.equal(projection.windows.length, 2);
 	assert.ok(allItems(projection).some((event) => event.text === "marker before reset"));
-	assert.ok((await historyList.execute({ window_id: "@previous" }, projection)).ok);
+	assert.ok((await historyList.execute({ before_seq: 3 }, projection)).ok);
 	assert.ok((await historyRead.execute({ seq: 2 }, projection)).ok);
-	assert.ok((await historyWindows.execute({}, projection, sessionId)).ok);
 });
 
 test("Claude api_error retry metadata keeps compact ancestry without allocating seq or exposing internals", async () => {
@@ -205,11 +202,10 @@ test("Claude api_error retry metadata keeps compact ancestry without allocating 
 	assert.deepEqual(project([...prefix, { ...rows[3]!, logicalParentUuid: "old" }, ...rows.slice(4)], "after"), projection, "metadata leaves all addresses and windows unchanged");
 	assert.doesNotMatch(allItems(projection).map(eventDocument).join("\n"), /PRIVATE_RETRY_PAYLOAD|ECONNRESET|request_retry/);
 	assert.ok((await historyList.execute({}, projection)).ok);
-	const previous = await historyList.execute({ window_id: "@previous" }, projection);
-	assert.ok(previous.ok);
-	assert.match(JSON.stringify(previous), /before retry|finished turn/);
+	const earlier = await historyList.execute({ before_seq: 3 }, projection);
+	assert.ok(earlier.ok);
+	assert.match(JSON.stringify(earlier), /before retry|finished turn/);
 	assert.ok((await historyRead.execute({ seq: 2 }, projection)).ok);
-	assert.ok((await historyWindows.execute({}, projection, sessionId)).ok);
 	assert.deepEqual(project(rows, "after"), projection, "reload preserves seq");
 	assert.deepEqual(project([...prefix, { ...retry, subtype: "future_metadata" }, ...rows.slice(3)], "after"), projection, "metadata does not depend on a subtype whitelist");
 	const withBody = project([...prefix, { ...retry, content: "visible system notice" }], "retry");
@@ -286,7 +282,7 @@ test("Claude gaps retain only confirmed suffixes, keep pairing/seqs, and disappe
 	assert.ok(!recovered.branchSeqs.has(2) && !recovered.branchSeqs.has(7), "recovery never selects either sibling");
 });
 
-test("Claude helper reports gaps on list/read/windows and re-anchors reset state only with a retained boot", async (t) => {
+test("Claude helper reports gaps on list/read and re-anchors reset state only with a retained boot", async (t) => {
 	const root = mkdtempSync(join(tmpdir(), "claude-history-gap-"));
 	t.after(() => rmSync(root, { recursive: true, force: true }));
 	const transcriptPath = join(root, "transcript.jsonl");
@@ -297,7 +293,7 @@ test("Claude helper reports gaps on list/read/windows and re-anchors reset state
 	const history = { sessionId, transcriptPath, headUuid: "suffix" };
 	const invoke = (tool: string, params: unknown = {}) => dispatch({ op: "tool", tool, params, identity, history }) as Promise<ClaudeToolResult>;
 	writeFileSync(transcriptPath, jsonl(rows));
-	for (const [tool, params] of [["history_list", {}], ["history_read", { seq: 2 }], ["history_windows", {}],
+	for (const [tool, params] of [["history_list", {}], ["history_read", { seq: 2 }],
 		["history_list", { query: "no matches" }], ["history_read", { seq: 99 }]] as const) {
 		const response = await invoke(tool, params);
 		assert.match(response.text, /history is incomplete: missing ancestor UUID\(s\): "missing"/);
@@ -307,8 +303,8 @@ test("Claude helper reports gaps on list/read/windows and re-anchors reset state
 	const excluded = await invoke("history_read", { seq: 1 });
 	assert.equal(excluded.ok, false);
 	assert.match(excluded.text, /outside the confirmed selected history/);
-	assert.match((await invoke("history_list", { window_id: "@previous" })).text, /Cannot resolve "@previous"/);
-	await assert.rejects(invoke("history_list", { window_id: "@previous", before_seq: "invalid" }), /invalid history_list parameters: before_seq/);
+	await assert.rejects(invoke("history_list", { window_id: "anything" }), /invalid history_list parameters:.*window_id/);
+	await assert.rejects(invoke("history_list", { before_seq: "invalid" }), /invalid history_list parameters: before_seq/);
 	await assert.rejects(invoke("history_read", { seq: "2" }), /invalid history_read parameters: seq/);
 	await assert.rejects(dispatch({ op: "history_state", identity, history }), /cannot determine the current window ordinal/);
 
@@ -325,22 +321,22 @@ test("Claude helper reports gaps on list/read/windows and re-anchors reset state
 	assert.equal(anchored.currentWindowOrdinal, 8);
 	assert.deepEqual(anchored.windows.map((window) => window.windowId), [`claude:${sessionId}:8`, `claude:${sessionId}:unknown:missing`], "unknown segments are listed separately, not inserted into the numbered timeline");
 	assert.deepEqual(await dispatch({ op: "history_state", identity, history }), { window: 8 }, "never windows.length - 1");
-	assert.match((await invoke("history_read", { seq: 6 })).text, /window claude:synthetic-session:8/);
-	assert.match((await invoke("history_windows")).text, /history is incomplete/);
-	assert.match((await invoke("history_list", { window_id: "@previous" })).text, /Cannot resolve "@previous"/);
+	const anchoredRead = await invoke("history_read", { seq: 6 });
+	assert.match(anchoredRead.text, /history is incomplete/);
+	assert.match(anchoredRead.text, /seq 6 \| user\n/);
 	rows.push(compact("next", "after"), row("next-boot", "next", "user", bootText(9)), user("latest", "next-boot", "latest"));
 	writeFileSync(transcriptPath, jsonl(rows));
 	history.headUuid = "latest";
-	const previous = await invoke("history_list", { window_id: "@previous" });
-	assert.ok(previous.ok);
-	assert.match(previous.text, /after anchored reset/);
-	assert.doesNotMatch(previous.text, /confirmed suffix/);
+	const earlier = await invoke("history_list", { after_seq: 5, before_seq: 7 });
+	assert.ok(earlier.ok);
+	assert.match(earlier.text, /after anchored reset/);
+	assert.doesNotMatch(earlier.text, /confirmed suffix/);
 
 	// Restore the record as a supported message: warning disappears on the next
 	// read, without any in-memory repair state or changed existing addresses.
 	rows.push(user("missing", "prefix", "recovered ancestor"));
 	writeFileSync(transcriptPath, jsonl(rows));
-	assert.doesNotMatch((await invoke("history_windows")).text, /history is incomplete|:unknown:/);
+	assert.doesNotMatch((await invoke("history_list")).text, /history is incomplete/);
 	assert.deepEqual(await dispatch({ op: "history_state", identity, history }), { window: 9 });
 });
 
@@ -350,9 +346,7 @@ test("Claude gap windows sort by confirmed ordinal despite forward references, w
 		assistant("call", "boot8", [call("t")]), compact("boundary9", "call"),
 		row("boot9", "boundary9", "user", bootText(9)), row("result", "notice", "user", [result("t", "output")])];
 	const projection = project(rows, "result");
-	const windows = await historyWindows.execute({}, projection, sessionId);
-	assert.ok(windows.ok);
-	assert.deepEqual(windows.data.windows.map((window) => window.window_id), [8, 9].map((ordinal) => `claude:${sessionId}:${ordinal}`));
+	assert.deepEqual(projection.windows.map((window) => window.windowId), [8, 9].map((ordinal) => `claude:${sessionId}:${ordinal}`));
 	assert.equal(projection.currentWindowOrdinal, 9);
 	assert.equal(projection.highestSeq, 8);
 	assert.deepEqual(allItems(projection).filter((event) => event.role === "tool").map((event) => [event.seq, event.text]), [[4, "output"]]);
@@ -399,16 +393,15 @@ test("Claude helper history tools reuse shared schemas, outcomes and text render
 	const identity = { home: join(root, "notes"), sessionId, cwd: root, agent: "claude", model: "claude" };
 	const history = { sessionId, transcriptPath, headUuid: "r" };
 	const projection = await readClaudeHistory(history);
-	const operations = [historyList, historyRead, historyWindows];
+	const operations = [historyList, historyRead];
 	for (const operation of operations) {
 		const params = operation.name === "history_read" ? { seq: 3 } : {};
 		const actual = await dispatch({ op: "tool", tool: operation.name, params, identity, history }) as ClaudeToolResult;
 		const expected = operation.name === "history_read" ? { text: historyRead.render(await historyRead.execute({ seq: 3 }, projection)), ok: true }
-			: operation.name === "history_list" ? { text: historyList.render(await historyList.execute({}, projection)), ok: true }
-			: { text: historyWindows.render(await historyWindows.execute({}, projection, sessionId)), ok: true };
+			: { text: historyList.render(await historyList.execute({}, projection)), ok: true };
 		assert.deepEqual(actual, expected);
 	}
 	assert.deepEqual(await dispatch({ op: "history_state", identity, history }), { window: 0 });
-	await assert.rejects(dispatch({ op: "tool", tool: "history_windows", params: {}, identity }), /transcript_path is unavailable/);
-	await assert.rejects(dispatch({ op: "tool", tool: "history_windows", params: {}, identity, history: { ...history, sessionId: "other" } }), /different session/);
+	await assert.rejects(dispatch({ op: "tool", tool: "history_list", params: {}, identity }), /transcript_path is unavailable/);
+	await assert.rejects(dispatch({ op: "tool", tool: "history_list", params: {}, identity, history: { ...history, sessionId: "other" } }), /different session/);
 });

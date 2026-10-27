@@ -5,7 +5,7 @@ import { Check } from "typebox/value";
 import type { TSchema } from "typebox";
 import { TOOL_OUTPUT_MAX_BYTES } from "../src/tools/output.js";
 import { earliestMatchOffsetChars } from "../src/text-match.js";
-import { historyList, historyRead, historyWindows } from "../src/tools/history.js";
+import { historyList, historyRead } from "../src/tools/history.js";
 import { historyDocument, projectHistory, type DecodedHistoryItem } from "../src/history/history.js";
 import { selectPage, type HistoryPage } from "../src/history/query.js";
 import {
@@ -89,8 +89,8 @@ test("history_list exposes bounded paging, `from` and a literal query, while not
 		assert.equal(Check(listSchema, invalid), false, JSON.stringify(invalid));
 	}
 
-	const windowsSchema = captured.tools.get("history_windows")?.parameters as { properties?: Record<string, unknown> };
-	assert.deepEqual(Object.keys(windowsSchema.properties ?? []), []);
+	assert.deepEqual(Object.keys(properties).sort(), ["query", "roles", "before_seq", "after_seq", "since", "until", "from", "limit", "max_chars_per_item"].sort());
+	assert.equal(Check(listSchema, { window_id: "anything" }), false, "unknown filters are rejected before selection");
 
 	const notesSchema = captured.tools.get("notes_list")?.parameters as { properties?: Record<string, unknown> };
 	assert.equal(notesSchema.properties?.cursor, undefined);
@@ -108,12 +108,18 @@ test("every history operation declares a result schema its own payload satisfies
 	toolCall(session, "call-1", "bash", { command: "pwd" });
 	toolResult(session, "call-1", "bash", "/tmp");
 
-	for (const toolName of ["history_windows", "history_list", "history_read"]) {
-		const operation = { history_windows: historyWindows, history_list: historyList, history_read: historyRead }[toolName]!;
-		const result = await call(captured, toolName, toolName === "history_read" ? { seq: 1 } : toolName === "history_list" ? { query: "hello" } : {}, ctx);
+	for (const toolName of ["history_list", "history_read"]) {
+		const operation = { history_list: historyList, history_read: historyRead }[toolName]!;
+		const result = await call(captured, toolName, toolName === "history_read" ? { seq: 1 } : { query: "hello" }, ctx);
 		const structured = result.structuredContent;
 		assert.ok(structured !== undefined, `${toolName} carries a structured outcome`);
 		assert.equal(Check(operation.outputSchema, structured), true, `${toolName} payload satisfies its own outputSchema`);
+		assert.equal(rendered(result).split("\n")[0], "seq 1 | user");
+		if (toolName === "history_list") {
+			assert.deepEqual(page(result).items, [{ seq: 1, role: "user", created_at: page(result).items[0]!.created_at, content: "hello", truncated: false, offset_chars: 0 }]);
+		} else {
+			assert.deepEqual(Object.keys(resultData(result)).sort(), ["seq", "role", "created_at", "text", "total_chars", "next_offset_chars"].sort());
+		}
 		assertWithinBudget(result, `${toolName} page`);
 	}
 	const conversation = await call(captured, "history_list", {}, ctx);
@@ -174,7 +180,7 @@ test("a result address consumed by a pairing names its call instead of serving a
 	assert.equal(consumed.code, "not_an_event");
 	assert.match(consumed.message, /seq 2\b/);
 
-	const callSeq = resultRead<{ seq: number; window_id: string }>(await call(captured, "history_read", { seq: 2 }, ctx));
+	const callSeq = resultRead<{ seq: number }>(await call(captured, "history_read", { seq: 2 }, ctx));
 	assert.equal(callSeq.seq, 2);
 	assert.equal(callSeq.content, 'edit {"path":"a.md"}\n--- output ---\nedited');
 });
@@ -515,7 +521,6 @@ test("standalone bash execution retains command, output, and truncation path", a
 	assert.equal(found.items.length, 1);
 	assert.deepEqual(found.items[0], {
 		seq: 1,
-		window_id: found.items[0]!.window_id,
 		role: "tool",
 		created_at: found.items[0]!.created_at,
 		tool: "bash",
@@ -551,7 +556,7 @@ test("a truncated tool run without a recorded path still reports output_truncate
 	assert.equal("full_output_path" in read, false);
 });
 
-test("list renders paging and fold recipes, read renders a neighborhood call, and @previous resolves", async () => {
+test("list renders paging and fold recipes across resets, and read renders a neighborhood call", async () => {
 	const session = manager();
 	const captured = makeExtension(session);
 	const ctx = context(session);
@@ -562,12 +567,12 @@ test("list renders paging and fold recipes, read renders a neighborhood call, an
 	const listed = await call(captured, "history_list", {}, ctx);
 	assert.match(rendered(listed), /→ older: \{"before_seq":\d+\}/, "the footer prints the exact call to page older");
 
-	const windows = resultData<{ windows: Array<{ window_id: string }> }>(await call(captured, "history_windows", {}, ctx));
-	assert.equal(windows.windows.length, 2);
-	const previous = page(await call(captured, "history_list", { window_id: "@previous" }, ctx));
-	assert.ok(previous.items.length > 0 && previous.items.every((item) => item.window_id === windows.windows[0]!.window_id), "@previous names the window before the current one");
-	const previousQuery = page(await call(captured, "history_list", { query: "older window", window_id: "@previous" }, ctx));
-	assert.ok(previousQuery.items.length > 0, "a query resolves the alias too");
+	const earlier = page(await call(captured, "history_list", { before_seq: 31, from: "oldest", limit: 30 }, ctx));
+	assert.deepEqual(earlier.items.map((item) => item.seq), Array.from({ length: 30 }, (_, index) => index + 1));
+	const earlierQuery = page(await call(captured, "history_list", { query: "older window", before_seq: 31 }, ctx));
+	assert.equal(earlierQuery.items.length, 20, "queries and seq bounds recover earlier windows without a separate address");
+	const current = await call(captured, "history_list", { after_seq: 30 }, ctx);
+	assert.match(rendered(current), /^seq 31 \| user\ncurrent window$/);
 
 	toolCall(session, "t1", "bash", { command: "ls" });
 	toolResult(session, "t1", "bash", "done");
@@ -579,15 +584,6 @@ test("list renders paging and fold recipes, read renders a neighborhood call, an
 	const hits = page(await call(captured, "history_list", { query: "needle read target" }, ctx));
 	const read = await call(captured, "history_read", { seq: hits.items[0]!.seq }, ctx);
 	assert.match(rendered(read), /neighborhood → `history_list`\(\{"after_seq":\d+,"before_seq":\d+\}\)/, "a read prints the call for surrounding events");
-
-	const solo = manager();
-	const soloCaptured = makeExtension(solo);
-	appendText(solo, "user", "only window");
-	const soloWindows = resultData<{ windows: Array<{ window_id: string }> }>(await call(soloCaptured, "history_windows", {}, context(solo)));
-	const noPrevious = resultError(await call(soloCaptured, "history_list", { window_id: "@previous" }, context(solo)));
-	assert.equal(noPrevious.code, "unknown_window_id");
-	assert.match(noPrevious.message, /@previous/);
-	assert.match(noPrevious.message, new RegExp(`${soloWindows.windows[0]!.window_id}\\.$`), "the refusal names the window the session does have");
 });
 
 test("compaction summary becomes context and is folded in the default list", async () => {
@@ -706,9 +702,8 @@ test("history_read paginates one document with an accurate limit and a bounded b
 	// of the request rather than at it.
 	const full = await call(captured, "history_read", { seq, max_chars: 50_000 }, ctx);
 	assertWithinBudget(full, "history_read page");
-	const read = resultRead<{ seq: number; window_id: string }>(full);
+	const read = resultRead<{ seq: number }>(full);
 	assert.equal(read.seq, seq);
-	assert.ok(read.window_id.length > 0);
 	assert.equal(read.total_chars, content.length);
 	assert.equal(read.content, content.slice(0, read.content.length), "the delivered slice is a verbatim prefix");
 	assert.equal(read.next_offset_chars !== null, true);
@@ -732,29 +727,6 @@ test("history_read paginates one document with an accurate limit and a bounded b
 	const past = resultError(await call(captured, "history_read", { seq, offset_chars: content.length + 1 }, ctx));
 	assert.equal(past.code, "invalid_offset");
 	assert.match(past.message, new RegExp(`\\b${content.length}\\b`), "the refusal names the real length");
-});
-
-test("history windows expose stable ranges and include host decoration in the complete budget", async () => {
-	const session = manager();
-	const captured = makeExtension(session);
-	const ctx = context(session);
-	appendText(session, "user", "before");
-	const windows = resultData<{ session_id: string; windows: Array<{ window_id: string; first_seq: number | null; last_seq: number | null }> }>(await call(captured, "history_windows", {}, ctx));
-	assert.equal(windows.session_id, session.getSessionId());
-	assert.equal(windows.windows.length, 1);
-	assert.deepEqual(windows.windows[0], { window_id: windows.windows[0]!.window_id, created_at: null, first_seq: 1, last_seq: 1 });
-
-	const projection = projectHistory([0, 1, 2].map((index) => ({ windowId: `w${index}-${"x".repeat(200)}`, items: [] })), 0, new Set());
-	const notice = `${"n".repeat(TOOL_OUTPUT_MAX_BYTES - 400)}\n`;
-	const wrapText = (text: string) => notice + text;
-	const bounded = await historyWindows.execute({}, projection, "session-x", wrapText);
-	assert.ok(bounded.ok);
-	assert.equal(bounded.data.windows.length, 1);
-	assert.equal(bounded.data.more, 2);
-	const text = wrapText(historyWindows.render(bounded));
-	assert.ok(Buffer.byteLength(text, "utf8") <= TOOL_OUTPUT_MAX_BYTES);
-	assert.ok(text.startsWith(notice), "decoration is measured, never clipped at delivery");
-	assert.match(text, /2 more windows not shown/);
 });
 
 test("historyDocument is one deterministic projection of the facts, with no UI header or continuation suffix", async () => {
@@ -794,7 +766,4 @@ test("historyDocument is one deterministic projection of the facts, with no UI h
 	const listed = await historyList.execute({}, projection);
 	assert.equal(listed.ok, true);
 	if (listed.ok) assert.equal(listed.data.items.some((item) => "folded" in item && item.count === 1), true);
-	const windows = await historyWindows.execute({}, projection, "session-x");
-	assert.equal(windows.ok, true);
-	if (windows.ok) assert.equal(windows.data.session_id, "session-x");
 });

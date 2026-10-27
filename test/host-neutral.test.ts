@@ -13,7 +13,7 @@ import { createNotesStore } from "../src/notes/store.js";
 import type { NotesIdentity } from "../src/notes/identity.js";
 import { notesWrite, notesUpdate, notesRead } from "../src/tools/notes.js";
 import { notesToolContext } from "../src/tools/notes-context.js";
-import { historyWindows, historyList, historyRead } from "../src/tools/history.js";
+import { historyList, historyRead } from "../src/tools/history.js";
 import { historyRoles } from "../src/tools/schema.js";
 import { MAX_READ_WINDOW_CHARS, TOOL_OUTPUT_MAX_BYTES } from "../src/tools/output.js";
 import {
@@ -284,13 +284,8 @@ test("shared history operations read typed events through the addresses the adap
 		{ seq: 3, windowId: "root", role: "tool", text: "😀 needle output", toolName: "read", toolCallId: "call" },
 	] }], 3, new Set([1, 2, 3]));
 
-	const windows = data(await historyWindows.execute({}, projection, "explicit-session"));
-	assert.equal(windows.session_id, "explicit-session");
-	assert.equal(windows.windows.length, 1);
-	assert.deepEqual(windows.windows[0], { window_id: "root", created_at: null, first_seq: 1, last_seq: 2 }, "a call and its result are one event, not two");
-
 	const listed = data(await historyList.execute({ roles: ["tool"] }, projection));
-	assert.equal(listed.items.length, 1);
+	assert.deepEqual(listed.items.map((item) => "seq" in item ? item.seq : -1), [2], "a call and its result are one event, not two");
 	const item = listed.items[0];
 	assert.ok(item && !('folded' in item), "the tool event carries an address");
 	const seq = item.seq;
@@ -319,21 +314,9 @@ test("shared history operations read typed events through the addresses the adap
 	assert.equal(refusal(await historyRead.execute({ seq: 3 }, projection)).code, "not_an_event", "a paired result address is refused");
 });
 
-test("an unknown window_id names at most five known windows in its message", async () => {
-	const windows = Array.from({ length: 7 }, (_, index) => ({ windowId: `pcw:w${index}`, items: [{ seq: index + 1, windowId: `pcw:w${index}`, role: "user" as const, text: `message-${index}` }] }));
-	const projection = projectHistory(windows, 7, new Set([1, 2, 3, 4, 5, 6, 7]));
-	const outcome = await historyList.execute({ window_id: "pcw:absent" }, projection);
-	assert.equal(outcome.ok, false);
-	if (!outcome.ok) {
-		assert.equal(outcome.error.code, "unknown_window_id");
-		assert.match(outcome.error.message, /"pcw:absent".*pcw:w0, pcw:w1, pcw:w2, pcw:w3, pcw:w4\.$/, "the message names the known windows itself");
-		assert.equal(outcome.error.message.includes("pcw:w5"), false, "at most five known windows are named");
-	}
-});
-
 test("one role schema declares the four public roles for the page item, the read payload, and the role filter", () => {
 	const read = (role: string) => ({
-		seq: 1, window_id: "root", role, created_at: null,
+		seq: 1, role, created_at: null,
 		text: "", total_chars: 0, next_offset_chars: null,
 	});
 	assert.equal(HistoryPageItemSchema.properties.role, HistoryRoleSchema, "the page item reuses the authoritative role schema");

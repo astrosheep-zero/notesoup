@@ -31,11 +31,10 @@ pi -e npm:notesoup
 - **Durable context windows.** `/fresh-window` (alias `/empty`) clears and stops; `/fresh-window Continue reviewing the implementation` clears and continues. The model can also request a window itself with `empty_brain`, and a budget close-out fires automatically before the window runs out. Abort and ordinary errors never count as completion; the raw conversation stays in the session, just out of the next context.
 - **A boot block at every window head.** Static once-per-window content (cache-stable) with the window identity, the recent-notes index, and a short protocol teaching the model how to recover: notes for its own bookkeeping, history tools for everything before the reset.
 - **`get_context_remaining`** — how much room the brain has left before the hard-reserve wipe, including the warning runway.
-- **Eight history/notes tools**, flattened from the original Codex actions:
+- **Seven history/notes tools**, flattened from the original Codex actions:
 
 | Codex action | Pi tool |
 | --- | --- |
-| `history.list_windows` | `history_windows` |
 | `history.list_items` | `history_list` |
 | `history.read_item` | `history_read` |
 | `history.search_contents` | `history_list` (`query`) |

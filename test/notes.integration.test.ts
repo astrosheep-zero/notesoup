@@ -420,7 +420,7 @@ test("the boot binds its tools and bounds an over-cap MAP with a lookup pointer"
 	assert.ok(rendered.includes("`MAP.md`"), "the full MAP remains available by address");
 	assert.ok(rendered.includes("CHEATSHEET.md\n\n  REMEMBER_THIS_RULE\n\nMAP.md\n\n"), "a real stored cheatsheet is pinned before the map");
 	assert.equal(/CHEATSHEET\.md ·/.test(rendered), false, "the stored cheatsheet takes no recent seat");
-	for (const retired of ["history_windows", "history_list", "history_read"]) {
+	for (const retired of ["history_list", "history_read"]) {
 		assert.equal(rendered.includes(retired), false, `${retired} no longer appears in the boot block`);
 	}
 });

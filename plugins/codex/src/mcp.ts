@@ -5,7 +5,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult, typ
 import { Check, Errors } from "typebox/value";
 import type { TSchema } from "typebox";
 import { notesList, notesRead, notesSearch, notesUpdate, notesWrite } from "../../../src/tools/notes.js";
-import { historyList, historyRead, historyWindows } from "../../../src/tools/history.js";
+import { historyList, historyRead } from "../../../src/tools/history.js";
 import { wireResult, type Operation, type Outcome } from "../../../src/tools/result.js";
 import { CodexIdentityError, notesIdentityFor, pluginDataRoot, readBinding, rootSessionIdOf, safeThreadId, turnModel, type ThreadBinding } from "./identity.js";
 import { readCodexHistory } from "./history.js";
@@ -25,7 +25,6 @@ const OPERATIONS: Record<string, Bound> = {
 	notes_search: { operation: notesSearch as unknown as Bound["operation"], history: false },
 	history_list: { operation: historyList as unknown as Bound["operation"], history: true },
 	history_read: { operation: historyRead as unknown as Bound["operation"], history: true },
-	history_windows: { operation: historyWindows as unknown as Bound["operation"], history: true },
 };
 
 function shellFree(reason: unknown): string {
@@ -135,9 +134,7 @@ export async function callTool(name: string, args: unknown, meta: Record<string,
 			return successFor(bound, outcome);
 		}
 		const projection = (native as Awaited<ReturnType<typeof readCodexHistory>>).projection;
-		const outcome = name === "history_windows"
-			? await (bound.operation.execute as unknown as (p: unknown, projection: unknown, sessionId: string) => Promise<Outcome<unknown>>)(params, projection, binding.threadId)
-			: await (bound.operation.execute as unknown as (p: unknown, projection: unknown) => Promise<Outcome<unknown>>)(params, projection);
+		const outcome = await bound.operation.execute(params, projection) as Outcome<unknown>;
 		return successFor(bound, outcome);
 	} catch (error) {
 		if (error instanceof CodexIdentityError) return failure(error.code, error.message);

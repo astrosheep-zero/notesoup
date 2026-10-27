@@ -174,7 +174,7 @@ test("a copied plugin without src or node_modules still initializes and lists al
 	const client = await connect(t, data, join(copy, "dist/codex/notesoup.js"));
 	const listed = await client.listTools();
 	assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [
-		"history_list", "history_read", "history_windows",
+		"history_list", "history_read",
 		"notes_list", "notes_read", "notes_search", "notes_update", "notes_write",
 	]);
 	for (const tool of listed.tools) {
@@ -292,12 +292,10 @@ test("history tools serve root and child native ancestry, and refuse stale nativ
 	await bind(f.data, { threadId: ROOT, rootSessionId: ROOT, home: f.home, cwd: f.cwd, transcriptPath: f.transcript, windowId: W1 });
 	const client = await connect(t, f.data, CLI, f.home);
 	const meta = metaFor(ROOT, ROOT, "gpt-5.1-codex", W1);
-	const windows = await call(client, { name: "history_windows", arguments: {}, _meta: meta });
-	assert.equal(windows.isError, undefined);
-	assert.equal((windows.structuredContent as { session_id: string }).session_id, ROOT);
-	assert.deepEqual((windows.structuredContent as { windows: Array<{ window_id: string }> }).windows.map((w) => w.window_id), [`codex:${ROOT}:${W0}`, `codex:${ROOT}:${W1}`]);
 	const page = await call(client, { name: "history_list", arguments: {}, _meta: meta });
-	assert.match(textOf(page), /root after/);
+	assert.equal(page.isError, undefined);
+	assert.match(textOf(page), /seq 2 \| user\nroot before/);
+	assert.match(textOf(page), /seq 4 \| user\nroot after/);
 	const read = await call(client, { name: "history_read", arguments: { seq: 4 }, _meta: meta });
 	assert.match(textOf(read), /root after/);
 
@@ -307,10 +305,12 @@ test("history tools serve root and child native ancestry, and refuse stale nativ
 		row("response_item", message("user", "child task")),
 	]));
 	await bind(f.data, { threadId: CHILD, rootSessionId: ROOT, home: f.home, cwd: f.cwd, transcriptPath: childPath, agent: "worker", agentType: "worker" });
-	const childWindows = await call(client, { name: "history_windows", arguments: {}, _meta: metaFor(CHILD, ROOT) });
-	assert.equal((childWindows.structuredContent as { session_id: string }).session_id, CHILD);
-	assert.match(textOf(childWindows), new RegExp(`codex:${CHILD}`));
-	assert.doesNotMatch(textOf(childWindows), new RegExp(`codex:${ROOT}`));
+	const invalidFilter = await call(client, { name: "history_list", arguments: { window_id: "anything" }, _meta: meta });
+	assert.equal(errorCode(invalidFilter), "invalid_params");
+	const childHistory = await call(client, { name: "history_list", arguments: {}, _meta: metaFor(CHILD, ROOT) });
+	assert.equal(childHistory.isError, undefined);
+	assert.match(textOf(childHistory), /^seq 2 \| user\nchild task$/);
+	assert.doesNotMatch(textOf(childHistory), /root before|root after/);
 
 	const other = join(dirname(f.transcript), nativeName("019a0000-0000-7000-8000-000000000077"));
 	await writeFile(other, jsonl([row("session_meta", sessionMeta(CHILD, { session_id: "019a0000-0000-7000-8000-000000000088" })), row("response_item", message("user", "elsewhere"))]));
@@ -341,7 +341,7 @@ test("a root boot carries the native window, native reset names, and is deduped 
 	assert.match(boot, new RegExp(`Agent name: anonymous \\(brain: gpt-5-4\\)`));
 	assert.match(boot, new RegExp(`codex:${ROOT}`));
 	assert.match(boot, new RegExp(`<notesoup:codex_window>\\nthread: ${ROOT}\\nwindow: ${W0}`));
-	// The shared trunk:shortname rule renders the same address history tools serve.
+	// The boot tree still labels its native current window.
 	assert.match(boot, new RegExp(`${W0} {4}← you are here`));
 	assert.match(boot, /native `new_context`/);
 	assert.match(boot, /get_context_remaining/);

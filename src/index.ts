@@ -41,7 +41,7 @@ export type { BootToolNames } from "./boot/text.js";
 // host-supplied notes tool context or decoded history projection.
 export { notesList, notesRead, notesSearch, notesUpdate, notesWrite } from "./tools/notes.js";
 export { notesIdentityForCall, notesToolContext, type NotesToolContext } from "./tools/notes-context.js";
-export { historyList, historyRead, historyWindows } from "./tools/history.js";
+export { historyList, historyRead } from "./tools/history.js";
 export { projectHistory } from "./history/history.js";
 export type { HistoryProjection } from "./history/history.js";
 export type { Operation, OperationError, Outcome, Renderer, TextWindow } from "./tools/result.js";

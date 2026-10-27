@@ -3,13 +3,13 @@ import { pathToFileURL } from "node:url";
 import type { Static, TSchema } from "typebox";
 import { Check, Errors } from "typebox/value";
 import { notesList, notesRead, notesSearch, notesUpdate, notesWrite } from "../../../src/tools/notes.js";
-import { historyList, historyRead, historyWindows, type HistoryTextWrapper } from "../../../src/tools/history.js";
+import { historyList, historyRead, type HistoryTextWrapper } from "../../../src/tools/history.js";
 import { readClaudeHistory, type ClaudeHistorySource } from "./history.js";
 import { loadNotesSnapshot } from "../../../src/boot/snapshot.js";
 import { renderBootBlock } from "../../../src/boot/render.js";
 import type { BootToolNames } from "../../../src/boot/text.js";
 import { selectContinuation } from "../../../src/budget/text.js";
-import { claudeHistoryGapNotice, claudeHistoryUnconfirmedSeq, CLAUDE_HISTORY_UNKNOWN_PREVIOUS, CLAUDE_HISTORY_UNKNOWN_WINDOW, CLAUDE_HISTORY_UNAVAILABLE_SENTENCE, CLAUDE_WARNING_PROMPT } from "./text.js";
+import { claudeHistoryGapNotice, claudeHistoryUnconfirmedSeq, CLAUDE_HISTORY_UNKNOWN_WINDOW, CLAUDE_HISTORY_UNAVAILABLE_SENTENCE, CLAUDE_WARNING_PROMPT } from "./text.js";
 import { resolveClaudeLimits } from "./thresholds.js";
 import { projectKey, snapshotNotesIdentity, type NotesIdentity } from "../../../src/notes/index.js";
 import type { Operation } from "../../../src/tools/result.js";
@@ -67,7 +67,6 @@ const OPERATIONS: Record<string, BoundOperation<[NotesToolContext]>> = {
 const HISTORY_OPERATIONS = {
 	history_list: boundOperation(historyList),
 	history_read: boundOperation(historyRead),
-	history_windows: boundOperation(historyWindows),
 };
 function historySource(value: unknown, sessionId: string): ClaudeHistorySource {
 	if (!value || typeof value !== "object") throw new Error("Claude history transcript_path is unavailable");
@@ -102,27 +101,14 @@ export async function dispatch(request: unknown): Promise<unknown> {
 			const projection = await readClaudeHistory(historySource(value.history, id.sessionId));
 			const notice = claudeHistoryGapNotice(projection.missingAncestors);
 			const wrapText: HistoryTextWrapper = (text) => notice + text;
-			let params = value.params;
-			if (projection.missingAncestors.length > 0) {
-				// An unknown segment is not evidence for the window before the current
-				// one. Resolve the exact ordinal, never array adjacency across a gap.
-				if ((params as { window_id?: string }).window_id === "@previous") {
-					const previous = projection.currentWindowOrdinal === undefined ? undefined : `claude:${id.sessionId}:${projection.currentWindowOrdinal - 1}`;
-					if (!projection.windows.some((window) => window.windowId === previous)) {
-						return { ok: false, text: wrapText(CLAUDE_HISTORY_UNKNOWN_PREVIOUS) };
-					}
-					params = { ...params as object, window_id: previous };
-				}
-				if (value.tool === "history_read") {
-					const { seq } = params as { seq: number };
-					if (seq <= projection.highestSeq && !projection.branchSeqs.has(seq)) {
-						return { ok: false, text: wrapText(claudeHistoryUnconfirmedSeq(seq)) };
-					}
+			const params = value.params;
+			if (projection.missingAncestors.length > 0 && tool === "history_read") {
+				const { seq } = params as { seq: number };
+				if (seq <= projection.highestSeq && !projection.branchSeqs.has(seq)) {
+					return { ok: false, text: wrapText(claudeHistoryUnconfirmedSeq(seq)) };
 				}
 			}
-			const result = tool === "history_windows"
-				? await HISTORY_OPERATIONS[tool].call(params, projection, id.sessionId, wrapText)
-				: await HISTORY_OPERATIONS[tool].call(params, projection, wrapText);
+			const result = await HISTORY_OPERATIONS[tool].call(params, projection, wrapText);
 			return { ...result, text: wrapText(result.text) };
 		}
 		return OPERATIONS[value.tool]!.call(value.params, notesToolContext(id, (value.identity as ClaudeIdentityInput).cwd));

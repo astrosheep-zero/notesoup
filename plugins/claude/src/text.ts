@@ -7,7 +7,6 @@ export const CLAUDE_HISTORY_UNAVAILABLE_SENTENCE = "History isn't available in t
 export const CLAUDE_WARNING_PROMPT = warningNotice();
 
 export const CLAUDE_HISTORY_UNKNOWN_WINDOW = "Claude history cannot determine the current window ordinal across a missing ancestor; restore the ancestry or use a retained notesoup boot to re-anchor it.";
-export const CLAUDE_HISTORY_UNKNOWN_PREVIOUS = 'Cannot resolve "@previous": the immediately preceding window is not confirmed across the ancestry gap. Use an explicit window id from history_windows.';
 export function claudeHistoryUnconfirmedSeq(seq: number): string {
 	return `Seq ${seq} is outside the confirmed selected history; it may be on another branch or beyond an unresolved ancestry gap.`;
 }

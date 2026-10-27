@@ -42,7 +42,7 @@ For list/search, omit `glob` or use the collection alias `@default` for this ses
 
 - **A note**: `notes_list` with a `glob` when you know roughly where it lives, `notes_search` when you know a phrase; then `notes_read` the address.
 - **Something that happened**: `history_list` to browse or search this session's events; `history_read` the seq for the whole event.
-- **An earlier window**: `history_windows` gives window ids; pass one as `window_id` to `history_list`.
+- **An earlier window**: use its seq range from the boot window tree with `history_list`'s `before_seq` / `after_seq` bounds, or search for a remembered phrase.
 
 Seqs are stable. Write the useful ones into a note so they need not be found twice.
 

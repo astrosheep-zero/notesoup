@@ -366,7 +366,7 @@ export function resultError(result: AgentToolResult<unknown>): OperationError {
 }
 
 /** Identity a read outcome carries next to its window; tests narrow it with an explicit type. */
-export type ReadIdentity = { metadata?: Record<string, unknown>; address?: string; seq?: number; window_id?: string };
+export type ReadIdentity = { metadata?: Record<string, unknown>; address?: string; seq?: number };
 
 /** The structured data of a read outcome: the window plus whatever identity the operation adds. */
 export type ReadOutcome<T extends object = ReadIdentity> = TextWindow & T;

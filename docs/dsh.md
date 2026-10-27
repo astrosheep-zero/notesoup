@@ -1,6 +1,6 @@
 # DeepSeek Harness adapter
 
-notesoup for **dsh 0.2.1-alpha.2** gives the agent a fresh page when context runs low: frozen boot text, the five notebooks, eight notes/history tools, `get_context_remaining`, and `empty_brain`. A reset makes **zero model calls**. The old conversation leaves the model surface and remains in the session log for history reads. Dream is not registered on dsh.
+notesoup for **dsh 0.2.1-alpha.2** gives the agent a fresh page when context runs low: frozen boot text, the five notebooks, seven notes/history tools, `get_context_remaining`, and `empty_brain`. A reset makes **zero model calls**. The old conversation leaves the model surface and remains in the session log for history reads. Dream is not registered on dsh.
 
 Install the package in your chosen dsh profile with `dsh plugin --profile <profile> add notesoup`, then copy the model declaration from [the profile patch example](dsh.profile.patch.yml) into `$DSH_HOME/profiles/<profile>/cordis.patch.yml`. The package bundle patch disables `compaction-basic` and inserts `notesoup-engine` and `notesoup`. Do not duplicate those rows when adding the model declaration. A source checkout needs `npm ci --ignore-scripts` and `npm run build`; use absolute `file:///.../dist/plugins/dsh/engine.js` and `file:///.../dist/plugins/dsh/index.js` module names. The example shows all rows for a profile assembled without the package bundle.
 
@@ -14,7 +14,7 @@ On load and before requests, preflight probes `systemPrompt.section`, `tools.reg
 
 The boot is a `systemPrompt.section` at order **2450**, with `interpolate: false`. Shared snapshot/render functions read the five notebooks once, using a captured timestamp. Rendering is deterministic for those inputs. A `plugin:notesoup/window` record stores the ordinal, id, timestamp, digest and exact boot text. `agent/created` adopts it before the first assembly. Notes written later appear in the next window's boot. Missing records reconstruct from the notesoup compact checkpoint, or from the marked root system section. Neither path rereads notes or regenerates a summary. Records are informational; checkpoints control the model surface.
 
-`history_windows`, `history_list`, and `history_read` obtain the full raw log through `ctx.sessionQuery.readSession`, then feed the shared pairing, paging and literal-search operations. Public history seq **1** is native dsh seq **0**; always use the seq a notesoup tool returns. A fork's selected seed prefix is available in its history; no sibling or parent suffix is fetched. Tool results are paired at their call seq. Text blocks are verbatim; other recorded blocks are shown as JSON. These tools browse one session, not the host's entire session corpus.
+`history_list` and `history_read` obtain the full raw log through `ctx.sessionQuery.readSession`, then feed the shared pairing, paging and literal-search operations. Public history seq **1** is native dsh seq **0**; always use the seq a notesoup tool returns. A fork's selected seed prefix is available in its history; no sibling or parent suffix is fetched. Tool results are paired at their call seq. Text blocks are verbatim; other recorded blocks are shown as JSON. These tools browse one session, not the host's entire session corpus.
 
 ## Reset and budget
 

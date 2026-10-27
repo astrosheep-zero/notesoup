@@ -221,7 +221,7 @@ test("AST guard sees every literal module edge, not import-like prose or comment
 
 test("the core entry is host-neutral and the Pi plugin entry owns the extension", () => {
 	assert.deepEqual(Object.keys(core).sort(), [
-		"DEFAULT_BOOT_TOOL_NAMES", "NoteError", "createNotesStore", "deriveThresholds", "historyList", "historyRead", "historyWindows",
+		"DEFAULT_BOOT_TOOL_NAMES", "NoteError", "createNotesStore", "deriveThresholds", "historyList", "historyRead",
 		"loadNotesSnapshot", "noteIdentity", "notesIdentityForCall", "notesList", "notesRead", "notesSearch", "notesToolContext", "notesUpdate", "notesWrite", "projectHistory",
 		"projectKey", "remainingBudget", "renderBootBlock", "renderProtocolBlock", "selectContinuation", "slugify",
 		"tokenBudgetGuidance", "unavailableNotesSnapshot", "warningPrompt", "WARNING_BODY",
@@ -246,8 +246,8 @@ test("the configured extension source is the executable current entry", async ()
 		registerTool(tool: ToolDefinition) { tools.push(tool); },
 		registerCommand(name: string) { commands.push(name); },
 	} as unknown as ExtensionAPI);
-	assert.deepEqual(tools.map((tool) => tool.name).sort(), ["dream_begin", "dream_end", "dream_forget", "empty_brain", "get_context_remaining", "history_list", "history_read", "history_windows", "notes_list", "notes_read", "notes_search", "notes_update", "notes_write"]);
-	assert.deepEqual(tools.filter((tool) => tool.exposure === "deferred").map((tool) => tool.name).sort(), ["dream_begin", "dream_end", "dream_forget", "history_list", "history_read", "history_windows"], "dream and history tools stay hidden until searched");
+	assert.deepEqual(tools.map((tool) => tool.name).sort(), ["dream_begin", "dream_end", "dream_forget", "empty_brain", "get_context_remaining", "history_list", "history_read", "notes_list", "notes_read", "notes_search", "notes_update", "notes_write"]);
+	assert.deepEqual(tools.filter((tool) => tool.exposure === "deferred").map((tool) => tool.name).sort(), ["dream_begin", "dream_end", "dream_forget", "history_list", "history_read"], "dream and history tools stay hidden until searched");
 	assert.deepEqual(commands.sort(), ["empty", "fresh-window", "notesoup"]);
 });
 

@@ -1,15 +1,14 @@
 /** Host-neutral history operations: one bounded payload for text and structured results. */
 import { Type, type Static } from "typebox";
-import { HISTORY_PREVIEW_CHARS, MAX_READ_WINDOW_CHARS, TOOL_OUTPUT_LIMIT } from "./output.js";
-import { failure, fitsResult, resultSchema, readTextWindow, renderOutcome, renderTextWindow, success, TextWindowRequestSchema, TextWindowSchema, type Operation, type Outcome } from "./result.js";
+import { HISTORY_PREVIEW_CHARS, MAX_READ_WINDOW_CHARS } from "./output.js";
+import { failure, fitsResult, resultSchema, readTextWindow, renderOutcome, renderTextWindow, success, TextWindowRequestSchema, TextWindowSchema, type Operation } from "./result.js";
 import { historyRoles, searchQuery } from "./schema.js";
 import { HistoryPageSchema, selectPage, type HistoryPage } from "../history/query.js";
-import { allItems, eventDocument, nestedCallSummary, toolSummary, HistoryRoleSchema, NestedCallSummarySchema, ToolSummarySchema, type HistoryFilter, type HistoryFoldedRow, type HistoryPageItem, type HistoryProjection, unknownWindowId } from "../history/history.js";
+import { allItems, eventDocument, nestedCallSummary, toolSummary, HistoryRoleSchema, NestedCallSummarySchema, ToolSummarySchema, type HistoryFoldedRow, type HistoryPageItem, type HistoryProjection } from "../history/history.js";
 
 /** One read: identity, tool summary and a flat document slice. */
 const HistoryReadDataSchema = Type.Object({
 	seq: Type.Integer({ minimum: 1 }),
-	window_id: Type.String(),
 	role: HistoryRoleSchema,
 	created_at: Type.Union([Type.String(), Type.Null()]),
 	...ToolSummarySchema.properties,
@@ -18,22 +17,10 @@ const HistoryReadDataSchema = Type.Object({
 }, { additionalProperties: false });
 type HistoryReadData = Static<typeof HistoryReadDataSchema>;
 
-const HistoryWindowsDataSchema = Type.Object({
-	session_id: Type.String(),
-	windows: Type.Array(Type.Object({
-		window_id: Type.String(),
-		created_at: Type.Union([Type.String(), Type.Null()]),
-		first_seq: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),
-		last_seq: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),
-	}, { additionalProperties: false })),
-	more: Type.Integer({ minimum: 0, description: "How many more were left out." }),
-}, { additionalProperties: false });
-type HistoryWindowsData = Static<typeof HistoryWindowsDataSchema>;
-
 /* ------------------------------------------------------------------ rendering */
 
-function header(item: { seq: number; window_id: string; role: string }): string {
-	return `seq ${item.seq} | window ${item.window_id} | ${item.role}`;
+function header(item: { seq: number; role: string }): string {
+	return `seq ${item.seq} | ${item.role}`;
 }
 
 function toolHeader(item: { role: string; tool?: string; tool_status?: string; output_truncated?: true; full_output_path?: string; nested_calls?: { call_count: number; complete: boolean } }): string | undefined {
@@ -84,67 +71,6 @@ function renderRead(data: HistoryReadData): string {
 export type HistoryTextWrapper = (text: string) => string;
 const plainText: HistoryTextWrapper = (text) => text;
 
-// Sample known ids in the refusal message itself, never as a second listing.
-const MAX_REPORTED_WINDOWS = 5;
-
-/** At most `MAX_REPORTED_WINDOWS` known ids, appended to an unknown_window_id message. */
-function knownWindowSuffix(known: string[]): string {
-	return known.length === 0 ? "" : `; its windows: ${known.slice(0, MAX_REPORTED_WINDOWS).join(", ")}`;
-}
-
-export const PREVIOUS_WINDOW = "@previous";
-
-/** Resolve "@previous" against oldest-first windows; every other value passes through. */
-function resolveWindowId(projection: HistoryProjection, windowId: string | undefined): { ok: true; window_id: string | undefined } | { ok: false; outcome: Outcome<never> } {
-	if (windowId !== PREVIOUS_WINDOW) return { ok: true, window_id: windowId };
-	const previous = projection.windows.at(-2);
-	if (previous !== undefined) return { ok: true, window_id: previous.windowId };
-	const known = projection.windows.map((current) => current.windowId);
-	return { ok: false, outcome: failure("unknown_window_id", `"${PREVIOUS_WINDOW}" has nothing to point at: this session has no window before the current one${knownWindowSuffix(known)}.`) };
-}
-
-function badWindowId(projection: HistoryProjection, params: HistoryFilter): Outcome<never> | undefined {
-	const badWindow = unknownWindowId(projection, params);
-	if (!badWindow) return undefined;
-	return failure("unknown_window_id", `${badWindow.message}${knownWindowSuffix(badWindow.known)}.`);
-}
-
-/* ------------------------------------------------------------------ history_windows */
-
-export const historyWindowsParameters = Type.Object({}, { additionalProperties: false });
-
-export const historyWindows: Operation<typeof historyWindowsParameters, HistoryWindowsData, [HistoryProjection, string, HistoryTextWrapper?]> = {
-	name: "history_windows",
-	label: "History list windows",
-	description: "List this session's context windows, oldest first, with seq ranges.",
-	parameters: historyWindowsParameters,
-	outputSchema: resultSchema(HistoryWindowsDataSchema),
-	async execute(_params, projection, sessionId, wrapText = plainText) {
-		const data: HistoryWindowsData = { session_id: sessionId, windows: [], more: projection.windows.length };
-		const fits = (candidate: HistoryWindowsData) => fitsResult(success(candidate), (result) => wrapText(renderOutcome(result, renderWindows)));
-		for (const window of projection.windows) {
-			let first: number | null = null;
-			let last: number | null = null;
-			for (const event of window.items) {
-				first = first === null ? event.seq : Math.min(first, event.seq);
-				last = last === null ? event.seq : Math.max(last, event.seq);
-			}
-			const row = { window_id: window.windowId, created_at: window.createdAt ?? null, first_seq: first, last_seq: last };
-			if (!fits({ ...data, windows: [...data.windows, row], more: data.more - 1 })) break;
-			data.windows.push(row);
-			data.more--;
-		}
-		return fits(data) ? success(data) : failure("output_too_large", `The session id alone fills the ${TOOL_OUTPUT_LIMIT} a call can carry.`);
-	},
-	render: (result) => renderOutcome(result, renderWindows),
-};
-
-function renderWindows(data: HistoryWindowsData): string {
-	const lines = [`session ${data.session_id}`, ...data.windows.map((window) => `window ${window.window_id} | seqs ${window.first_seq ?? "-"}-${window.last_seq ?? "-"}`)];
-	if (data.more > 0) lines.push(`${data.more} more windows not shown; every \`history_list\` event also names its window.`);
-	return lines.join("\n");
-}
-
 /* ------------------------------------------------------------------ history_list */
 
 export const historyListParameters = Type.Object({
@@ -155,7 +81,6 @@ export const historyListParameters = Type.Object({
 	since: Type.Optional(Type.String({ minLength: 1, description: "(optional) ISO 8601 time; only events at or after it. UTC if no offset." })),
 	until: Type.Optional(Type.String({ minLength: 1, description: "(optional) ISO 8601 time; only events before it. UTC if no offset." })),
 	from: Type.Optional(Type.Union([Type.Literal("newest"), Type.Literal("oldest")], { description: "(optional, default newest) Which end `limit` counts from: newest or oldest. Results stay oldest first." })),
-	window_id: Type.Optional(Type.String({ minLength: 1, description: `(optional) Only this context window. From \`history_windows\` or any event; \`${PREVIOUS_WINDOW}\` is the one before this.` })),
 	limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500, description: "(optional, default 20) Max events per page; folded rows don't count." })),
 	max_chars_per_item: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_READ_WINDOW_CHARS, description: `(optional, default ${HISTORY_PREVIEW_CHARS}) Max preview chars per event.` })),
 }, { additionalProperties: false });
@@ -167,14 +92,9 @@ export const historyList: Operation<typeof historyListParameters, HistoryPage, [
 	parameters: historyListParameters,
 	outputSchema: resultSchema(HistoryPageSchema),
 	async execute(params, projection, wrapText = plainText) {
-		const resolved = resolveWindowId(projection, params.window_id);
-		if (!resolved.ok) return resolved.outcome;
-		const scoped = { ...params, window_id: resolved.window_id };
-		const badWindow = badWindowId(projection, scoped);
-		if (badWindow) return badWindow;
 		// Charge wrapped rendering and cursors, not only event previews.
 		const fits = (page: HistoryPage) => fitsResult(success(page), (result) => wrapText(renderOutcome(result, renderPage)));
-		return selectPage(projection, scoped, fits, scoped.max_chars_per_item ?? HISTORY_PREVIEW_CHARS);
+		return selectPage(projection, params, fits, params.max_chars_per_item ?? HISTORY_PREVIEW_CHARS);
 	},
 	render: (result) => renderOutcome(result, renderPage),
 };
@@ -217,7 +137,6 @@ export const historyRead: Operation<typeof historyReadParameters, HistoryReadDat
 			params.max_chars,
 			(window) => ({
 				seq: item.seq,
-				window_id: item.windowId,
 				role: item.role,
 				created_at: item.createdAt ?? null,
 				...toolSummary(item),
