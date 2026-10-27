@@ -59,7 +59,8 @@ wakes up next reads them, and next is you. So keep them short, and keep them tru
   a phone number you'll regret losing. Nobody grades it. Keep it to five lines, or it grows fat
   and everybody pays for it.
 - **\`MAP.md\`** is only the note index. One line per durable note: the address, then a gist short
-  enough to tell whether the thing is worth opening. Rules belong in \`CHEATSHEET.md\`, not here.
+  enough to tell whether the thing is worth opening. Rules belong in \`CHEATSHEET.md\`, and note
+  contents belong in their own notes — *taps the sign* not inline here.
 
 Each notebook keeps its own: \`@project\`, \`@human\`, \`@self\`, \`@model\`. Missing pages are skipped;
 no need to create empty ones. New note, new MAP line. New rule worth remembering, new Cheatsheet

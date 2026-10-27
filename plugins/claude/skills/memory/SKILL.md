@@ -34,7 +34,7 @@ Any other `@` prefix is refused. A path is relative and `/`-separated, with no e
 
 `CHEATSHEET.md` and `MAP.md` at the root of each `@` notebook are separate pages you wake up with; absent pages are skipped. Keep standing reminders in `CHEATSHEET.md`, to five lines. `MAP.md` holds only the note index: each durable note's address and gist, for lookup. Update it whenever you add, move or crumple a durable note. Do not create empty pages.
 
-Write only what git and history cannot give back. Crumple notes that are no longer true; a stale note is worse than none.
+Keep notes focused on what is true now; if a piece of past context still matters (such as why an approach was ruled out), keep only a brief summary rather than a blow-by-blow log. Crumple notes that are no longer true; a stale note is worse than none.
 
 ## Finding things again
 

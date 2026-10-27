@@ -267,7 +267,7 @@ function boundedUpdate(data: NotesUpdateData): Outcome<NotesUpdateData> {
 
 export const notesUpdate = {
 	name: "notes_update", label: "Notes update",
-	description: `Change part of a note's body, its origin or crumpled state, or its address. When a line goes stale, replace it; don't append the correction below it. Each \`oldText\` must match exactly once unless \`replace_all\` is true. ${ADDRESS_DESCRIPTION}`,
+	description: `Change part of a note's body, its origin or crumpled state, or its address. When things change, replace the stale part in place; don't just tack an update onto the bottom. Each \`oldText\` must match exactly once unless \`replace_all\` is true. ${ADDRESS_DESCRIPTION}`,
 	parameters: notesUpdateParameters, outputSchema: resultSchema(NotesUpdateDataSchema), executionMode: "sequential",
 	async execute(params: Static<typeof notesUpdateParameters>, context: NotesToolContext, renderDiff: (change: NoteChange) => string = (change) => change.kind === "none" ? "" : `note ${change.kind}`): Promise<Outcome<NotesUpdateData>> {
 		try {

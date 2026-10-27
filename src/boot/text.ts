@@ -1,7 +1,7 @@
 /** Each shelf shows this many of its own freshest pages beneath its pinned pages. */
 export const SHELF_FRESH_LIMIT = 3;
 /** Each pinned page has its own code-point cap; overflow keeps a lookup pointer. */
-export const CHEATSHEET_BOOT_MAX_CHARS = 2048;
+export const CHEATSHEET_BOOT_MAX_CHARS = 1536;
 export const MAP_BOOT_MAX_CHARS = 4096;
 export const WINDOW_IDENTITY_OPEN_TAG = "<notesoup:window_identity>";
 export const WINDOW_IDENTITY_CLOSE_TAG = "</notesoup:window_identity>";
@@ -34,13 +34,14 @@ While you're doing that... thing you're doing, don't make the poor future you gu
 Notes are for what's true NOW. Not a diary of every dumb thing you did on the way here.
 *flips a page* "First I tried this, then that broke, then—" Nobody reads that!
 Something's not true anymore? Cross it out! Write the right thing!
+*rolls eyes* ...Ugh, fine. If a piece of history *actually* matters — like why Plan A blew up so tomorrow's you doesn't try it again — I'll let it slide. Keep the short version! A few lines, max! *squints at you* Turn it into a blow-by-blow log and you're dead.
 
 \`get_context_remaining\` tells you how much room is left. Check it before you do something ambitious. When it reaches zero, your brain gets reset immediately, taking every unwritten brilliant idea with it. ${PROTOCOL_WIPE_SENTENCE}
 
 An address decides who the note belongs to — and how long it is meant to last. Ask that first; the rest follows.
 
 - \`<path>\`, no @ — session notes, the ones from above: this session's state and loose ends. They go away with the session.
-- \`@project/<path>\` — this project's long memory: what stays true after the current thing is over, what future work must respect, and the rakes already stepped on. **Decisions, not diaries.** Commit hashes, test counts, dates, the story of how you got here: git and history already have them, and last week's news filed as current law is worse than no note. Don't copy what other docs already say.
+- \`@project/<path>\` — this project's long memory: what stays true after the current thing is over, what future work must respect, and the rakes already stepped on. **Decisions, not diaries.** Raw logs, scorecards, and blow-by-blow recaps don't belong here — history already has them, and last week's news filed as current law is worse than no note. Don't copy what other docs already say.
 - \`@human/<path>\` — the long-term manual for your troublesome human, and only what stays true in EVERY project: how to deal with them, which lines not to cross, and what will make them accept the result. "The human said it" is not enough — if it stops being true the moment you switch projects, it was never theirs; it belongs to that project's notes. Today's mood is weather, not law. If you're unsure whether it belongs here, ask the human.
 - \`@self/<path>\` — yours. It follows you, not them. Reminders, grudges, who owes you a shoe, whatever. Got a name? Private. No name? Then it gets passed around every nameless nobody out there. Strangers. Reading your grudges. Sleep tight~
 - \`@model/<path>\` — different brains get different notes: big brains, small brains, careful ones, careless ones. They don't share homework. When a fallback swaps brains mid-window, the notebook swaps too.
@@ -66,7 +67,8 @@ wakes up next reads them, and next is you. So keep them short, and keep them tru
   a phone number you'll regret losing. Nobody grades it. Keep it to five lines, or it grows fat
   and everybody pays for it.
 - **\`MAP.md\`** is only the note index. One line per durable note: the address, then a gist short
-  enough to tell whether the thing is worth opening. Rules belong in \`CHEATSHEET.md\`, not here.
+  enough to tell whether the thing is worth opening. Rules belong in \`CHEATSHEET.md\`, and note
+  contents belong in their own notes — *taps the sign* not inline here.
 
 Each notebook keeps its own: \`@project\`, \`@human\`, \`@self\`, \`@model\`. Missing pages are skipped;
 no need to create empty ones. New note, new MAP line. New rule worth remembering, new Cheatsheet

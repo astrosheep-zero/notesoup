@@ -16,7 +16,7 @@ The notebooks serve different readers:
 
 ## What a durable note holds
 
-Durable notes hold decisions, constraints, and lessons that stay true after the current work ends. They are not diaries: commit hashes, test counts, dates, and the story of how something was reached belong to git and history. A session finding is worth promoting only when it meets this bar.
+Durable notes hold decisions, constraints, and lessons that stay true after the current work ends. They are not diaries: raw logs, scorecards, and blow-by-blow recaps belong to history. When a piece of history actually matters — such as why an earlier approach failed — keep only a brief background summary, clearly separated from what is true now. A session finding is worth promoting only when it meets this bar.
 
 ## Review and consolidate
 
