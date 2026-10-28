@@ -70,7 +70,7 @@ export function NotesOpCard({ item, layout, theme }: PluginTimelineItemProps<Not
         {data.error !== undefined && <Text selectable style={{ color: paper.removed, fontSize: 13, lineHeight: 19 }}>{data.error}</Text>}
       </Pressable>
       {expanded && hasBody && (
-        <ScrollView style={{ maxHeight: layout.compact ? 280 : 400, borderTopWidth: 1, borderTopColor: paper.edge }} contentContainerStyle={{ gap: 5, paddingTop: 8 }} nestedScrollEnabled>
+        <ScrollView style={{ maxHeight: layout.compact ? 280 : 400, marginTop: 2, borderTopWidth: 1, borderTopColor: paper.edge }} contentContainerStyle={{ gap: 5, paddingTop: 8 }} nestedScrollEnabled>
           {data.text !== undefined && <NoteMarkdown text={outputPreview(data.text)} paper={paper} />}
           {data.preview !== undefined && <NoteMarkdown text={outputPreview(data.preview)} paper={paper} muted />}
           {data.diff !== undefined && <DiffBody diff={outputPreview(data.diff)} paper={paper} />}
