@@ -1,29 +1,27 @@
 import type { PluginTheme } from "@getpaseo/plugin";
 
 const LIGHT_PAPER = {
-  background: "#faf6eb",
-  edge: "#dcd0b4",
-  tape: "rgba(224, 206, 148, 0.62)",
-  tapeEdge: "rgba(165, 145, 86, 0.16)",
-  ink: "#2c281e",
-  inkMuted: "#7d735d",
-  added: "#2f743e",
-  removed: "#b3463b",
-  crumpled: "#f1ead8",
+  background: "#faf7f0",
+  edge: "#e2d9c8",
+  crease: "#ede5d5",
+  ink: "#26221b",
+  inkMuted: "#827866",
+  added: "#2b6e3c",
+  removed: "#ad3e34",
+  crumpled: "#efeae0",
 };
 
 export type PaperPalette = typeof LIGHT_PAPER;
 
 const DARK_PAPER: PaperPalette = {
-  background: "#26231d",
-  edge: "#463f31",
-  tape: "rgba(182, 160, 104, 0.38)",
-  tapeEdge: "rgba(218, 195, 134, 0.16)",
-  ink: "#ece5d5",
-  inkMuted: "#a89e86",
-  added: "#8cc494",
-  removed: "#e29488",
-  crumpled: "#1e1b16",
+  background: "#201d18",
+  edge: "#383228",
+  crease: "#2d2820",
+  ink: "#ede6da",
+  inkMuted: "#968c7a",
+  added: "#84c294",
+  removed: "#de877e",
+  crumpled: "#171511",
 };
 
 /** Paseo theme colors are hex (#RGB, #RRGGBB or #RRGGBBAA). */

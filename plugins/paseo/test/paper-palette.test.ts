@@ -30,8 +30,8 @@ test("paper follows the host theme and preserves the light palette when switchin
   const light = theme("#ffffff", "#18181b");
   const dark = theme("#18181b", "#fafafa");
   const paper = paperPalette(light);
-  assert.equal(paper.background, "#faf6eb");
-  assert.equal(paper.ink, "#2c281e");
+  assert.equal(paper.background, "#faf7f0");
+  assert.equal(paper.ink, "#26221b");
   assert.ok(luminance(paperPalette(dark).background) < 0.05);
   assert.notDeepEqual(paperPalette(dark), paper);
   assert.deepEqual(paperPalette(light), paper);
@@ -41,7 +41,7 @@ test("host hex shorthand and alpha colors select the same dark paper", () => {
   const paper = paperPalette(theme("#000000", "#ffffff"));
   assert.deepEqual(paperPalette(theme("#000", "#fff")), paper);
   assert.deepEqual(paperPalette(theme("#000000ff", "#ffffffff")), paper);
-  assert.equal(paperPalette(theme("#fff", "#000")).background, "#faf6eb");
+  assert.equal(paperPalette(theme("#fff", "#000")).background, "#faf7f0");
 });
 
 test("dark text, muted labels, additions and errors remain readable on normal and crumpled paper", () => {

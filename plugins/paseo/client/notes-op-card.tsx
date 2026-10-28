@@ -50,7 +50,7 @@ export function NotesOpCard({ item, layout, theme }: PluginTimelineItemProps<Not
         disabled={!hasBody}
         style={({ pressed }) => ({ gap: 4, opacity: pressed && hasBody ? 0.7 : 1 })}
       >
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingRight: 10 }}>
           <Text style={{ color: paper.inkMuted, fontSize: 11.5 }}>
             {data.crumpled ? "crumpled" : title}{data.status === "running" ? " …" : ""}
           </Text>

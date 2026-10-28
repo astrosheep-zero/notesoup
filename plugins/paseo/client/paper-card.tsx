@@ -4,12 +4,12 @@ import type { PaperPalette } from "./paper-palette.ts";
 
 export const MONO = Platform.select({ ios: "Menlo", android: "monospace", default: "ui-monospace, Menlo, monospace" });
 
-function Tape({ paper }: { paper: PaperPalette }) {
+function Crease({ paper }: { paper: PaperPalette }) {
   return (
     <View style={{
-      alignSelf: "flex-start", width: 76, height: 15, marginLeft: 28, marginBottom: -9, zIndex: 1,
-      backgroundColor: paper.tape, borderLeftWidth: 1, borderRightWidth: 1, borderColor: paper.tapeEdge,
-      transform: [{ rotate: "-2deg" }],
+      position: "absolute", top: 0, right: 0, width: 14, height: 14,
+      backgroundColor: paper.crease, borderBottomLeftRadius: 3,
+      borderLeftWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: paper.edge,
     }} />
   );
 }
@@ -21,20 +21,20 @@ export function PaperCard({ paper, compact, crumpled = false, children }: {
   children: ReactNode;
 }) {
   return (
-    <View style={{ paddingTop: 7 }}>
-      <Tape paper={paper} />
-      <View style={{
-        paddingVertical: compact ? 8 : 9,
-        paddingHorizontal: 10,
-        gap: 4,
-        minWidth: 0,
-        borderRadius: 3,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: paper.edge,
-        backgroundColor: crumpled ? paper.crumpled : paper.background,
-      }}>
-        {children}
-      </View>
+    <View style={{
+      paddingVertical: compact ? 8 : 9,
+      paddingHorizontal: 12,
+      gap: 6,
+      minWidth: 0,
+      borderRadius: 4,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: paper.edge,
+      backgroundColor: crumpled ? paper.crumpled : paper.background,
+      position: "relative",
+      overflow: "hidden",
+    }}>
+      <Crease paper={paper} />
+      {children}
     </View>
   );
 }
