@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import test from "node:test";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
+import type { TSchema } from "typebox";
+import { Check } from "typebox/value";
 import { DEFAULT_REMINDER_MARGIN_TOKENS, DEFAULT_RESERVE_TOKENS } from "../src/budget/constants.js";
 import { GUIDANCE_TYPE, RESET_MARKER_TYPE, WARNING_TYPE } from "../plugins/pi/entries.js";
 import { deriveThresholds } from "../src/budget/policy.js";
@@ -139,6 +141,24 @@ test("early guidance stays silent and the final warning notifies immediately onc
 	await runHandlers(captured, "turn_start", {}, final);
 	await runHandlers(captured, "agent_settled", {}, final);
 	assert.equal(noticesOf(final).filter((notice) => notice.message === "🥣 Brain almost full").length, 1, "repeated injection and commit do not notify again");
+});
+
+test("get_context_remaining declares its output and returns matching structured and text values", async () => {
+	const fixture = settingsFixture({ reserveTokens: 16_384 });
+	const sm = manager();
+	const captured = makeExtension(sm);
+	const schema = captured.tools.get("get_context_remaining")?.outputSchema as TSchema | undefined;
+	assert.ok(schema, "the registered tool declares an output schema");
+	for (const [tokens, expected] of [[72_563, 111_053], [null, null]] as const) {
+		const ctx = context(sm, undefined, { tokens, contextWindow: 200_000, percent: tokens === null ? null : tokens / 2000 }, true, fixture.cwd);
+		const result = await call(captured, "get_context_remaining", {}, ctx);
+		assert.deepEqual(result.structuredContent, { remaining_tokens: expected });
+		assert.deepEqual(result.structuredContent, resultJson(result));
+		assert.equal(Check(schema, result.structuredContent), true);
+		const text = result.content[0];
+		assert.ok(text && text.type === "text");
+		assert.equal(text.text, JSON.stringify(result.structuredContent));
+	}
 });
 
 test("the reported room ends at the hard reserve, clamps at zero, and preserves unknown usage", async () => {

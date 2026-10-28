@@ -10,6 +10,10 @@ import { tokenBudgetGuidance } from "../../src/budget/text.js";
 import { arrangeAnchoredReminders, type AnchorDetails } from "./anchored.js";
 import { output } from "./tool-result.js";
 
+export const ContextRemainingOutputSchema = Type.Object({
+	remaining_tokens: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()], { description: "Tokens left before the forced wipe; null when unknown." }),
+}, { additionalProperties: false });
+
 /** Remaining tokens in the provider's active window, or null without a usable estimate. */
 function remainingTokens(ctx: Pick<ExtensionContext, "sessionManager" | "getContextUsage" | "model">): number | null {
 	const usage = windowUsage(ctx);
@@ -122,10 +126,12 @@ export function registerBudget(
 		label: "Get context remaining",
 		description: "Check how much room your brain has left before it gets forcibly emptied. Returns null when unknown.",
 		parameters: Type.Object({}, { additionalProperties: false }),
+		outputSchema: ContextRemainingOutputSchema,
 		async execute(_id, _params, _signal, _update, ctx) {
 			// Report room to the hard-reserve wipe, including the warning runway.
 			const remaining = remainingTokens(ctx);
-			return output({ remaining_tokens: remainingBudget(remaining, thresholdsFor(ctx as ExtensionContext).reserve) });
+			const value = { remaining_tokens: remainingBudget(remaining, thresholdsFor(ctx as ExtensionContext).reserve) };
+			return { ...output(value), structuredContent: value };
 		},
 	}));
 

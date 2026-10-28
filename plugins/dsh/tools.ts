@@ -95,7 +95,7 @@ export function registerTools(ctx: Context, engine: NotesoupCompactionEngine): v
 		name: "get_context_remaining",
 		description: "Check how much room your brain has left before it gets forcibly emptied. Returns null when unknown.",
 		parameters: {},
-		output: { schema: { type: "object", properties: { remaining_tokens: { oneOf: [{ type: "integer" }, { type: "null" }], required: true } }, additionalProperties: false }, render: (_args, value) => [{ type: "text", text: JSON.stringify(value) }] },
+		output: { schema: { type: "object", properties: { remaining_tokens: { oneOf: [{ type: "integer" }, { type: "null" }], required: true, description: "Tokens left before the forced wipe; null when unknown." } }, additionalProperties: false }, render: (_args, value) => [{ type: "text", text: JSON.stringify(value) }] },
 		async execute(_args, exec) {
 			const agent = requireAgent(exec);
 			preflight(ctx);
