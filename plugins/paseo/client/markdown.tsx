@@ -6,24 +6,11 @@ import type { PaperPalette } from "./paper-palette.ts";
 
 type Styles = {
   block: ViewStyle;
-  text: TextStyle;
-  muted: TextStyle;
-  strong: TextStyle;
-  em: TextStyle;
-  del: TextStyle;
-  codespan: TextStyle;
-  link: TextStyle;
-  heading: (depth: number) => TextStyle;
-  quote: ViewStyle;
-  quoteText: TextStyle;
-  code: TextStyle;
-  hr: ViewStyle;
-  list: ViewStyle;
-  listItem: ViewStyle;
-  marker: TextStyle;
-  table: ViewStyle;
-  tableRow: ViewStyle;
-  tableCell: TextStyle;
+  text: TextStyle; muted: TextStyle; strong: TextStyle; em: TextStyle; del: TextStyle;
+  codespan: TextStyle; link: TextStyle; heading: TextStyle; quoteText: TextStyle;
+  code: TextStyle; marker: TextStyle; tableCell: TextStyle;
+  quote: ViewStyle; hr: ViewStyle; list: ViewStyle; listItem: ViewStyle;
+  table: ViewStyle; tableRow: ViewStyle;
 };
 
 function markdownStyles(paper: PaperPalette): Styles {
@@ -31,26 +18,25 @@ function markdownStyles(paper: PaperPalette): Styles {
     block: { gap: 6 },
     text: { color: paper.ink, fontSize: 13, lineHeight: 19 },
     muted: { color: paper.inkMuted, fontSize: 13, lineHeight: 19 },
-    strong: { fontWeight: "700" },
+    strong: { fontWeight: "500", color: paper.ink },
     em: { color: paper.inkMuted, fontStyle: "italic" },
     del: { color: paper.inkMuted, textDecorationLine: "line-through" },
-    codespan: { fontFamily: MONO, backgroundColor: paper.crumpled },
+    codespan: { fontFamily: MONO },
     link: { color: paper.added, textDecorationLine: "underline" },
-    heading: depth => ({ fontWeight: "700", fontSize: Math.max(13, 18 - depth), lineHeight: Math.max(19, 25 - depth) }),
+    heading: { fontWeight: "500", color: paper.ink },
     quote: { borderLeftWidth: 2, borderLeftColor: paper.edge, paddingLeft: 8, gap: 4 },
-    quoteText: { color: paper.inkMuted },
+    quoteText: { color: paper.inkMuted, fontSize: 13, lineHeight: 19 },
     code: {
-      fontFamily: MONO, fontSize: 12, lineHeight: 17, color: paper.ink,
-      backgroundColor: paper.crumpled, borderWidth: StyleSheet.hairlineWidth, borderColor: paper.edge,
-      borderRadius: 3, paddingVertical: 6, paddingHorizontal: 8,
+      fontFamily: MONO, fontSize: 13, lineHeight: 19, color: paper.ink,
+      backgroundColor: paper.crumpled, borderRadius: 3, paddingVertical: 6, paddingHorizontal: 8,
     },
-    hr: { height: 1, backgroundColor: paper.edge },
-    list: { gap: 4 },
+    hr: { height: StyleSheet.hairlineWidth, backgroundColor: paper.edge },
+    list: { gap: 3 },
     listItem: { flexDirection: "row", gap: 6 },
     marker: { color: paper.inkMuted, minWidth: 14 },
-    table: { borderWidth: StyleSheet.hairlineWidth, borderColor: paper.edge, borderRadius: 3, overflow: "hidden" },
-    tableRow: { flexDirection: "row" },
-    tableCell: { flex: 1, paddingVertical: 3, paddingHorizontal: 6, fontSize: 12.5, lineHeight: 18 },
+    table: { gap: 2 },
+    tableRow: { flexDirection: "row", gap: 8 },
+    tableCell: { flex: 1 },
   };
 }
 
@@ -67,7 +53,7 @@ function renderInlines(tokens: Token[] | undefined, styles: Styles, keyPrefix: s
       case "del":
         return <Text key={key} style={styles.del}>{renderInlines(token.tokens, styles, key)}</Text>;
       case "codespan":
-        return <Text key={key} style={styles.codespan}> {token.text} </Text>;
+        return <Text key={key} style={styles.codespan}>{token.text}</Text>;
       case "link":
         return <Text key={key} style={styles.link}>{renderInlines(token.tokens, styles, key)}</Text>;
       case "br":
@@ -107,11 +93,7 @@ function renderBlocks(tokens: Token[] | undefined, styles: Styles, keyPrefix: st
       case "code":
         return <Text key={key} selectable style={styles.code}>{token.text}</Text>;
       case "heading":
-        return (
-          <Text key={key} selectable style={[textStyle, styles.heading(token.depth)]}>
-            {renderInlines(token.tokens, styles, key)}
-          </Text>
-        );
+        return <Text key={key} selectable style={[textStyle, styles.heading]}>{renderInlines(token.tokens, styles, key)}</Text>;
       case "blockquote":
         return <View key={key} style={styles.quote}>{renderBlocks(token.tokens, styles, key, styles.quoteText)}</View>;
       case "list": {
@@ -129,9 +111,7 @@ function renderBlocks(tokens: Token[] | undefined, styles: Styles, keyPrefix: st
         return (
           <View key={key} style={styles.table}>
             {[table.header, ...table.rows].map((row, rowIndex) => (
-              <View key={`${key}.${rowIndex}`} style={[styles.tableRow, rowIndex < table.rows.length && {
-                borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: styles.table.borderColor,
-              }]}>
+              <View key={`${key}.${rowIndex}`} style={styles.tableRow}>
                 {row.map((cell, cellIndex) => (
                   <Text
                     key={`${key}.${rowIndex}.${cellIndex}`}
