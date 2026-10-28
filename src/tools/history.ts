@@ -159,21 +159,18 @@ export const historyRead: Operation<typeof historyReadParameters, HistoryReadDat
 			projection = loaded.data.projection;
 			identity = { session: sessionIdentity(target.data), ...(loaded.data.notice === undefined ? {} : { notice: loaded.data.notice }) };
 		}
-		const item = allItems(projection).find((event) => event.seq === params.seq);
 		// Address checks run in one order: past the end of the file, off this branch, then
-		// consumed by a pairing. Only the last two can mention what is at the address.
-		if (item === undefined && params.seq > projection.highestSeq) {
+		// resolved through any tool-result pairing to its call event.
+		if (params.seq > projection.highestSeq) {
 			return failure("unknown_seq", `There is no seq ${params.seq}; this session runs from seq 1 to ${projection.highestSeq}.`);
 		}
 		if (!projection.branchSeqs.has(params.seq)) {
 			if (identity.notice) return failure("unconfirmed_seq", `Seq ${params.seq} is outside the confirmed selected history; it may be on another branch or beyond an unresolved ancestry gap.`);
 			return failure("not_on_branch", `Seq ${params.seq} is on another branch of this session; it can't be read from here.`);
 		}
+		const targetSeq = projection.pairedResults.get(params.seq) ?? params.seq;
+		const item = allItems(projection).find((event) => event.seq === targetSeq);
 		if (item === undefined) {
-			const callSeq = projection.pairedResults.get(params.seq);
-			if (callSeq !== undefined) {
-				return failure("not_an_event", `Seq ${params.seq} is a tool result, shown together with its call; read seq ${callSeq} instead.`);
-			}
 			return failure("unknown_seq", `Seq ${params.seq} holds nothing to read.`);
 		}
 		const document = eventDocument(item);

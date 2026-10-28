@@ -28,7 +28,11 @@ export function registerNotesTools(pi: ExtensionAPI) {
 	const identity = (ctx: ExtensionContext) => dreamingIdentity(notesIdentityFromPi(ctx), dreamOf(ctx));
 	const toolContext = (ctx: ExtensionContext) => notesToolContext(identity(ctx), ctx.cwd);
 	registerOperation(pi, notesWrite, (params, ctx) => notesWrite.execute(params, toolContext(ctx)), NOTES_NAMESPACE, notesWriteRenderers);
-	registerOperation(pi, notesUpdate, (params, ctx) => notesUpdate.execute(params, toolContext(ctx), renderDiff), NOTES_NAMESPACE, notesUpdateRenderers);
+	registerOperation(pi, notesUpdate, async (params, ctx) => {
+		let diff = "";
+		const outcome = await notesUpdate.execute(params, toolContext(ctx), (change) => { diff = renderDiff(change); });
+		return diff ? { ...outcome, details: { diff } } : outcome;
+	}, NOTES_NAMESPACE, notesUpdateRenderers);
 	registerOperation(pi, notesRead, (params, ctx) => notesRead.execute(params, toolContext(ctx)), NOTES_NAMESPACE, notesReadRenderers);
 	registerOperation(pi, notesList, (params, ctx) => notesList.execute(params, toolContext(ctx)), NOTES_NAMESPACE);
 	registerOperation(pi, notesSearch, (params, ctx) => notesSearch.execute(params, toolContext(ctx)), NOTES_NAMESPACE);

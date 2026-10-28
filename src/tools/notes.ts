@@ -150,7 +150,6 @@ export type NotesWriteData = Static<typeof NotesWriteDataSchema>;
 export const NotesUpdateDataSchema = Type.Object({
 	...NoteIdentitySchema,
 	change_kind: Type.Union([Type.Literal("none"), Type.Literal("body"), Type.Literal("metadata"), Type.Literal("moved")]),
-	diff: Type.String(),
 	rename_from: Type.Optional(Type.String()),
 }, { additionalProperties: false });
 export type NotesUpdateData = Static<typeof NotesUpdateDataSchema>;
@@ -239,50 +238,29 @@ export const notesUpdateParameters = Type.Object({
 }, { additionalProperties: false });
 
 function renderUpdateData(data: NotesUpdateData): string {
-	const head = data.rename_from === undefined
+	return data.rename_from === undefined
 		? `${data.change_kind === "none" ? "unchanged" : "updated"} ${renderIdentity(data)}`
 		: `moved ${data.rename_from} -> ${data.address}`;
-	const lines = [head];
-	if (data.diff.length > 0) lines.push("diff:", data.diff);
-	return lines.join("\n");
-}
-
-function renderUpdate(result: Outcome<NotesUpdateData>): string {
-	return renderOutcome(result, renderUpdateData);
-}
-
-/** A shortened diff still says so in the receipt's own text, on both surfaces. */
-export const DIFF_SHORTENED_MARKER = "[diff truncated; update applied]";
-
-const RECEIPT_TOO_LONG = `Saved, but the receipt is too long to hand back (${TOOL_OUTPUT_LIMIT} per call). Check the note with \`notes_read\`.`;
-
-/** Bound a mutation receipt on both surfaces; a huge diff is cut to the longest fitting prefix and marked. */
-function boundedUpdate(data: NotesUpdateData): Outcome<NotesUpdateData> {
-	if (fitsResult(success(data), renderUpdate)) return success(data);
-	if (data.diff === "") return failure("output_too_large", RECEIPT_TOO_LONG);
-	const diff = prefixFit(data.diff, (candidate) => fitsResult(success({ ...data, diff: `${candidate}\n${DIFF_SHORTENED_MARKER}` }), renderUpdate));
-	const result = success({ ...data, diff: `${diff}\n${DIFF_SHORTENED_MARKER}` });
-	return fitsResult(result, renderUpdate) ? result : failure("output_too_large", RECEIPT_TOO_LONG);
 }
 
 export const notesUpdate = {
 	name: "notes_update", label: "Notes update",
 	description: `Change part of a note's body, its origin or crumpled state, or its address. When things change, replace the stale part in place; don't just tack an update onto the bottom. Each \`oldText\` must match exactly once unless \`replace_all\` is true. ${ADDRESS_DESCRIPTION}`,
 	parameters: notesUpdateParameters, outputSchema: resultSchema(NotesUpdateDataSchema), executionMode: "sequential",
-	async execute(params: Static<typeof notesUpdateParameters>, context: NotesToolContext, renderDiff: (change: NoteChange) => string = (change) => change.kind === "none" ? "" : `note ${change.kind}`): Promise<Outcome<NotesUpdateData>> {
+	async execute(params: Static<typeof notesUpdateParameters>, context: NotesToolContext, onChange?: (change: NoteChange) => void): Promise<Outcome<NotesUpdateData>> {
 		try {
 			const identity = notesIdentityForCall(context, params.cwd);
 			const store = createNotesStore(identity);
 			// Empty filler is not a request: models that pass every parameter get the edit path.
 			const renameTo = params.rename_to === "" ? undefined : params.rename_to;
 			const { change, moved } = await store.update(params.address, params.edits, { origin: params.origin, crumpled: params.crumpled, replaceAll: params.replace_all, renameTo });
+			onChange?.(change);
 			const from = noteIdentity(identity, params.address).address;
 			const to = noteIdentity(identity, renameTo ?? params.address);
-			const diff = renderDiff(change);
-			return boundedUpdate({ ...to, ...(moved ? { rename_from: from } : {}), change_kind: moved ? "moved" : change.kind, diff: moved ? [`rename ${from} -> ${to.address}`, diff].filter(Boolean).join("\n") : diff });
+			return success({ ...to, ...(moved ? { rename_from: from } : {}), change_kind: moved ? "moved" : change.kind });
 		} catch (error) { return failureOf(error); }
 	},
-	render: renderUpdate,
+	render: (result: Outcome<NotesUpdateData>): string => renderOutcome(result, renderUpdateData),
 } as const;
 
 export const notesReadParameters = Type.Object({ address: Type.String(), ...TextWindowRequestSchema, cwd: CWD_PARAMETER }, { additionalProperties: false });

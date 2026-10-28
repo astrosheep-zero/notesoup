@@ -231,14 +231,13 @@ test("shared note operations return canonical outcomes with a body-only read win
 	assert.equal(written.project_key, notesIdentity.projectKey);
 	assert.equal(written.outcome, "created");
 
+	let observedKind = "";
 	const updated = data(await notesUpdate.execute({ address: "@project/test.md", edits: [{ oldText: "alpha", newText: "gamma" }] }, toolContext, (change) => {
-		assert.equal(change.kind, "body");
-		return "caller-rendered-diff";
+		observedKind = change.kind;
 	}));
+	assert.equal(observedKind, "body");
 	assert.equal(updated.change_kind, "body");
-	assert.equal(updated.diff, "caller-rendered-diff");
-	const defaultReceipt = data(await notesUpdate.execute({ address: "@project/test.md", edits: [{ oldText: "gamma", newText: "delta" }] }, toolContext));
-	assert.equal(defaultReceipt.diff, "note body");
+	assert.equal(notesUpdate.render(success(updated)), `updated @project/test.md (project ${notesIdentity.projectKey})`);
 	await notesWrite.execute({ address: "owned.md", content: "first", origin: "user" }, toolContext);
 	await notesWrite.execute({ address: "owned.md", content: "rewritten" }, toolContext);
 	assert.equal(data(await notesRead.execute({ address: "owned.md" }, toolContext)).metadata.origin, "user", "tool overwrites preserve an omitted origin");
@@ -247,13 +246,12 @@ test("shared note operations return canonical outcomes with a body-only read win
 	const moved = data(await notesUpdate.execute({ address: "owned.md", rename_to: "@project/renamed.md", edits: [{ oldText: "rewritten", newText: "final" }], origin: "external" }, toolContext));
 	assert.equal(moved.change_kind, "moved");
 	assert.equal(moved.rename_from, "owned.md");
-	assert.match(moved.diff, /rename owned\.md -> @project\/renamed\.md/);
+	assert.equal(notesUpdate.render(success(moved)), "moved owned.md -> @project/renamed.md");
 	const renamed = data(await notesRead.execute({ address: moved.address }, toolContext));
 	assert.equal(renamed.text, "final");
 	assert.equal(renamed.metadata.origin, "external");
-	const unchanged = data(await notesUpdate.execute({ address: "@project/test.md", edits: [{ oldText: "delta", newText: "delta" }] }, toolContext));
+	const unchanged = data(await notesUpdate.execute({ address: "@project/test.md", edits: [{ oldText: "gamma", newText: "gamma" }] }, toolContext));
 	assert.equal(unchanged.change_kind, "none");
-	assert.equal(unchanged.diff, "");
 
 	// Frontmatter is metadata, not body: the window addresses the body and counts only the body.
 	const stored = await createNotesStore(notesIdentity).read("@project/test.md");
@@ -311,7 +309,7 @@ test("shared history operations read typed events through the addresses the adap
 	assert.equal(fromMatch.total_chars, full.total_chars, "one document, one length");
 
 	assert.match(refusal(await historyRead.execute({ seq: 9_999 }, projection)).message, /9,?999/, "an unknown address is refused by name");
-	assert.equal(refusal(await historyRead.execute({ seq: 3 }, projection)).code, "not_an_event", "a paired result address is refused");
+	assert.equal(data(await historyRead.execute({ seq: 3 }, projection)).seq, 2, "a paired result address resolves to its call event");
 });
 
 test("one role schema declares the four public roles for the page item, the read payload, and the role filter", () => {

@@ -96,8 +96,8 @@ test("root: raw messages, top-level envelope metadata, native tool pairing and n
 	assert.equal(tool.data.output_truncated, undefined);
 	assert.equal(tool.data.nested_calls, undefined);
 	const paired = await historyRead.execute({ seq: 9 }, projection);
-	assert.equal(paired.ok, false);
-	assert.match(historyRead.render(paired), /read seq 7 instead/);
+	assert.equal(paired.ok, true);
+	if (paired.ok) assert.equal(paired.data.seq, 7);
 	const omitted = await historyRead.execute({ seq: 6 }, projection);
 	assert.match(historyRead.render(omitted), /holds nothing/);
 	const page = await historyList.execute({ query: "printf output" }, projection);

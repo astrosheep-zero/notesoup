@@ -14,7 +14,7 @@ const EXPANDED_LINE_CAP = 80;
 type WireError = { error: string; code: string };
 
 /** structuredContent is wireResult(outcome): the data itself, or {error, code}. Old sessions may lack it. */
-function wireOf<T>(result: AgentToolResult<undefined>): { data?: T; error?: WireError } {
+function wireOf<T>(result: AgentToolResult<unknown>): { data?: T; error?: WireError } {
 	const sc = result.structuredContent;
 	if (sc !== null && typeof sc === "object" && !Array.isArray(sc)) {
 		const obj = sc as Record<string, unknown>;
@@ -25,7 +25,7 @@ function wireOf<T>(result: AgentToolResult<undefined>): { data?: T; error?: Wire
 }
 
 /** Results without a structured payload (resumed old sessions) fall back to the receipt's first line. */
-function receiptFallback(result: AgentToolResult<undefined>, theme: Theme): Component {
+function receiptFallback(result: AgentToolResult<unknown>, theme: Theme): Component {
 	const text = result.content.find((c) => c.type === "text")?.text ?? "";
 	return new TruncatedText(theme.fg("dim", text.split("\n")[0] ?? ""), 0, 0);
 }
@@ -77,6 +77,7 @@ export const notesWriteRenderers = {
 };
 
 export type NotesUpdateArgs = Static<typeof notesUpdateParameters>;
+export type NotesUpdateDetails = { diff?: string };
 export const notesUpdateRenderers = {
 	renderCall(args: NotesUpdateArgs, theme: Theme): Component {
 		let suffix = "";
@@ -85,10 +86,11 @@ export const notesUpdateRenderers = {
 		if (typeof args.rename_to === "string" && args.rename_to !== "") suffix += ` → ${args.rename_to}`;
 		return callLine(theme, "notes_update", args.address, suffix);
 	},
-	renderResult(result: AgentToolResult<undefined>, options: { expanded: boolean }, theme: Theme, context: CallContext<NotesUpdateArgs>): Component {
+	renderResult(result: AgentToolResult<NotesUpdateDetails | undefined>, options: { expanded: boolean }, theme: Theme, context: CallContext<NotesUpdateArgs>): Component {
 		const { data, error } = wireOf<NotesUpdateData>(result);
 		if (error) return errorComponent(theme, error, options.expanded);
 		if (!data) return receiptFallback(result, theme);
+		const diff = result.details?.diff ?? "";
 		let head: string;
 		if (context.args?.crumpled === true) {
 			head = `✂ crumpled ${theme.strikethrough(theme.fg("dim", data.address))}`;
@@ -100,14 +102,11 @@ export const notesUpdateRenderers = {
 			head = theme.fg("dim", "unchanged ") + addressText(theme, data.address);
 		} else {
 			head = `edited ${addressText(theme, data.address)}`;
-			const peek = firstAddedLine(data.diff);
+			const peek = firstAddedLine(diff);
 			if (peek !== undefined && peek !== "") head += theme.fg("dim", " · ") + theme.fg("toolDiffAdded", `+ ${peek}`);
 		}
 		if (!options.expanded) return new TruncatedText(head, 0, 0);
-		const parts = [head];
-		if (data.diff !== "") parts.push("", renderDiff(data.diff));
-		if (data.change_kind !== "moved" && data.rename_from !== undefined) parts.push(theme.fg("dim", `renamed from ${data.rename_from}`));
-		return new Text(parts.join("\n"), 0, 0);
+		return new Text(diff !== "" ? `${head}\n\n${renderDiff(diff)}` : head, 0, 0);
 	},
 };
 

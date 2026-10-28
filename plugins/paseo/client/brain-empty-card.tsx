@@ -6,7 +6,7 @@ function label(data: BrainEmpty): string {
   if (data.status === "running") return "✂ emptying brain …";
   if (data.error !== undefined) return "✂ brain refused to empty";
   if (data.outcome === "rollover_already_pending") return "✂ already emptying";
-  if (data.outcome === "rollover_requested") return "✂ reset requested";
+  if (data.outcome === "rollover_requested") return "✂ brain emptied";
   // A completed tool call (including Claude's acknowledgement) does not prove a reset committed.
   return "✂ empty_brain completed";
 }

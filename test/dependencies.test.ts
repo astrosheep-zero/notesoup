@@ -51,10 +51,9 @@ test("the host-neutral core resolves without any SDK or plugin dependency", () =
 	const sharedRuntime = new Set(["typebox"]);
 	assert.deepEqual(dependencyViolations(root, shared, parsed.options, sharedRuntime), []);
 	for (const name of sharedRuntime) {
-		assert.equal(typeof manifest.dependencies?.[name], "string", `${name} is a declared runtime dependency`);
-		assert.equal(manifest.devDependencies?.[name], undefined, `${name} is not a development-only dependency`);
-		assert.equal(manifest.peerDependencies?.[name], undefined, `${name} is not a host-supplied peer`);
-		assert.equal(manifest.peerDependenciesMeta?.[name], undefined, `${name} has no peer metadata`);
+		assert.equal(manifest.dependencies?.[name], undefined, `${name} is supplied by the host`);
+		assert.equal(manifest.peerDependencies?.[name], "*", `${name} is a host-supplied peer dependency`);
+		assert.equal(typeof manifest.devDependencies?.[name], "string", `${name} is pinned in devDependencies`);
 	}
 	for (const name of ["@earendil-works/pi-agent-core", "@earendil-works/pi-ai", "@earendil-works/pi-coding-agent"]) {
 		assert.equal(manifest.dependencies?.[name], undefined, `${name} is supplied by the host`);

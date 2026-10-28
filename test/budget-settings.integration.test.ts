@@ -133,12 +133,12 @@ test("early guidance stays silent and the final warning notifies immediately onc
 	const final = context(sm, undefined, { tokens: 181_000, percent: 90.5, contextWindow: 200_000 });
 	const warning = await runContextHook(captured, final);
 	assert.equal((warning?.messages[0] as { customType?: string } | undefined)?.customType, WARNING_TYPE);
-	assert.equal(noticesOf(final).filter((notice) => notice.message === "🥣 Brain almost full · taking notes").length, 1, "notify at injection, before any turn_end");
+	assert.equal(noticesOf(final).filter((notice) => notice.message === "🥣 Brain almost full").length, 1, "notify at injection, before any turn_end");
 	await runContextHook(captured, final);
 	await commitTurnEndBoundary(captured, sm, final);
 	await runHandlers(captured, "turn_start", {}, final);
 	await runHandlers(captured, "agent_settled", {}, final);
-	assert.equal(noticesOf(final).filter((notice) => notice.message === "🥣 Brain almost full · taking notes").length, 1, "repeated injection and commit do not notify again");
+	assert.equal(noticesOf(final).filter((notice) => notice.message === "🥣 Brain almost full").length, 1, "repeated injection and commit do not notify again");
 });
 
 test("the reported room ends at the hard reserve, clamps at zero, and preserves unknown usage", async () => {

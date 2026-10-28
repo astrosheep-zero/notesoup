@@ -382,15 +382,17 @@ test("write and update receipts distinguish outcomes and no-op edits", async () 
 	assert.equal(resultData<NotesWriteData>(await call(captured, "notes_write", { address: "@agents/anonymous/alias.md", content: "new body" }, ctx)).outcome, "overwrote");
 	await call(captured, "notes_update", { address: "@self/alias", crumpled: true }, ctx);
 	assert.equal(resultData<NotesWriteData>(await call(captured, "notes_write", { address: "@self/alias", content: "restored" }, ctx)).outcome, "uncrumpled");
-	const noChange = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "@self/alias", edits: [{ oldText: "restored", newText: "restored" }], crumpled: false }, ctx));
-	assert.deepEqual([noChange.change_kind, noChange.diff], ["none", ""]);
+	const noChangeRaw = await call(captured, "notes_update", { address: "@self/alias", edits: [{ oldText: "restored", newText: "restored" }], crumpled: false }, ctx);
+	const noChange = resultData<NotesUpdateData>(noChangeRaw);
+	assert.equal(noChange.change_kind, "none");
+	assert.equal(noChangeRaw.details, undefined);
 	const mixed = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "@self/alias", edits: [{ oldText: "restored", newText: "restored" }, { oldText: "restored", newText: "changed" }] }, ctx));
 	assert.equal(mixed.change_kind, "body");
-	assert.equal(mixed.change_kind, "body");
-	// A body edit that also rewrites frontmatter is still a body change; the diff carries the rest.
-	const combined = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "@self/alias", edits: [{ oldText: "changed", newText: "changed once more" }], origin: "user" }, ctx));
+	// A body edit that also rewrites frontmatter is still a body change; details.diff carries the rest.
+	const combinedRaw = await call(captured, "notes_update", { address: "@self/alias", edits: [{ oldText: "changed", newText: "changed once more" }], origin: "user" }, ctx);
+	const combined = resultData<NotesUpdateData>(combinedRaw);
 	assert.equal(combined.change_kind, "body", "an edit that also rewrites frontmatter is a body change, not a whole file");
-	assert.match(combined.diff, /origin/, "the diff still carries the frontmatter part");
+	assert.match((combinedRaw.details as { diff?: string } | undefined)?.diff ?? "", /origin/, "details.diff still carries the frontmatter part");
 });
 
 test("empty results distinguish hidden notes and unavailable notebooks", async () => {
@@ -466,7 +468,7 @@ test("mutation receipts keep their existing shape outside named project notebook
 	const written = await call(captured, "notes_write", { address: "@project/decision", content: "body" }, ctx);
 	const updated = await call(captured, "notes_update", { address: "@project/decision", edits: [{ oldText: "body", newText: "changed" }] }, ctx);
 	assert.deepEqual(Object.keys(resultData<NotesWriteData>(written)).sort(), ["address", "outcome", "project_key"]);
-	assert.deepEqual(Object.keys(resultData<NotesUpdateData>(updated)).sort(), ["address", "change_kind", "diff", "project_key"]);
+	assert.deepEqual(Object.keys(resultData<NotesUpdateData>(updated)).sort(), ["address", "change_kind", "project_key"]);
 	for (const [name, result] of [["notes_write", written], ["notes_update", updated]] as const) {
 		assert.equal(Check(captured.tools.get(name)!.outputSchema as TSchema, result.structuredContent), true, `${name} keeps its ordinary project receipt`);
 	}

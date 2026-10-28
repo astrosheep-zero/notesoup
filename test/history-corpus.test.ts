@@ -166,7 +166,7 @@ test("native filesystem discovery decodes three harnesses, compressed Codex, and
 	const tool = data(await historyRead.execute({ session: "pi:pi-one", seq: 3 }, f.ctx));
 	assert.equal(tool.tool, "read");
 	assert.match(tool.text, /needle\.md.*\n--- output ---\nneedle tool output/);
-	refusal(await historyRead.execute({ session: "pi:pi-one", seq: 4 }, f.ctx), "not_an_event");
+	assert.equal(data(await historyRead.execute({ session: "pi:pi-one", seq: 4 }, f.ctx)).seq, 3);
 	for (let index = 0; index < paths.length; index++) {
 		assert.deepEqual(await readFile(paths[index]!), before[index]!.bytes);
 		assert.equal((await stat(paths[index]!)).mtimeMs, before[index]!.time);

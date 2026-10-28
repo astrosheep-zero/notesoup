@@ -1,20 +1,25 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { MARKER_TYPE } from "./entries.js";
+import { piSequenceCount } from "../../src/history/pi.js";
+import { BOOT_TYPE, MARKER_TYPE } from "./entries.js";
 import { nextHistorySeq } from "./history.js";
 import { inspectResetTail } from "./reset/artifacts.js";
 import { markerContent } from "./text.js";
 import { currentReset } from "./window.js";
 
 /** Spacing between durable seq breadcrumbs, in projected history seq. */
-export const MARKER_INTERVAL = 50;
+export const MARKER_INTERVAL = 120;
 
-/** Highest seq already stamped by a marker; 0 before the first. */
+/** Highest seq already anchored by a window boot or marker; 0 before the first. */
 function lastMarkerSeq(ctx: ExtensionContext): number {
 	let last = 0;
+	let nextSeq = 1;
 	for (const entry of ctx.sessionManager.getEntries()) {
-		if (entry.type !== "custom_message" || entry.customType !== MARKER_TYPE) continue;
-		const seq = (entry.details as { seq?: unknown } | undefined)?.seq;
-		if (typeof seq === "number" && seq > last) last = seq;
+		const count = piSequenceCount(entry);
+		if (count === 0) continue;
+		if (entry.type === "custom_message" && (entry.customType === MARKER_TYPE || entry.customType === BOOT_TYPE)) {
+			last = nextSeq;
+		}
+		nextSeq += count;
 	}
 	return last;
 }

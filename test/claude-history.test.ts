@@ -71,9 +71,8 @@ test("Claude append and result arrival preserve call addresses and use the share
 	assert.doesNotMatch(read.data.text, /hidden/);
 	assert.equal(allItems(completed).find((event) => event.seq === 4)?.execution?.status, "error");
 	const resultRead = await historyRead.execute({ seq: 7 }, completed);
-	assert.ok(!resultRead.ok);
-	assert.equal(resultRead.error.code, "not_an_event");
-	assert.match(resultRead.error.message, /read seq 3/);
+	assert.ok(resultRead.ok);
+	assert.equal(resultRead.data.seq, 3);
 	const search = await historyList.execute({ query: "output one" }, completed);
 	assert.ok(search.ok);
 	assert.deepEqual(search.data.items.map((item) => "seq" in item ? item.seq : -1), [3]);
@@ -373,9 +372,8 @@ test("Claude gap windows sort by confirmed ordinal despite forward references, w
 	assert.deepEqual(allItems(projection).filter((event) => event.role === "tool").map((event) => [event.seq, event.text]), [[4, "output"]]);
 	assert.equal(projection.pairedResults.get(8), 4);
 	const alias = await historyRead.execute({ seq: 8 }, projection);
-	assert.ok(!alias.ok);
-	assert.equal(alias.error.code, "not_an_event");
-	assert.match(alias.error.message, /read seq 4/);
+	assert.ok(alias.ok);
+	assert.equal(alias.data.seq, 4);
 });
 
 test("Claude gap notices participate in list/read budgets without changing read coordinates", async (t) => {

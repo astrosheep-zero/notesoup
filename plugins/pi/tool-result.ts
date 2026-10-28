@@ -13,12 +13,12 @@ export function output(value: unknown, details?: unknown, terminate = false) {
 }
 
 /** Operation data is schema-derived JSON; only the unresolved generic needs a JsonValue assertion. */
-function piOperationResult<TData>(render: Renderer<TData>, outcome: Outcome<TData>): AgentToolResult<undefined> {
+function piOperationResult<TData, TDetails = undefined>(render: Renderer<TData>, outcome: Outcome<TData>, details?: TDetails): AgentToolResult<TDetails> {
 	return {
 		content: [{ type: "text", text: render(outcome) }],
 		structuredContent: wireResult(outcome) as unknown as JsonValue,
 		isError: !outcome.ok,
-		details: undefined,
+		details: details as TDetails,
 	};
 }
 
@@ -28,18 +28,18 @@ export const DREAM_NAMESPACE: ToolNamespace = { name: "dream", description: "Con
 export const HISTORY_NAMESPACE: ToolNamespace = { name: "history", description: "What happened in this session, read-only. See the memory skill." };
 
 /** Optional TUI renderers; without them the host draws its default call line and receipt text. */
-export type OperationRenderers<TParams extends TSchema> = Pick<ToolDefinition<TParams, undefined>, "renderCall" | "renderResult">;
+export type OperationRenderers<TParams extends TSchema, TDetails = undefined> = Pick<ToolDefinition<TParams, TDetails>, "renderCall" | "renderResult">;
 
 /** Register `operation` as a Pi tool; `run` supplies only the host context it needs. */
-export function registerOperation<TParams extends TSchema, TData, TRest extends readonly unknown[]>(
+export function registerOperation<TParams extends TSchema, TData, TRest extends readonly unknown[], TDetails = undefined>(
 	pi: ExtensionAPI,
 	operation: Operation<TParams, TData, TRest>,
-	run: (params: Static<TParams>, ctx: ExtensionToolContext) => Promise<Outcome<TData>>,
+	run: (params: Static<TParams>, ctx: ExtensionToolContext) => Promise<Outcome<TData> & { details?: TDetails }>,
 	namespace?: ToolNamespace,
-	renderers?: OperationRenderers<TParams>,
+	renderers?: OperationRenderers<TParams, TDetails>,
 	exposure?: ToolExposure,
 ): void {
-	pi.registerTool(defineTool<TParams, undefined>({
+	pi.registerTool(defineTool<TParams, TDetails>({
 		name: operation.name,
 		label: operation.label,
 		description: operation.description,
@@ -50,7 +50,8 @@ export function registerOperation<TParams extends TSchema, TData, TRest extends 
 		...(exposure ? { exposure } : {}),
 		...renderers,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			return piOperationResult(operation.render, await run(params, ctx));
+			const result = await run(params, ctx);
+			return piOperationResult(operation.render, result, result.details);
 		},
 	}));
 }

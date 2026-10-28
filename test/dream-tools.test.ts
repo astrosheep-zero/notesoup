@@ -52,7 +52,7 @@ test("a dream opens one other project, writes its notes, deletes only crumpled o
 	assert.equal((await dreamBegin.execute({ project: "beta" }, as("other", "alpha"), {})).ok, false, "another session can't dream the same project");
 
 	assert.ok((await notesWrite.execute({ address: "@projects/beta/rule", content: "merged" }, ident())).ok);
-	assert.ok((await notesUpdate.execute({ address: "@sessions/b1/checkpoint", edits: [{ oldText: "old", newText: "new" }] }, ident(), () => "")).ok);
+	assert.ok((await notesUpdate.execute({ address: "@sessions/b1/checkpoint", edits: [{ oldText: "old", newText: "new" }] }, ident())).ok);
 	assert.equal((await notesWrite.execute({ address: "@sessions/a1/mine", content: "x" }, ident())).ok, false, "another project's session stays read-only");
 	assert.equal((await notesWrite.execute({ address: "@projects/alpha/x", content: "x" }, ident())).ok, false, "other projects stay read-only");
 
@@ -208,13 +208,13 @@ test("named-project mutation receipts carry their project metadata and fit their
 	assert.deepEqual(written.data.project_siblings, [{ name: "beta", path: "/work/beta" }]);
 	assert.equal(Check(notesWrite.outputSchema, written.data), true, "notes_write accepts its own named-project receipt");
 
-	const updated = await notesUpdate.execute({ address: "@projects/beta-1/rule", edits: [{ oldText: "merged", newText: "done" }] }, ident(), () => "");
+	const updated = await notesUpdate.execute({ address: "@projects/beta-1/rule", edits: [{ oldText: "merged", newText: "done" }] }, ident());
 	assert.ok(updated.ok);
 	assert.equal(updated.data.project_root, "/work/two/beta");
 	assert.deepEqual(updated.data.project_siblings, [{ name: "beta", path: "/work/beta" }]);
 	assert.equal(Check(notesUpdate.outputSchema, updated.data), true, "notes_update accepts its own named-project receipt");
 
-	assert.ok((await notesUpdate.execute({ address: "@projects/beta-1/rule", crumpled: true }, ident(), () => "")).ok);
+	assert.ok((await notesUpdate.execute({ address: "@projects/beta-1/rule", crumpled: true }, ident())).ok);
 	const forgotten = await dreamForget.execute({ address: "@projects/beta-1/rule" }, me, state);
 	assert.ok(forgotten.ok);
 	assert.equal(forgotten.data.project_root, "/work/two/beta");

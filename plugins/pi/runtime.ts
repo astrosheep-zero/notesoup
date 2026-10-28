@@ -77,9 +77,11 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 			if (markerResetOrigin(marker) === "forced") ctx.ui.notify("🥣 Brain forcibly emptied: overflow", "warning");
 		}
 	};
+	pi.on("before_agent_start", (_event, ctx) => {
+		if (enabled) maybeSendMarker(pi, ctx);
+	});
 	pi.on("turn_start", (_event, ctx) => {
 		notifyCommittedResets(ctx);
-		if (enabled) maybeSendMarker(pi, ctx);
 	});
 	pi.on("agent_settled", (_event, ctx) => {
 		notifyCommittedResets(ctx);

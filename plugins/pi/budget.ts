@@ -104,7 +104,7 @@ export function registerBudget(
 			// An aborted request does not undo the low-budget condition or repeat the toast.
 			if (!notifiedWindows.has(windowId)) {
 				notifiedWindows.add(windowId);
-				ctx.ui.notify("🥣 Brain almost full · taking notes", "warning");
+				ctx.ui.notify("🥣 Brain almost full", "warning");
 			}
 			return result({ customType: WARNING_TYPE, content: pendingWarning.content });
 		}

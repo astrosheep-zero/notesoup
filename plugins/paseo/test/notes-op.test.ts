@@ -35,10 +35,10 @@ test("write and moved update project the entire input and delivered diff", () =>
     input: { address: "a.md", content: body }, output: { content: [{ type: "text", text: "created a.md" }] },
   } });
   assert.equal(notesOpSchema.parse(write!.items[0]!.data).preview, body);
-  const diff = "+ 1 + new\n".repeat(2000) + "[diff truncated; update applied]";
+  const diff = "+1 new\n".repeat(2000);
   const update = transform({ name: "notes_update", detail: { type: "unknown",
     input: { address: "a.md", rename_to: "b.md" },
-    output: { content: [{ type: "text", text: `moved a.md -> b.md\ndiff:\n${diff}` }] },
+    output: { content: [{ type: "text", text: "moved a.md -> b.md" }], details: { diff } },
   } });
   assert.deepEqual(notesOpSchema.parse(update!.items[0]!.data), {
     op: "update", address: "b.md", renamedFrom: "a.md", status: "completed", diff,
@@ -110,14 +110,14 @@ test("non-notes tools, unknown shapes and missing addresses stay untouched", () 
   assert.equal(notesOpTransformer.transform({ item: { type: "user_message", text: "hi" } as never }), undefined);
 });
 
-test("Claude completed calls use the adapter's output text for read, write preview and update diff", () => {
+test("Claude completed calls use the adapter's output text for read, write preview and input.edits for update diff", () => {
   const read = notesOpSchema.parse(transform(claudeReadCompleted)!.items[0]!.data);
   assert.deepEqual(read, { op: "read", address: "@self/foo.md", status: "completed", text: "body line one\nbody line two" });
   assert.deepEqual(notesOpSchema.parse(transform(claudeWriteCompleted)!.items[0]!.data), {
     op: "write", address: "a.md", status: "completed", preview: "the new body",
   });
   assert.deepEqual(notesOpSchema.parse(transform(claudeUpdateCompleted)!.items[0]!.data), {
-    op: "update", address: "a.md", status: "completed", diff: "- 1 - old\n+ 1 + new",
+    op: "update", address: "a.md", status: "completed", diff: "- old\n+ new",
   });
 });
 

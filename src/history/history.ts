@@ -144,7 +144,7 @@ function toolEvent(item: DecodedHistoryItem, result?: DecodedHistoryItem): Histo
 	};
 }
 
-/** Pair results into call events; consumed result seqs are not alternate read addresses. */
+/** Pair results into call events; consumed result seqs redirect to their call event on read. */
 export function projectHistory(rawWindows: DecodedHistoryWindow[], highestSeq: number, branchSeqs: Set<number>): HistoryProjection {
 	// Pair in durable address order, not window presentation order. Unnumbered
 	// segments need not have a provable chronological order relative to each other.

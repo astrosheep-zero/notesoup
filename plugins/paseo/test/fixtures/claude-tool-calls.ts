@@ -40,7 +40,7 @@ export const claudeUpdateCompleted = {
   detail: {
     type: "unknown",
     input: { address: "a.md", edits: [{ oldText: "old", newText: "new" }] },
-    output: { output: "updated a.md (project pi-context)\ndiff:\n- 1 - old\n+ 1 + new" },
+    output: { output: "updated a.md (project pi-context)" },
   },
 } as const;
 

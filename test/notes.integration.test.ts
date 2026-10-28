@@ -229,9 +229,10 @@ test("crumple lifecycle: metadata-only edits close and smooth a note without tou
 	const updatedBefore = (await listNotes(ctx))[0]!.meta.updatedAt;
 
 	// metadata-only: content unchanged, and the recorded time is the original one
-	const markOnly = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "journal.md", crumpled: true }, ctx));
+	const markOnlyRaw = await call(captured, "notes_update", { address: "journal.md", crumpled: true }, ctx);
+	const markOnly = resultData<NotesUpdateData>(markOnlyRaw);
 	assert.equal(markOnly.change_kind, "metadata");
-	assert.match(markOnly.diff, /^\+\s*\d+\s+crumpledAt: \d{4}-\d{2}-\d{2}T/m);
+	assert.match((markOnlyRaw.details as { diff?: string } | undefined)?.diff ?? "", /^\+\s*\d+\s+crumpledAt: \d{4}-\d{2}-\d{2}T/m);
 	assert.deepEqual(await listNotes(ctx), [], "a crumpled note leaves the live list");
 	const basket = (await listNotes(ctx, { crumpled: true }))[0]!;
 	assert.ok(basket.meta.crumpledAt);
@@ -548,7 +549,7 @@ test("notes_search scopes by glob; a non-matching glob is an empty page, not an 
 	assert.deepEqual(none.files, [], "a non-matching glob is an empty page, not a refusal");
 });
 
-test("an over-budget mutation diff is shortened on both surfaces, and the edit still lands whole", async () => {
+test("a large mutation keeps a one-line receipt while details.diff carries the UI diff", async () => {
 	const session = manager();
 	const captured = makeExtension(session);
 	const ctx = context(session);
@@ -556,17 +557,14 @@ test("an over-budget mutation diff is shortened on both surfaces, and the edit s
 	await call(captured, "notes_write", { address: "bulk-edit.md", content: line.repeat(1500) }, ctx);
 
 	const raw = await call(captured, "notes_update", { address: "bulk-edit.md", edits: [{ oldText: "a".repeat(300), newText: "b".repeat(300) }], replace_all: true }, ctx);
-	assertWithinBudget(raw, "oversized diff receipt");
+	assertWithinBudget(raw, "bulk edit receipt");
 	const update = resultData<NotesUpdateData>(raw);
 	assert.equal(update.change_kind, "body");
-	assert.ok(update.diff.length > 0, "a shortened diff is still delivered, not emptied");
-	assert.ok(update.diff.endsWith("[diff truncated; update applied]"), "a shortened diff ends with the marker line");
-	assert.match(textOf(raw), /^updated bulk-edit\.md/, "the receipt still names the note it updated");
-	assert.ok(textOf(raw).includes("[diff truncated; update applied]"), "the model-facing text carries the same marker");
-	assert.equal(textOf(raw).includes(`+${"b".repeat(300)}`), false, "the delivered diff prefix stops inside the first change");
+	assert.equal(textOf(raw), "updated bulk-edit.md", "model-facing text is the one-line receipt without redundant diff");
+	assert.match((raw.details as { diff?: string } | undefined)?.diff ?? "", new RegExp(`\\+.*?${"b".repeat(300)}`), "details.diff carries the UI diff");
 
 	const body = resultRead(await call(captured, "notes_read", { address: "bulk-edit.md", max_chars: 300 }, ctx)).content;
-	assert.equal(body, "b".repeat(300), "every one of the 1500 replacements was applied, not just the ones that fit the receipt");
+	assert.equal(body, "b".repeat(300), "every one of the 1500 replacements was applied");
 });
 
 test("oversized note metadata is named in place instead of riding along in the envelope", async () => {

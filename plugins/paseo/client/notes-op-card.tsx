@@ -12,7 +12,7 @@ const OP_LABEL_RUNNING: Record<NotesOp["op"], string> = { read: "reading", write
 
 /** First added line of an update diff, without its line-number prefix: the sentence the agent just wrote down. */
 function addedLine(diff: string): string | undefined {
-  return /^\+.*/m.exec(diff)?.[0].replace(/^\+\s*\d+\s+\+\s?/, "");
+  return /^\+.*/m.exec(diff)?.[0].replace(/^\+(?:\s*\d+\s+\+|\s*\d+)?\s?/, "");
 }
 
 function DiffBody({ diff, paper }: { diff: string; paper: PaperPalette }) {

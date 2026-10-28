@@ -319,10 +319,10 @@ test("named project writes, edits, crumples and both move endpoints refuse, incl
 	const address = "@projects/api/decision";
 	for (const result of [
 		await notesWrite.execute({ address, content: "replacement" }, toolContext(own)),
-		await notesUpdate.execute({ address, edits: [{ oldText: "body", newText: "changed" }] }, toolContext(own), () => ""),
-		await notesUpdate.execute({ address, crumpled: true }, toolContext(own), () => ""),
-		await notesUpdate.execute({ address, rename_to: "@project/moved" }, toolContext(own), () => ""),
-		await notesUpdate.execute({ address: "@project/decision", rename_to: "@projects/api/moved" }, toolContext(own), () => ""),
+		await notesUpdate.execute({ address, edits: [{ oldText: "body", newText: "changed" }] }, toolContext(own)),
+		await notesUpdate.execute({ address, crumpled: true }, toolContext(own)),
+		await notesUpdate.execute({ address, rename_to: "@project/moved" }, toolContext(own)),
+		await notesUpdate.execute({ address: "@project/decision", rename_to: "@projects/api/moved" }, toolContext(own)),
 	]) assert.match(refused(result), /read-only; use @project\//);
 	assert.equal(data(await notesRead.execute({ address }, toolContext(own))).text, "body");
 	assert.throws(() => assertAddress("@projects/api/../decision"));

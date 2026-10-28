@@ -160,8 +160,8 @@ test("pairing uses append seq rather than the presentation order of unnumbered s
 	assert.deepEqual(projection.windows.map((window) => window.windowId), ["unknown-a", "unknown-b"], "pairing must not invent segment chronology");
 	assert.deepEqual(projection.windows.flatMap((window) => window.items).filter((event) => event.role === "tool").map((event) => [event.seq, event.text]), [[2, "output"]]);
 	const alias = await historyRead.execute({ seq: 3 }, projection);
-	assert.ok(!alias.ok);
-	assert.equal(alias.error.code, "not_an_event");
+	assert.ok(alias.ok);
+	assert.equal(alias.data.seq, 2);
 });
 
 test("seq is stable across branch changes, abandoned entries stay unreadable, and a paired result seq is refused precisely", async () => {
@@ -188,7 +188,7 @@ test("seq is stable across branch changes, abandoned entries stay unreadable, an
 	assert.match(unknown.message, /\b4\b.*\b3\b/);
 });
 
-test("a result address consumed by a pairing names its call instead of serving a second read", async () => {
+test("a result address consumed by a pairing resolves directly to its call event", async () => {
 	const session = manager();
 	const captured = makeExtension(session);
 	const ctx = context(session);
@@ -197,9 +197,9 @@ test("a result address consumed by a pairing names its call instead of serving a
 	// The assistant message takes seq 1 and its tool call seq 2; the result at seq 3 is absorbed.
 	assert.deepEqual(seqs(await call(captured, "history_list", { roles: ["tool"] }, ctx)), [2], "the pairing is one event at the call's address");
 
-	const consumed = resultError(await call(captured, "history_read", { seq: 3 }, ctx));
-	assert.equal(consumed.code, "not_an_event");
-	assert.match(consumed.message, /seq 2\b/);
+	const consumed = resultRead<{ seq: number }>(await call(captured, "history_read", { seq: 3 }, ctx));
+	assert.equal(consumed.seq, 2);
+	assert.equal(consumed.content, 'edit {"path":"a.md"}\n--- output ---\nedited');
 
 	const callSeq = resultRead<{ seq: number }>(await call(captured, "history_read", { seq: 2 }, ctx));
 	assert.equal(callSeq.seq, 2);
@@ -776,8 +776,8 @@ test("historyDocument is one deterministic projection of the facts, with no UI h
 		assert.equal(hit.offset_chars, earliestMatchOffsetChars('read {"path":"one"}\n--- output ---\n😀 needle', ["NEEDLE"]));
 	}
 	const consumed = await historyRead.execute({ seq: 6 }, projection);
-	assert.equal(consumed.ok, false);
-	if (!consumed.ok) assert.equal(consumed.error.code, "not_an_event");
+	assert.equal(consumed.ok, true);
+	if (consumed.ok) assert.equal(consumed.data.seq, 5);
 	const offBranch = await historyRead.execute({ seq: 12 }, projection);
 	assert.equal(offBranch.ok, false);
 	if (!offBranch.ok) assert.equal(offBranch.error.code, "not_on_branch");

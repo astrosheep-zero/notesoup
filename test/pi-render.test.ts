@@ -13,8 +13,8 @@ const flatTheme = {
 	strikethrough: (text: string) => `~~${text}~~`,
 } as unknown as Theme;
 
-function toolResult<T>(outcome: Outcome<T>): AgentToolResult<undefined> {
-	return { content: [{ type: "text", text: "receipt" }], structuredContent: wireResult(outcome) as never, isError: !outcome.ok, details: undefined };
+function toolResult<T, D = undefined>(outcome: Outcome<T>, details?: D): AgentToolResult<D> {
+	return { content: [{ type: "text", text: "receipt" }], structuredContent: wireResult(outcome) as never, isError: !outcome.ok, details: details as D };
 }
 
 function jsonResult(value: unknown, isError = false): AgentToolResult<unknown> {
@@ -38,25 +38,25 @@ test("notes_write expanded: the written content follows the header", () => {
 });
 
 test("notes_update edited: collapsed peeks at the first added line", () => {
-	const result = toolResult(success({ address: "a.md", change_kind: "body", diff: " 1 old\n-2 gone\n+2 here" }));
+	const result = toolResult(success({ address: "a.md", change_kind: "body" }), { diff: " 1 old\n-2 gone\n+2 here" });
 	const component = notesUpdateRenderers.renderResult(result, { expanded: false }, flatTheme, { args: { address: "a.md" } });
 	assert.equal(lines(component), "edited a.md · + here");
 });
 
 test("notes_update crumple: the address is struck through", () => {
-	const result = toolResult(success({ address: "@self/stale.md", change_kind: "metadata", diff: "" }));
+	const result = toolResult(success({ address: "@self/stale.md", change_kind: "metadata" }));
 	const component = notesUpdateRenderers.renderResult(result, { expanded: false }, flatTheme, { args: { address: "@self/stale.md", crumpled: true } });
 	assert.equal(lines(component), "✂ crumpled ~~@self/stale.md~~");
 });
 
 test("notes_update moved: both addresses stay on the line", () => {
-	const result = toolResult(success({ address: "@self/new.md", change_kind: "moved", diff: "rename a.md -> @self/new.md", rename_from: "a.md" }));
+	const result = toolResult(success({ address: "@self/new.md", change_kind: "moved", rename_from: "a.md" }));
 	const component = notesUpdateRenderers.renderResult(result, { expanded: false }, flatTheme, { args: { address: "a.md", rename_to: "@self/new.md" } });
 	assert.equal(lines(component), "renamed a.md → @self/new.md");
 });
 
 test("notes_update unchanged keeps quiet", () => {
-	const result = toolResult(success({ address: "a.md", change_kind: "none", diff: "" }));
+	const result = toolResult(success({ address: "a.md", change_kind: "none" }));
 	const component = notesUpdateRenderers.renderResult(result, { expanded: false }, flatTheme, { args: { address: "a.md" } });
 	assert.equal(lines(component), "unchanged a.md");
 });
@@ -134,7 +134,7 @@ test("empty_brain keeps the divider and handoff within very narrow widths", () =
 
 test("notes_update expanded diff goes through the host's diff renderer", () => {
 	initTheme();
-	const result = toolResult(success({ address: "a.md", change_kind: "body", diff: " 1 old\n-2 gone\n+2 here" }));
+	const result = toolResult(success({ address: "a.md", change_kind: "body" }), { diff: " 1 old\n-2 gone\n+2 here" });
 	const component = notesUpdateRenderers.renderResult(result, { expanded: true }, flatTheme, { args: { address: "a.md" } });
 	assert.equal(lines(component), "edited a.md · + here\n\n 1 old\n-2 gone\n+2 here");
 });
