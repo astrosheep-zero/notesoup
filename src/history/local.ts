@@ -43,24 +43,31 @@ async function filesAt(root: string, depth: number): Promise<string[]> {
 	return paths;
 }
 
-/** Only prove misses, not hits. Decode JSON escapes without building rows/projections.
- * Use letter fragments so joined blocks/formatted arguments cannot hide a match. Keep nested
- * escapes, generated presentation words and inherited Codex history for the full decoder.
- */
+const PRESENTATION = `Codex unknown arguments not recorded output nested calls complete incomplete terminal ms image audio items null
+	copied subagent inference prefix omitted child-local history starts at native ordinal copied model context
+	does not prove original parent event addresses compaction boundary replacement_history is an inference checkpoint
+	not new conversation events opaque content omitted not recovered plaintext MCP completion without a recorded raw call
+	FunctionCallOutput display without raw output encrypted content unavailable world_state snapshot patch omitted from
+	the text projection not a newly spoken message native structured retained context not newly spoken dialogue`;
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Only prove misses, not hits. Only \\uXXXX can encode a word character; other JSON escapes are control/quote/slash. */
 function mayMatch(text: string, queries: readonly string[], codex: boolean): boolean {
-	const raw = text.replace(/\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4})/g, (escape) => JSON.parse(`"${escape}"`) as string);
-	const presentation = `Codex unknown arguments not recorded output nested calls complete incomplete terminal ms image audio items null
-		copied subagent inference prefix omitted child-local history starts at native ordinal copied model context
-		does not prove original parent event addresses compaction boundary replacement_history is an inference checkpoint
-		not new conversation events opaque content omitted not recovered plaintext MCP completion without a recorded raw call
-		FunctionCallOutput display without raw output encrypted content unavailable world_state snapshot patch omitted from
-		the text projection not a newly spoken message native structured retained context not newly spoken dialogue`;
-	return raw.includes("\\") || (codex && raw.includes('"history_base"')) || queries.some((query) => {
-		const words = query.match(/\p{L}+/gu);
-		return words === null || words.some((word) => {
-			// Letter fragments are regex literals; use event search's Unicode folding.
-			const literal = new RegExp(word, "iu");
-			return literal.test(text) || literal.test(raw) || literal.test(presentation);
+	if (codex && text.includes('"history_base"')) return true;
+	const unescaped = text.includes("\\u")
+		? text.replace(/\\+u([0-9a-fA-F]{4})/g, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+		: text;
+	return queries.some((query) => {
+		const tokens = query.match(/[\p{L}\p{N}_-]+/gu);
+		return tokens === null || tokens.every((token) => {
+			const parts = /^\d+ms$/iu.test(token) ? [token.slice(0, -2), "ms"] : [token];
+			return parts.every((part) => {
+				const literal = new RegExp(escapeRegExp(part), "iu");
+				return literal.test(unescaped) || (unescaped !== text && literal.test(text)) || literal.test(PRESENTATION);
+			});
 		});
 	});
 }

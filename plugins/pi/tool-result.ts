@@ -25,7 +25,7 @@ function piOperationResult<TData, TDetails = undefined>(render: Renderer<TData>,
 export type ToolNamespace = { name: string; description: string };
 export const NOTES_NAMESPACE: ToolNamespace = { name: "notes", description: "Notes you choose to keep across context windows. See the memory skill." };
 export const DREAM_NAMESPACE: ToolNamespace = { name: "dream", description: "Consolidate one project's notes: begin, edit with notes_*, forget crumpled notes, end." };
-export const HISTORY_NAMESPACE: ToolNamespace = { name: "history", description: "What happened in this session, read-only. See the memory skill." };
+export const HISTORY_NAMESPACE: ToolNamespace = { name: "history", description: "Session history (this or other local sessions): history_list to browse/search, history_read to read one event." };
 
 /** Optional TUI renderers; without them the host draws its default call line and receipt text. */
 export type OperationRenderers<TParams extends TSchema, TDetails = undefined> = Pick<ToolDefinition<TParams, TDetails>, "renderCall" | "renderResult">;
