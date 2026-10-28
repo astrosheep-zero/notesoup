@@ -33,8 +33,7 @@ export type EditOptions = { origin?: Origin; crumpled?: boolean; replaceAll?: bo
  */
 export type NotesQuery = { glob?: string | null; crumpled?: boolean };
 /** A read exposes metadata and the pure body; the serialized frontmatter is never part of the body. */
-/** `accessedBefore` is the last access before this read, so a read never hides how long a note sat unread. */
-export type NoteReadResult = { meta: NoteMeta; body: string; resolvedScope: Scope; accessedBefore: number };
+export type NoteReadResult = { meta: NoteMeta; body: string; resolvedScope: Scope };
 export type NoteWriteResult = { meta: NoteMeta; outcome: "created" | "overwrote" | "uncrumpled" };
 export type NoteChange =
 	| { kind: "none"; before: ""; after: "" }
@@ -332,11 +331,11 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 			const now = Date.now();
 			const parsed = parseNote(raw, now);
 			// Named notebooks, and every read during a dream, leave no access stamp.
-			if (identity.dreaming !== undefined || ((scope === "project" || scope === "session") && destination.who !== undefined)) return { meta: { ...parsed.meta, scope }, body: parsed.body, resolvedScope: scope, accessedBefore: parsed.meta.lastAccessed };
+			if (identity.dreaming !== undefined || ((scope === "project" || scope === "session") && destination.who !== undefined)) return { meta: { ...parsed.meta, scope }, body: parsed.body, resolvedScope: scope };
 			// A read records its own access, exactly as a write records an edit.
 			const meta: NoteMeta = { ...parsed.meta, scope, lastAccessed: now, accessCount: (typeof parsed.meta.accessCount === "number" ? parsed.meta.accessCount : 0) + 1 };
 			await atomicWrite(path, serializeNote(meta, parsed.body));
-			return { meta, body: parsed.body, resolvedScope: scope, accessedBefore: parsed.meta.lastAccessed };
+			return { meta, body: parsed.body, resolvedScope: scope };
 		});
 	}
 

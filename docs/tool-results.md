@@ -38,7 +38,7 @@ Both read operations return these fields at the result root, alongside identity 
 
 Positions count Unicode code points, not UTF-16 units or UTF-8 bytes. The returned text is a contiguous unmodified prefix of the requested range, without ellipsis markers. `next_offset_chars` names the first undelivered character, or is null at the true end. A negative input offset selects a tail; the delivered window does not echo the offset it resolved.
 
-- `notes_read`: `address`, optional `project_key`, and `metadata` accompany the text fields. Positions address only the note **body**. Access counts and last-access times remain stored but are omitted from results.
+- `notes_read`: `address`, optional `project_key`, and `metadata` accompany the text fields. Positions address only the note **body**. Access counts and last-access times remain stored; only `dream_begin` rows report last access.
 - `history_read`: `seq`, `role`, `created_at`, and a tool summary accompany the text fields. Explicit session targeting also carries canonical `session`. Positions address one deterministic document derived from the event's facts. Query matches address that same document, not its decorated presentation.
 
 Repeated note reads observe the current file; this is not a retained snapshot service. A concurrent body edit can change positions. History reflects the active branch and recorded facts, including a result that may arrive after a pending call was first observed.

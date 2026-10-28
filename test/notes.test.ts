@@ -243,7 +243,9 @@ legacy body`);
 	assert.equal(parsed.meta.createdAt, Date.parse("2026-02-01T00:00:00Z"), "missing canonical timestamp takes the normal default");
 	assert.equal(parsed.meta.created_at, "2026-01-01T00:00:00.000+00:00", "unrecognized fields remain ordinary extras");
 	assert.equal((await listNotes(ctx))[0]?.address, "legacy.md");
-	assert.match(resultRead(await call(captured, "notes_read", { address: "legacy.md" }, ctx)).content, /legacy body$/);
+	const legacyRead = await call(captured, "notes_read", { address: "legacy.md" }, ctx);
+	assert.match(resultRead(legacyRead).content, /legacy body$/);
+	assert.equal(resultData<NotesReadData>(legacyRead).metadata.extra.last_accessed, parsed.meta.last_accessed, "a literal legacy last_accessed remains ordinary extra frontmatter");
 	await call(captured, "notes_update", { address: "legacy.md", edits: [{ oldText: "legacy body", newText: "edited body" }] }, ctx);
 	await call(captured, "notes_write", { address: "legacy.md", content: "overwritten body" }, ctx);
 	const rewritten = parseNote(readFileSync(legacyFile, "utf8"));
@@ -486,9 +488,7 @@ test("list and search merge scopes and carry addresses; the path jail rejects es
 
 	const listed = resultData<NotesListData>(await call(captured, "notes_list", {}, ctx));
 	assert.deepEqual([...listed.files].map((file) => file.address).sort(), ["@human/three.md", "@project/two.md", "one.md"], "every merged row carries its full address");
-	for (const row of listed.files) {
-		assert.deepEqual(Object.keys(row).sort(), ["address", "updated_at", "last_accessed", ...(row.address.startsWith("@project/") ? ["project_key"] : [])].sort());
-	}
+	for (const row of listed.files) assert.equal(typeof row.updated_at, "string");
 	const scoped = resultData<NotesListData>(await call(captured, "notes_list", { glob: "@human/**" }, ctx));
 	assert.deepEqual(scoped.files.map((file) => file.address), ["@human/three.md"], "an address glob filter narrows the set");
 

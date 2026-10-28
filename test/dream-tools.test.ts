@@ -145,18 +145,40 @@ test("baseline failure releases pending ownership and permits a retry", async (t
 	assert.ok((await dreamEnd.execute({}, me, state)).ok);
 });
 
-test("notes_read reports the access before itself, so reading never makes an unread note look fresh", async (t) => {
+test("dream_begin reports the stored access, and dream reads do not refresh it", async (t) => {
 	const { home, as } = fixture(t);
 	const me = as("s", "alpha");
+	const state: DreamState = {};
 	const old = "2026-01-01T08:00:00.000+08:00";
-	mkdirSync(join(home, "human"), { recursive: true });
-	writeFileSync(join(home, "human", "stale.md"), `---\norigin: self\ncreatedAt: ${old}\nupdatedAt: ${old}\nlastAccessed: ${old}\naccessCount: 0\n---\n\nbody`);
-	const first = await notesRead.execute({ address: "@human/stale" }, notesToolContext(me, "/work/alpha"));
+	writeFileSync(join(home, "project", "alpha", "stale.md"), `---\norigin: self\ncreatedAt: ${old}\nupdatedAt: ${old}\nlastAccessed: ${old}\naccessCount: 0\n---\n\nbody`);
+
+	const first = await dreamBegin.execute({}, me, state);
 	assert.ok(first.ok);
-	assert.equal(Date.parse(first.data.metadata.last_accessed), Date.parse(old), "the first read shows the old access");
-	const second = await notesRead.execute({ address: "@human/stale" }, notesToolContext(me, "/work/alpha"));
+	assert.equal(Check(dreamBegin.outputSchema, first.data), true);
+	const row = first.data.files[0]!;
+	assert.equal(row.address, "@projects/alpha/stale.md");
+	assert.equal(Date.parse(row.last_accessed), Date.parse(old), "the dream shows the pre-dream access");
+	assert.ok(dreamBegin.render(first).includes(` | accessed ${row.last_accessed}`));
+	const read = await notesRead.execute({ address: "@project/stale" }, notesToolContext(dreamingIdentity(me, state), "/work/alpha"));
+	assert.ok(read.ok && read.data.text === "body");
+	const during = (await createNotesStore(me).list({ glob: "@project/**" }))[0]!;
+	assert.equal(during.meta.lastAccessed, Date.parse(old));
+	assert.equal(during.meta.accessCount, 0, "dream reads leave storage untouched");
+	assert.ok((await dreamEnd.execute({}, me, state)).ok);
+
+	const second = await dreamBegin.execute({}, me, state);
 	assert.ok(second.ok);
-	assert.ok(Date.parse(second.data.metadata.last_accessed) > Date.parse(old), "the first read still counted as an access");
+	assert.equal(second.data.files[0]!.last_accessed, row.last_accessed, "a later dream sees the same pre-dream access");
+	assert.ok((await dreamEnd.execute({}, me, state)).ok);
+
+	assert.ok((await notesRead.execute({ address: "@project/stale" }, notesToolContext(me, "/work/alpha"))).ok);
+	const after = (await createNotesStore(me).list({ glob: "@project/**" }))[0]!;
+	assert.equal(after.meta.accessCount, 1, "ordinary reads still stamp storage");
+	const third = await dreamBegin.execute({}, me, state);
+	assert.ok(third.ok);
+	assert.equal(Date.parse(third.data.files[0]!.last_accessed), after.meta.lastAccessed);
+	assert.ok(after.meta.lastAccessed > Date.parse(old));
+	assert.ok((await dreamEnd.execute({}, me, state)).ok);
 });
 
 test("dream_begin refuses an unknown project", async (t) => {

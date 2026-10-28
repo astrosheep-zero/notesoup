@@ -152,7 +152,7 @@ test("search offsets address the body and never move when access metadata grows"
 	assert.equal(frontBody, "needle later");
 	assert.equal(frontMatch.offsetChars, 0, "frontmatter length is not part of the body offset");
 	assert.equal(Array.from(frontBody).slice(frontMatch.offsetChars).join(""), "needle later");
-	assert.deepEqual(Object.keys((await notes.read("counted.md"))!).sort(), ["accessedBefore", "body", "meta", "resolvedScope"], "a read exposes metadata and the body, never a serialized rendering");
+	assert.deepEqual(Object.keys((await notes.read("counted.md"))!).sort(), ["body", "meta", "resolvedScope"], "a read exposes metadata and the body, never a serialized rendering");
 });
 
 test("invalid addressing and failed edits leave stored bytes untouched without poisoning the queue", async (t) => {

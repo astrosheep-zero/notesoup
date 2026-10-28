@@ -1,11 +1,12 @@
 /** Dream operations: open one project's notes for consolidation, delete crumpled notes, close. */
 import { Type, type Static } from "typebox";
+import { localIso } from "../notes/frontmatter.js";
 import { createNotesStore, noteIdentity, type NoteRow, type NotesIdentity } from "../notes/index.js";
 import { projectNamespaces } from "../notes/project-namespace.js";
 import { gitCommit } from "../dream/git.js";
 import { acquireDreamLock, dreamLockPath, releaseDreamLock, type DreamLock } from "../dream/lock.js";
 import { failure, renderOutcome, resultSchema, success, type Outcome } from "./result.js";
-import { failureOf, listedFile, NoteIdentitySchema, NotesListDataSchema, renderListData, snapshot } from "./notes.js";
+import { failureOf, listedFile, ListedFileSchema, NoteIdentitySchema, renderListData, snapshot, SnapshotSchema } from "./notes.js";
 
 /** The one open dream per session; the host owns where it lives. */
 type DreamOpening = { project: string; lock: DreamLock; generation: number };
@@ -54,7 +55,11 @@ export const dreamBeginParameters = Type.Object({
 	project: Type.Optional(Type.String({ description: "(optional, default this project) Project name, as in @projects/<name>/." })),
 }, { additionalProperties: false });
 
-export const DreamBeginDataSchema = Type.Object({ project: Type.String(), baseline: Type.String(), ...NotesListDataSchema.properties }, { additionalProperties: false });
+export const DreamBeginDataSchema = Type.Object({
+	project: Type.String(), baseline: Type.String(),
+	files: Type.Array(Type.Object({ ...ListedFileSchema.properties, last_accessed: Type.String() }, { additionalProperties: false })),
+	...SnapshotSchema,
+}, { additionalProperties: false });
 export type DreamBeginData = Static<typeof DreamBeginDataSchema>;
 
 function renderBeginData(data: DreamBeginData): string {
@@ -92,7 +97,7 @@ export const dreamBegin = {
 				}
 			}
 			rows.sort((a, b) => b.meta.updatedAt - a.meta.updatedAt || a.address.localeCompare(b.address));
-			const listed = snapshot(rows.map(row => listedFile(row, identity)), undefined, { namespacesUnavailable: unavailable }, renderListData);
+			const listed = snapshot(rows.map(row => ({ ...listedFile(row, identity), last_accessed: localIso(row.meta.lastAccessed) })), undefined, { namespacesUnavailable: unavailable }, renderListData);
 			if (!listed.ok) {
 				releaseOpening(state, opening);
 				return listed;
