@@ -50,12 +50,10 @@ function resolveTimeBounds(params: HistorySelection): Outcome<{ sinceMs?: number
 	return success({ ...(since.data === undefined ? {} : { sinceMs: since.data }), ...(until.data === undefined ? {} : { untilMs: until.data }) });
 }
 
-/** The params to merge into the previous call to continue toward older events. */
 export const HistoryOlderSchema = Type.Object({
 	session: Type.Optional(Type.String()),
 	before_seq: Type.Integer({ minimum: 1 }),
 }, { additionalProperties: false });
-/** The params to merge into the previous call to continue toward newer events. */
 export const HistoryNewerSchema = Type.Object({
 	session: Type.Optional(Type.String()),
 	after_seq: Type.Integer({ minimum: 1 }),
@@ -65,8 +63,8 @@ export const HistoryNewerSchema = Type.Object({
 export const HistoryPageSchema = Type.Object({
 	notice: Type.Optional(Type.String()),
 	items: Type.Array(Type.Union([HistoryPageItemSchema, HistoryFoldedRowSchema])),
-	page_older: Type.Union([HistoryOlderSchema, Type.Null()]),
-	page_newer: Type.Union([HistoryNewerSchema, Type.Null()]),
+	page_older: Type.Union([HistoryOlderSchema, Type.Null()], { description: "Params to merge into this call for older events; null when there are none, and always for `session: \"*\"`." }),
+	page_newer: Type.Union([HistoryNewerSchema, Type.Null()], { description: "Params to merge into this call for newer events; null when there are none, and always for `session: \"*\"`." }),
 }, { additionalProperties: false });
 
 /** One whole page payload, before it becomes an outcome. */

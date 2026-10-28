@@ -27,7 +27,7 @@ export function failure(code: string, message: string): Outcome<never> {
 }
 
 /** Public results have no success envelope. `error` is reserved for a refusal message. */
-export const WireErrorSchema = Type.Object({ error: Type.String(), code: Type.String() }, { additionalProperties: false });
+export const WireErrorSchema = Type.Object({ error: Type.String({ description: "Present only when the call was refused; says why." }), code: Type.String() }, { additionalProperties: false });
 export type WireError = Static<typeof WireErrorSchema>;
 export type WireResult<T> = T | WireError;
 
