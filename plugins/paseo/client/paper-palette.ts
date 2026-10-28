@@ -1,29 +1,29 @@
 import type { PluginTheme } from "@getpaseo/plugin";
 
 const LIGHT_PAPER = {
-  background: "#f8f3e1",
-  edge: "#cbbd94",
-  tape: "rgba(222, 205, 140, 0.72)",
-  tapeEdge: "rgba(160, 140, 80, 0.18)",
-  ink: "#33301f",
-  inkMuted: "#867c63",
-  added: "#357a44",
-  removed: "#b0493e",
-  crumpled: "#ece6d1",
+  background: "#faf6eb",
+  edge: "#dcd0b4",
+  tape: "rgba(224, 206, 148, 0.62)",
+  tapeEdge: "rgba(165, 145, 86, 0.16)",
+  ink: "#2c281e",
+  inkMuted: "#7d735d",
+  added: "#2f743e",
+  removed: "#b3463b",
+  crumpled: "#f1ead8",
 };
 
 export type PaperPalette = typeof LIGHT_PAPER;
 
 const DARK_PAPER: PaperPalette = {
-  background: "#302e27",
-  edge: "#58513e",
-  tape: "rgba(139, 122, 70, 0.55)",
-  tapeEdge: "rgba(194, 170, 100, 0.18)",
-  ink: "#e8e1cc",
-  inkMuted: "#b5aa8e",
-  added: "#91c79a",
-  removed: "#e69a8f",
-  crumpled: "#292824",
+  background: "#26231d",
+  edge: "#463f31",
+  tape: "rgba(182, 160, 104, 0.38)",
+  tapeEdge: "rgba(218, 195, 134, 0.16)",
+  ink: "#ece5d5",
+  inkMuted: "#a89e86",
+  added: "#8cc494",
+  removed: "#e29488",
+  crumpled: "#1e1b16",
 };
 
 /** Paseo theme colors are hex (#RGB, #RRGGBB or #RRGGBBAA). */
