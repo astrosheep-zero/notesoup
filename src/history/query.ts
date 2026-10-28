@@ -63,8 +63,8 @@ export const HistoryNewerSchema = Type.Object({
 export const HistoryPageSchema = Type.Object({
 	notice: Type.Optional(Type.String()),
 	items: Type.Array(Type.Union([HistoryPageItemSchema, HistoryFoldedRowSchema])),
-	page_older: Type.Union([HistoryOlderSchema, Type.Null()], { description: "Params to merge into this call for older events; null when there are none, and always for `session: \"*\"`." }),
-	page_newer: Type.Union([HistoryNewerSchema, Type.Null()], { description: "Params to merge into this call for newer events; null when there are none, and always for `session: \"*\"`." }),
+	page_older: Type.Union([HistoryOlderSchema, Type.Null()], { description: "Add to your call to page to older events; null when you can't page further." }),
+	page_newer: Type.Union([HistoryNewerSchema, Type.Null()], { description: "Add to your call to page to newer events; null when you can't page further." }),
 }, { additionalProperties: false });
 
 /** One whole page payload, before it becomes an outcome. */
