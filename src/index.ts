@@ -2,7 +2,8 @@
  * Host-neutral core entry.
  *
  * Everything under `src/` is independent of any host SDK: notes, boot, history, budget and the
- * shared operations know nothing about Pi, Claude Code or dsh. Each plugin under `plugins/`
+ * shared operations use explicit facts, not live Pi, Claude Code or dsh services. History's
+ * read-only wire decoders understand persisted formats without importing those hosts. Each plugin under `plugins/`
  * composes these domains into that host's registration and owns that host's text, lifecycle and
  * SDK types. Nothing here imports a plugin.
  *
@@ -38,12 +39,13 @@ export { DEFAULT_BOOT_TOOL_NAMES, renderProtocolBlock } from "./boot/text.js";
 export type { BootToolNames } from "./boot/text.js";
 
 // Operations: the schemas and typed outcomes a host registers as its own tools, over a
-// host-supplied notes tool context or decoded history projection.
+// host-supplied notes tool context or decoded history projection/lazy corpus context.
 export { notesList, notesRead, notesSearch, notesUpdate, notesWrite } from "./tools/notes.js";
 export { notesIdentityForCall, notesToolContext, type NotesToolContext } from "./tools/notes-context.js";
 export { historyList, historyRead } from "./tools/history.js";
 export { projectHistory } from "./history/history.js";
 export type { HistoryProjection } from "./history/history.js";
+export type { HistoryContext, HistoryCorpus, HistoryHarness, HistorySession, HistorySessionData } from "./history/corpus.js";
 export type { Operation, OperationError, Outcome, Renderer, TextWindow } from "./tools/result.js";
 
 // Budget: pure thresholds and the approved reset prose.

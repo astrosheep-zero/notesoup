@@ -38,7 +38,7 @@ Keep the forms separate: `token_budget` is a table here, so do not also write `t
 - **A boot per native window.** The `SessionStart` hook reads the thread's native rollout, binds the thread to this Codex root session, cwd, model, transcript and current window, and returns the shared notes boot with a window marker. The boot is deduped by the host's own persisted `hooks.additional_context` record for that exact thread and window, never by a quoted marker. A compact creates a new native window and therefore a fresh boot.
 - **Codex's `new_context` and `get_context_remaining`.** They remain Codex's tools. notesoup has no MCP reset or budget fallback, and an MCP call cannot trigger a reset.
 - **Five notebooks** through `notes_write`, `notes_update`, `notes_read`, `notes_list` and `notes_search`. `NOTESOUP_HOME` overrides the root (default `~/.agents/notes`); a root thread's agent name is `NOTESOUP_AGENT` or `anonymous`.
-- **Native history** through `history_list` and `history_read`: the root thread's events and a child's own ancestry, addressed by stable session-wide seqs. The boot's window tree retains native window UUIDs for orientation.
+- **Native history** through `history_list` and `history_read`: the root thread's events and a child's own ancestry, addressed by stable session-wide seqs. The boot's window tree retains native window UUIDs for orientation. Optional `session` targets other local sessions/harnesses, and `history_list` accepts `session: "*"` with a query for cross-session search; see [cross-session history](history-sessions.md).
 - **Per-turn model identity.** `@model` follows the current turn's `x-codex-turn-metadata.model`, not the model recorded at thread start. The start model only labels the boot.
 - **Subagents and forks.** `SubagentStart` binds the child or fork to its own transcript while keeping the parent's root session. Its `@self` notebook is the slugged `agent_type` (for example `worker`), not the parent's.
 
@@ -72,7 +72,7 @@ Codex 0.160.1 has no supported child post-compact boot or recovery hook. notesou
 | Node | >=22.15 for compressed rollouts. |
 | Boot size | Local cap 128 KiB. The hook sets `additionalContextLimit: 0` so the host does not spill or silently truncate the boot; an oversized boot becomes a warning and nothing is injected. Slim the notebook MAPs. |
 | Tool output | Shared 32 KiB result bound; use continuation fields or narrower filters. |
-| History sources | Local rollout files only. No app-server history API, no remote history, no text from opaque/encrypted payloads. |
+| History sources | Local Pi/Claude/Codex transcripts through the shared corpus; current Codex and targeted Codex use the same strict rollout decoder. DSH discovery needs its query service and is unavailable inside Codex. No app-server/remote history or text from opaque/encrypted payloads. |
 | Reset/budget | Codex-native only. No MCP fallback, no notesoup budget warning or close-out turn. |
 | Child rollover | Unsupported; blocked at `PreCompact` as above. |
 | Dream | No Codex dream backend or dream skill registration. |

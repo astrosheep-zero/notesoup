@@ -4,6 +4,7 @@ import type { Static, TSchema } from "typebox";
 import { Check, Errors } from "typebox/value";
 import { notesList, notesRead, notesSearch, notesUpdate, notesWrite } from "../../../src/tools/notes.js";
 import { historyList, historyRead, type HistoryTextWrapper } from "../../../src/tools/history.js";
+import { localHistoryCorpus, type LocalHistoryOptions } from "../../../src/history/local.js";
 import { readClaudeHistory, type ClaudeHistorySource } from "./history.js";
 import { loadNotesSnapshot } from "../../../src/boot/snapshot.js";
 import { renderBootBlock } from "../../../src/boot/render.js";
@@ -75,7 +76,7 @@ function historySource(value: unknown, sessionId: string): ClaudeHistorySource {
 	return source;
 }
 
-export async function dispatch(request: unknown): Promise<unknown> {
+export async function dispatch(request: unknown, historyOptions: Pick<LocalHistoryOptions, "roots" | "home" | "env"> = {}): Promise<unknown> {
 	if (!request || typeof request !== "object" || Array.isArray(request)) throw new Error("malformed request");
 	const value = request as Record<string, unknown>;
 	if (value.op === "schemas") return [...Object.entries(OPERATIONS), ...Object.entries(HISTORY_OPERATIONS)].map(([name, operation]) => ({ name, description: operation.description, inputSchema: JSON.parse(JSON.stringify(operation.parameters)) }));
@@ -98,6 +99,15 @@ export async function dispatch(request: unknown): Promise<unknown> {
 		const id = identity(value.identity as ClaudeIdentityInput);
 		if (Object.hasOwn(HISTORY_OPERATIONS, value.tool)) {
 			const tool = value.tool as keyof typeof HISTORY_OPERATIONS;
+			if ((value.params as { session?: string }).session !== undefined) {
+				const current = () => readClaudeHistory(historySource(value.history, id.sessionId));
+				const corpus = localHistoryCorpus({ ...historyOptions, current: { harness: "claude", id: id.sessionId, async load() {
+					const projection = await current();
+					const notice = claudeHistoryGapNotice(projection.missingAncestors);
+					return { projection, ...(notice ? { notice } : {}) };
+				} } });
+				return HISTORY_OPERATIONS[tool].call(value.params, { current, corpus });
+			}
 			const projection = await readClaudeHistory(historySource(value.history, id.sessionId));
 			const notice = claudeHistoryGapNotice(projection.missingAncestors);
 			const wrapText: HistoryTextWrapper = (text) => notice + text;

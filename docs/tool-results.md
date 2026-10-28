@@ -39,7 +39,7 @@ Both read operations return these fields at the result root, alongside identity 
 Positions count Unicode code points, not UTF-16 units or UTF-8 bytes. The returned text is a contiguous unmodified prefix of the requested range, without ellipsis markers. `next_offset_chars` names the first undelivered character, or is null at the true end. A negative input offset selects a tail; the delivered window does not echo the offset it resolved.
 
 - `notes_read`: `address`, optional `project_key`, and `metadata` accompany the text fields. Positions address only the note **body**. Access counts and last-access times remain stored but are omitted from results.
-- `history_read`: `seq`, `role`, `created_at`, and a tool summary accompany the text fields. Positions address one deterministic document derived from the event's facts. Query matches address that same document, not its decorated presentation.
+- `history_read`: `seq`, `role`, `created_at`, and a tool summary accompany the text fields. Explicit session targeting also carries canonical `session`. Positions address one deterministic document derived from the event's facts. Query matches address that same document, not its decorated presentation.
 
 Repeated note reads observe the current file; this is not a retained snapshot service. A concurrent body edit can change positions. History reflects the active branch and recorded facts, including a result that may arrive after a pending call was first observed.
 
@@ -55,7 +55,7 @@ The suffix and presentation header are never part of `text`, search offsets or t
 
 The native adapter allocates seqs from session append order, selects the active branch and decodes facts. Shared history pairs calls and results without allocating a second transcript. A paired execution is addressed by its call seq. Its result's raw slot is not a public event address; list/search provide the canonical seq. Unpaired results remain independently addressable. Inactive-branch addresses are not readable.
 
-Seqs address events across the whole session, including earlier windows. List and read headers use `seq <seq> | <role>`; the boot window tree supplies per-window seq ranges for narrowing a list with `before_seq` and `after_seq`.
+Seqs address events across the whole session, including earlier windows. With `session` omitted, list and read headers use `seq <seq> | <role>`; the boot window tree supplies per-window seq ranges for narrowing a list with `before_seq` and `after_seq`. With an explicit selector, returned events/read data carry canonical `session`, headers use `session <harness>:<id> | seq <seq> | <role>`, and all paging/expand/neighborhood recipes carry that same identity. Wildcard `history_list` requires `query`, forbids seq bounds, returns only hits across all roles and sets both paging recipes to null. See [cross-session history](history-sessions.md) for resolution, discovery and refusal rules.
 
 Tool events expose `tool`, `tool_status`, and, when recorded, `output_truncated` and `full_output_path`; a truncated run is named even when the host recorded no path, and the full text path is named only when it exists. `history_read` also reports `nested_calls`; a page row does not. Full arguments and nested-call records live only in the searchable/readable document, avoiding a second structured copy on every read.
 
@@ -76,7 +76,7 @@ A note read reports unrecognized frontmatter under `metadata.extra`; a value too
 ## Ownership
 
 - The notes store owns addressing, file contents, metadata and mutations.
-- The history adapter owns native decoding, seq allocation and branch visibility.
+- The history wire decoders own native seq allocation and persisted branch evidence; adapters supply live branch/head identity. The shared corpus resolves sessions without a second transcript.
 - Shared operations own per-call cwd resolution, the typed result, filtering, paging, character windows and refusal messages.
 - Shared renderers derive text from that result.
 - Host adapters supply base cwd, default identity, projections, optional pure text decoration and transport packaging only; they do not implement separate cwd override algorithms.

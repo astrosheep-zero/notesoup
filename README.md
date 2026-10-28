@@ -46,6 +46,7 @@ pi -e npm:notesoup
 | `notes.search` | `notes_search` |
 
 - **Migration**: `history_search` is gone; pass `query` to `history_list`.
+- **Cross-session history**: both history tools accept `session: "<id-or-prefix>"` or `"<harness>:<id>"` (`pi`, `claude`, `codex`, `dsh`). `history_list({ session: "*", query: "phrase" })` searches local transcripts across harnesses; hits carry the session to copy into `history_read`. Omit `session` for unchanged current-session behavior. See [cross-session history](docs/history-sessions.md) for discovery roots, refusals and offline limits.
 - **Migration (0.40.0)**: parameters renamed: `order` → `from`, `before`/`after` → `before_seq`/`after_seq`, `limit_chars` → `max_chars`, `wastebasket` → `crumpled`, `pattern` → `glob` (the standalone library's options included), and `notes_update`'s `change_kind` value `file` → `moved`. Old names are refused.
 
 - **Runtime toggle** — `/notesoup off` stops new automatic resets; `/notesoup on` re-enables them; bare `/notesoup` reports the state.
@@ -81,11 +82,13 @@ Environment variables:
 - `NOTESOUP_KEEP_MEMORY` — Claude only: keep Claude Code's auto-memory guidance, which notesoup omits by default (its summarization guidance is always omitted). Enabled by any non-empty value except `0`, `false`, `no`, or `off` (case-insensitive); read at session startup.
 - `NOTESOUP_HOME` — overrides the notes root (default `~/.agents/notes`).
 - `NOTESOUP_AGENT` — overrides the root agent name on Pi and Codex (default `anonymous`; Codex children use `agent_type`).
+- `NOTESOUP_HISTORY_PI_ROOT`, `NOTESOUP_HISTORY_CLAUDE_ROOT`, `NOTESOUP_HISTORY_CODEX_ROOT` — override local transcript discovery directories, independently of the notes root; see [cross-session history](docs/history-sessions.md).
 
 ## Documentation
 
 - [Architecture](docs/architecture.md) and [reset lifecycle](docs/reset-lifecycle.md) — how windows, checkpoints, markers and branches actually work
 - [Tool results](docs/tool-results.md) — receipts, paging, and error shapes
+- [Cross-session history](docs/history-sessions.md) — one-session lookup, wildcard search, local discovery and harness limits
 - [Standalone notes library](docs/notes-library.md) — use the notes store from Node, no Pi required
 - [DeepSeek Harness](docs/dsh.md) — adapter and profile patch for dsh 0.2.1-alpha.2
 - [Claude Code Mod](docs/claude-code-mod.md) — early-access notes and persisted-session history tools for Claude Code

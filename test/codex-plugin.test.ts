@@ -12,6 +12,7 @@ import { Check } from "typebox/value";
 import type { TSchema } from "typebox";
 import { runHook } from "../plugins/codex/src/hooks.js";
 import { writeBinding } from "../plugins/codex/src/identity.js";
+import { isolateHistoryRoots, writePiTranscript } from "./helpers/history-corpus.js";
 
 /* Producer-shaped synthetic fixtures, not captured/private transcripts.
  * Frozen official rust-v0.160.1, d27764b82f7118f674371e6d6e76271d9d606edb.
@@ -191,6 +192,27 @@ test("a copied plugin without src or node_modules still initializes and lists al
 });
 
 /* ---------------------------------------------------------------- MCP tools */
+
+test("bundled Codex MCP reads another harness and wildcard results retain their session identity", async (t) => {
+	const f = await fixture(t);
+	const roots = isolateHistoryRoots(t, f.home);
+	await writePiTranscript(roots.pi, "foreign-pi");
+	await writeFile(f.transcript, jsonl([row("session_meta", sessionMeta()), row("response_item", message("user", "Codex needle"))]));
+	await bind(f.data, { threadId: ROOT, rootSessionId: ROOT, home: f.home, cwd: f.cwd, transcriptPath: f.transcript });
+	const client = await connect(t, f.data, CLI, f.home);
+	const read = await call(client, { name: "history_read", arguments: { session: "pi:foreign", seq: 1 }, _meta: metaFor(ROOT, ROOT) });
+	assert.equal(read.isError, undefined, textOf(read));
+	assert.equal((read.structuredContent as { session: string }).session, "pi:foreign-pi");
+	assert.match(textOf(read), /^session pi:foreign-pi \| seq 1 \| user/);
+	const list = await call(client, { name: "history_list", arguments: { session: "*", query: "needle" }, _meta: metaFor(ROOT, ROOT) });
+	assert.equal(list.isError, undefined, textOf(list));
+	const page = list.structuredContent as { items: { session: string }[]; page_older: null; page_newer: null };
+	assert.deepEqual(new Set(page.items.map((item) => item.session)), new Set([`codex:${ROOT}`, "pi:foreign-pi"]));
+	assert.equal(page.page_older, null);
+	assert.equal(page.page_newer, null);
+	const invalid = await call(client, { name: "history_read", arguments: { session: "*", seq: 1 }, _meta: metaFor(ROOT, ROOT) });
+	assert.equal(errorCode(invalid), "invalid_session");
+});
 
 test("notes tools use the hook thread as the session notebook and the current turn model as @model", async (t) => {
 	const f = await fixture(t);

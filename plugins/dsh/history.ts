@@ -2,6 +2,8 @@ import type { Context } from "@deepseek-ai/cordis";
 import type { SessionId, SessionEvent } from "@deepseek-ai/dsh-session";
 import type {} from "@deepseek-ai/dsh-session-query";
 import { projectHistory, type DecodedHistoryItem, type DecodedHistoryWindow, type HistoryProjection } from "../../src/history/history.js";
+import { localHistoryCorpus } from "../../src/history/local.js";
+import type { HistoryContext } from "../../src/history/corpus.js";
 import { checkpointSnapshot, recordSnapshot, windowId } from "./window.js";
 
 /** Preserve every recorded block; attachments/reasoning have JSON evidence rather than invented text. */
@@ -54,4 +56,19 @@ export function decodeHistory(sessionId: string, events: readonly SessionEvent[]
 export async function historyProjection(ctx: Context, sessionId: SessionId): Promise<HistoryProjection> {
 	const log = await ctx.sessionQuery.readSession(sessionId);
 	return decodeHistory(sessionId, log.events);
+}
+
+/** DSH contributes its logical live/persisted corpus; foreign files use SDK-free decoders. */
+export function historyContext(ctx: Context, sessionId: SessionId): HistoryContext {
+	const current = () => historyProjection(ctx, sessionId);
+	return { current, corpus: localHistoryCorpus({
+		current: { harness: "dsh", id: sessionId, load: async () => ({ projection: await current() }) },
+		dshSessions: async () => Promise.all((await ctx.sessionQuery.listSessions()).map(async ({ header }) => {
+			const log = await ctx.sessionQuery.readSession(header.id);
+			return {
+				harness: "dsh" as const, id: header.id, modifiedAt: log.events.at(-1)?.time ?? header.createdAt,
+				load: async () => ({ projection: decodeHistory(header.id, log.events) }),
+			};
+		})),
+	}) };
 }

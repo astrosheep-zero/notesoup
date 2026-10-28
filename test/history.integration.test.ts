@@ -20,6 +20,10 @@ import {
 	resultRead,
 } from "./helpers/extension.js";
 import { installExtensionTestHooks } from "./helpers/extension-test-environment.js";
+import { isolateHistoryRoots, writePiTranscript } from "./helpers/history-corpus.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 installExtensionTestHooks("notesoup-history-v2");
 
@@ -51,6 +55,23 @@ function seqs(result: Awaited<ReturnType<typeof call>>): number[] {
 function rendered(result: Awaited<ReturnType<typeof call>>): string {
 	return result.content.flatMap((part) => part.type === "text" ? [part.text] : []).join("");
 }
+
+test("Pi registered tools resolve another persisted session and propagate its identity", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "notesoup-pi-corpus-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
+	const roots = isolateHistoryRoots(t, home);
+	await writePiTranscript(roots.pi, "foreign-pi");
+	const session = manager(), captured = makeExtension(session), ctx = context(session);
+	appendText(session, "user", "live needle");
+	const read = await call(captured, "history_read", { session: "pi:foreign", seq: 1 }, ctx);
+	assert.equal(resultData<{ session: string }>(read).session, "pi:foreign-pi");
+	assert.match(rendered(read), /foreign needle/);
+	const across = page(await call(captured, "history_list", { session: "pi:*", query: "needle" }, ctx));
+	assert.equal(across.items.length, 2);
+	assert.ok(across.items.every((item) => typeof item.session === "string"));
+	const current = resultData<{ session: string }>(await call(captured, "history_read", { session: `pi:${session.getSessionId()}`, seq: 1 }, ctx));
+	assert.equal(current.session, `pi:${session.getSessionId()}`);
+});
 
 test("history_list exposes bounded paging, `from` and a literal query, while notes use snapshot limits", () => {
 	const captured = makeExtension(manager());
@@ -89,7 +110,7 @@ test("history_list exposes bounded paging, `from` and a literal query, while not
 		assert.equal(Check(listSchema, invalid), false, JSON.stringify(invalid));
 	}
 
-	assert.deepEqual(Object.keys(properties).sort(), ["query", "roles", "before_seq", "after_seq", "since", "until", "from", "limit", "max_chars_per_item"].sort());
+	assert.deepEqual(Object.keys(properties).sort(), ["session", "query", "roles", "before_seq", "after_seq", "since", "until", "from", "limit", "max_chars_per_item"].sort());
 	assert.equal(Check(listSchema, { window_id: "anything" }), false, "unknown filters are rejected before selection");
 
 	const notesSchema = captured.tools.get("notes_list")?.parameters as { properties?: Record<string, unknown> };

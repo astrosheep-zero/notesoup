@@ -9,6 +9,7 @@ import { historyList, historyRead } from "../../../src/tools/history.js";
 import { wireResult, type Operation, type Outcome } from "../../../src/tools/result.js";
 import { CodexIdentityError, notesIdentityFor, pluginDataRoot, readBinding, rootSessionIdOf, safeThreadId, turnModel, type ThreadBinding } from "./identity.js";
 import { readCodexHistory } from "./history.js";
+import { localHistoryCorpus } from "../../../src/history/local.js";
 import { readStartState } from "./state.js";
 import { notesToolContext } from "../../../src/tools/notes-context.js";
 
@@ -128,13 +129,15 @@ export async function callTool(name: string, args: unknown, meta: Record<string,
 	if (!Check(bound.operation.parameters, params)) return failure("invalid_params", `invalid ${name} parameters: ${paramProblem(bound.operation.parameters, params)}`);
 	try {
 		const { binding, rootSessionId, model } = await identityFor(meta, env);
-		const native = await readNative(binding, rootSessionId, bound.history, meta, env);
+		const targetedHistory = bound.history && (params as { session?: string }).session !== undefined;
+		const native = await readNative(binding, rootSessionId, bound.history && !targetedHistory, meta, env);
 		if (!bound.history) {
 			const outcome = await bound.operation.execute(params, notesToolContext(notesIdentityFor(binding, model), binding.cwd)) as Outcome<unknown>;
 			return successFor(bound, outcome);
 		}
-		const projection = (native as Awaited<ReturnType<typeof readCodexHistory>>).projection;
-		const outcome = await bound.operation.execute(params, projection) as Outcome<unknown>;
+		const current = async () => (await readNative(binding, rootSessionId, true, meta, env) as Awaited<ReturnType<typeof readCodexHistory>>).projection;
+		const context = targetedHistory ? { current, corpus: localHistoryCorpus({ env, current: { harness: "codex", id: binding.threadId, load: async () => ({ projection: await current() }) } }) } : (native as Awaited<ReturnType<typeof readCodexHistory>>).projection;
+		const outcome = await bound.operation.execute(params, context) as Outcome<unknown>;
 		return successFor(bound, outcome);
 	} catch (error) {
 		if (error instanceof CodexIdentityError) return failure(error.code, error.message);

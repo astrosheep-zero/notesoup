@@ -6,8 +6,8 @@ import { earliestMatchOffsetChars } from "../text-match.js";
 import { InvalidQueryError, searchQueries } from "../tools/schema.js";
 import { eventDocument, filteredItems, visibleItem, HistoryFoldedRowSchema, HistoryPageItemSchema, MAX_FOLD_TOOL_NAMES, MAX_FOLD_TOOL_NAME_CHARS, type HistoryEvent, type HistoryFilter, type HistoryFoldedRow, type HistoryPageItem, type HistoryProjection } from "./history.js";
 
-type Candidate = { event: HistoryEvent; matchOffset?: number; preview?: HistoryPageItem; before?: HistoryFoldedRow };
-type PreparedSelection = { candidates: Candidate[]; tail?: HistoryFoldedRow };
+type Candidate = { event: HistoryEvent; session?: string; matchOffset?: number; preview?: HistoryPageItem; before?: HistoryFoldedRow };
+type PreparedSelection = { candidates: Candidate[]; tail?: HistoryFoldedRow; session?: string; multi?: boolean };
 
 /** Which end of one selection `limit` is taken from; page items always come back ascending. */
 export type HistoryOrder = "newest" | "oldest";
@@ -18,6 +18,7 @@ export type HistoryOrder = "newest" | "oldest";
  * every role, with no folded rows.
  */
 export type HistorySelection = HistoryFilter & {
+	session?: string;
 	from?: HistoryOrder;
 	limit?: number;
 	query?: string | string[];
@@ -51,15 +52,18 @@ function resolveTimeBounds(params: HistorySelection): Outcome<{ sinceMs?: number
 
 /** The params to merge into the previous call to continue toward older events. */
 export const HistoryOlderSchema = Type.Object({
+	session: Type.Optional(Type.String()),
 	before_seq: Type.Integer({ minimum: 1 }),
 }, { additionalProperties: false });
 /** The params to merge into the previous call to continue toward newer events. */
 export const HistoryNewerSchema = Type.Object({
+	session: Type.Optional(Type.String()),
 	after_seq: Type.Integer({ minimum: 1 }),
 	from: Type.Literal("oldest"),
 }, { additionalProperties: false });
 
 export const HistoryPageSchema = Type.Object({
+	notice: Type.Optional(Type.String()),
 	items: Type.Array(Type.Union([HistoryPageItemSchema, HistoryFoldedRowSchema])),
 	page_older: Type.Union([HistoryOlderSchema, Type.Null()]),
 	page_newer: Type.Union([HistoryNewerSchema, Type.Null()]),
@@ -84,7 +88,7 @@ function truncateHistoryItem(item: HistoryPageItem, fits: (candidate: HistoryPag
 }
 
 /** Summarize one already ordered gap; omitted tool names never change its exact count. */
-function foldedRun(events: HistoryEvent[]): HistoryFoldedRow | undefined {
+function foldedRun(events: HistoryEvent[], session?: string): HistoryFoldedRow | undefined {
 	if (events.length === 0) return undefined;
 	const counts = new Map<string, number>();
 	for (const event of events) {
@@ -95,7 +99,7 @@ function foldedRun(events: HistoryEvent[]): HistoryFoldedRow | undefined {
 	const entries = [...counts].filter(([name]) => name.length <= MAX_FOLD_TOOL_NAME_CHARS).slice(0, MAX_FOLD_TOOL_NAMES);
 	// fromEntries preserves __proto__ as an ordinary key without mutating the prototype.
 	const tools = Object.fromEntries(entries);
-	return { folded: true, first_seq: events[0]!.seq, last_seq: events.at(-1)!.seq, count: events.length, tools };
+	return { ...(session === undefined ? {} : { session }), folded: true, first_seq: events[0]!.seq, last_seq: events.at(-1)!.seq, count: events.length, tools };
 }
 
 /** Filter and order once. Conversation candidates own the folded gap immediately before them. */
@@ -112,26 +116,27 @@ function prepareSelection(projection: HistoryProjection, params: HistorySelectio
 		if ((event.role === "user" || event.role === "assistant") && eventDocument(event) === "") continue;
 		const matchOffset = params.query === undefined ? undefined : earliestMatchOffsetChars(eventDocument(event), params.query as string[]);
 		if (matchOffset !== undefined && matchOffset < 0) continue;
-		candidates.push({ event, matchOffset, before: foldedRun(run) });
+		candidates.push({ event, ...(params.session === undefined ? {} : { session: params.session }), matchOffset, before: foldedRun(run, params.session) });
 		run = [];
 	}
-	return { candidates, tail: foldedRun(run) };
+	return { candidates, session: params.session, tail: foldedRun(run, params.session) };
 }
 
 /** Assemble only the admitted interval. Edge folds belong only to a page reaching that edge. */
 function pageData(prepared: PreparedSelection, start: number, end: number, maxChars: number, preview?: HistoryPageItem): HistoryPage {
 	const { candidates, tail } = prepared;
+	const identity = prepared.session === undefined ? {} : { session: prepared.session };
 	const items: HistoryPage["items"] = [];
 	for (let index = start; index < end; index++) {
 		const candidate = candidates[index]!;
 		if (candidate.before && (index > start || start === 0)) items.push(candidate.before);
-		items.push(preview ?? (candidate.preview ??= visibleItem(candidate.event, maxChars, candidate.matchOffset)));
+		items.push(preview ?? (candidate.preview ??= { ...visibleItem(candidate.event, maxChars, candidate.matchOffset), ...(candidate.session === undefined ? {} : { session: candidate.session }) }));
 	}
 	if (end === candidates.length && tail) items.push(tail);
 	return {
 		items,
-		page_older: start > 0 && start < end ? { before_seq: candidates[start]!.event.seq } : null,
-		page_newer: end < candidates.length && start < end ? { after_seq: candidates[end - 1]!.event.seq, from: "oldest" } : null,
+		page_older: !prepared.multi && start > 0 && start < end ? { ...identity, before_seq: candidates[start]!.event.seq } : null,
+		page_newer: !prepared.multi && end < candidates.length && start < end ? { ...identity, after_seq: candidates[end - 1]!.event.seq, from: "oldest" } : null,
 	};
 }
 
@@ -139,18 +144,42 @@ function pageData(prepared: PreparedSelection, start: number, end: number, maxCh
  * Resolve the time bounds once, then filter and fold against the same [sinceMs, untilMs) window.
  * Grow the page in selection order; shorten the first preview only when no full row fits.
  */
-export function selectPage(projection: HistoryProjection, params: HistorySelection, fits: (page: HistoryPage) => boolean, maxChars: number): Outcome<HistoryPage> {
+function resolveSelection(params: HistorySelection): Outcome<HistorySelection> {
 	const bounds = resolveTimeBounds(params);
 	if (!bounds.ok) return bounds;
-	let queries: string[];
 	try {
-		queries = searchQueries(params.query);
+		const queries = searchQueries(params.query);
+		return success({ ...params, ...bounds.data, query: queries.length ? queries : undefined });
 	} catch (error) {
 		if (error instanceof InvalidQueryError) return failure("invalid_query", error.message);
 		throw error;
 	}
-	const scoped = { ...params, ...bounds.data, query: queries.length ? queries : undefined };
-	const prepared = prepareSelection(projection, scoped);
+}
+
+export function selectPage(projection: HistoryProjection, params: HistorySelection, fits: (page: HistoryPage) => boolean, maxChars: number): Outcome<HistoryPage> {
+	const scoped = resolveSelection(params);
+	if (!scoped.ok) return scoped;
+	return selectPrepared(prepareSelection(projection, scoped.data), scoped.data, fits, maxChars);
+}
+
+/** Validate before corpus discovery or I/O: per-session seqs cannot bound a multi-session search. */
+export function corpusSelection(params: HistorySelection): Outcome<HistorySelection> {
+	const scoped = resolveSelection(params);
+	if (!scoped.ok) return scoped;
+	if (scoped.data.query === undefined) return failure("missing_query", "Wildcard session search requires a non-empty `query`.");
+	if (params.before_seq !== undefined || params.after_seq !== undefined) return failure("invalid_bounds", "`before_seq` and `after_seq` are per-session; omit them for wildcard session search.");
+	return scoped;
+}
+
+/** Merge events, never folds or per-session cursors. Equal timestamps have a stable identity tie-break. */
+export function selectCorpusPage(sessions: { session: string; projection: HistoryProjection }[], scoped: HistorySelection, fits: (page: HistoryPage) => boolean, maxChars: number): Outcome<HistoryPage> {
+	const candidates = sessions.flatMap(({ session, projection }) => prepareSelection(projection, { ...scoped, session }).candidates);
+	const time = (event: HistoryEvent) => event.createdAt === undefined || Number.isNaN(Date.parse(event.createdAt)) ? -Infinity : Date.parse(event.createdAt);
+	candidates.sort((a, b) => (time(a.event) - time(b.event) || a.session!.localeCompare(b.session!) || a.event.seq - b.event.seq));
+	return selectPrepared({ candidates, multi: true }, scoped, fits, maxChars);
+}
+
+function selectPrepared(prepared: PreparedSelection, scoped: HistorySelection, fits: (page: HistoryPage) => boolean, maxChars: number): Outcome<HistoryPage> {
 	const { candidates } = prepared;
 	// Grow a contiguous interval from the requested end; even a byte-limited newest page stays ascending.
 	const newest = scoped.from !== "oldest";
@@ -175,7 +204,8 @@ export function selectPage(projection: HistoryProjection, params: HistorySelecti
 	}
 	const page = pageData(prepared, start, end, maxChars);
 	if (!fits(page)) {
-		return failure("page_too_large", `Even trimmed to their shortest, these ${page.items.length} rows and their folded runs fill the ${TOOL_OUTPUT_LIMIT} a call can carry; narrow with \`before_seq\`/\`after_seq\` or \`since\`/\`until\`, pass \`roles\` to skip folding, or \`history_read\` one seq.`);
+		const narrow = prepared.multi ? "narrow the session pattern, query, roles or `since`/`until`, or read one session/seq with `history_read`" : "narrow with `before_seq`/`after_seq` or `since`/`until`, pass `roles` to skip folding, or `history_read` one seq";
+		return failure("page_too_large", `Even trimmed to their shortest, these ${page.items.length} rows${prepared.multi ? "" : " and their folded runs"} fill the ${TOOL_OUTPUT_LIMIT} a call can carry; ${narrow}.`);
 	}
 	return success(page);
 }

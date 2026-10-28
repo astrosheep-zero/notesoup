@@ -8,7 +8,7 @@ description: How notesoup's `notes_*` and `history_*` tools fit together — not
 Two stores outlive the context window. Anything in neither is lost when the window ends or is wiped.
 
 - **Notes** (`notes_*`) — what you choose to keep. Plain markdown, written on purpose.
-- **History** (`history_*`) — what happened in this session: messages, tool calls, summaries. Read-only.
+- **History** (`history_*`) — recorded messages, tool calls and summaries. Current session by default; other local sessions/harnesses through `session`. Read-only.
 
 Each tool's own description covers its parameters and paging. This guide covers what the descriptions cannot: where notes belong, and how the tools work together.
 
@@ -43,8 +43,10 @@ For list/search, omit `glob` or use the collection alias `@default` for this ses
 - **A note**: `notes_list` with a `glob` when you know roughly where it lives, `notes_search` when you know a phrase; then `notes_read` the address.
 - **Something that happened**: `history_list` to browse or search this session's events; `history_read` the seq for the whole event.
 - **An earlier window**: use its seq range from the boot window tree with `history_list`'s `before_seq` / `after_seq` bounds, or search for a remembered phrase.
+- **Another session**: pass `session: "<id-or-prefix>"` or `"pi:<id>"`, `"claude:<id>"`, `"codex:<id>"`, `"dsh:<id>"`. An unqualified selector checks this harness first. If ambiguous, use a longer ID or a harness prefix; never pick a candidate blindly.
+- **A phrase across sessions**: `history_list({ session: "*", query: "remembered phrase" })`, or restrict to a harness with `"pi:*"`. A wildcard requires a non-empty query; it cannot use `before_seq`/`after_seq` or `history_read`. Results cover every role unless `roles` narrows them, are chronological, and have no paging cursors; narrow by time, role, query or session pattern instead. DSH sessions are discoverable only from DSH.
 
-Seqs are stable. Write the useful ones into a note so they need not be found twice.
+Seqs are stable **within a session**. When a hit carries `session`, copy it together with `seq` into `history_read` and save both in your note. The paging/expand/neighborhood recipes already preserve the resolved session. Omit `session` only when you mean your current host session. An unreadable or unsupported local transcript refuses explicitly; do not treat that as proof the remembered event never happened.
 
 ## Saving recovery state
 

@@ -11,6 +11,7 @@ import { allItems, eventDocument } from "../src/history/history.js";
 import { historyList, historyRead } from "../src/tools/history.js";
 import { TOOL_OUTPUT_MAX_BYTES } from "../src/tools/output.js";
 import { dispatch, type ClaudeToolResult } from "../plugins/claude/src/helper.js";
+import { writePiTranscript } from "./helpers/history-corpus.js";
 
 type Row = Record<string, unknown>;
 const sessionId = "synthetic-session";
@@ -33,6 +34,26 @@ const bootText = (ordinal: number, spelling: "legacy" | "current" = "legacy") =>
 function compact(uuid: string, logical: string, metadata: Row = {}): Row {
 	return row(uuid, null, "system", "Conversation compacted", { subtype: "compact_boundary", logicalParentUuid: logical, compactMetadata: metadata });
 }
+
+test("Claude helper resolves foreign history without requiring a current append head/path", async (t) => {
+	const home = mkdtempSync(join(tmpdir(), "claude-cross-harness-"));
+	t.after(() => rmSync(home, { recursive: true, force: true }));
+	const pi = join(home, "sessions");
+	await writePiTranscript(pi, "foreign-pi");
+	const identity = { home: join(home, "notes"), sessionId, cwd: home, agent: "claude", model: "claude" };
+	const options = { roots: { pi, claude: null, codex: null }, env: {} };
+	const invoke = (tool: string, params: unknown) => dispatch({ op: "tool", tool, params, identity }, options) as Promise<ClaudeToolResult>;
+	const read = await invoke("history_read", { session: "pi:foreign", seq: 1 });
+	assert.ok(read.ok);
+	assert.match(read.text, /^session pi:foreign-pi \| seq 1 \| user/);
+	assert.match(read.text, /foreign needle/);
+	const list = await invoke("history_list", { session: "pi:*", query: "needle" });
+	assert.ok(list.ok);
+	assert.match(list.text, /session pi:foreign-pi/);
+	const invalid = await invoke("history_read", { session: "*", seq: 1 });
+	assert.equal(invalid.ok, false);
+	assert.match(invalid.text, /invalid_session/);
+});
 
 test("Claude append and result arrival preserve call addresses and use the shared paired read", async () => {
 	const rows = [user("u", null, "run tools"), assistant("a", "u", [{ type: "thinking", thinking: "private thought" }, { type: "text", text: "working" }, call("one"), call("two")])];

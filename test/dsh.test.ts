@@ -22,6 +22,7 @@ import { COUNTDOWN_LINE, FORCED_CONTINUATIONS, NORMAL_CONTINUATIONS } from "../s
 import { preflight } from "../plugins/dsh/engine.js";
 import type { Agent } from "@deepseek-ai/dsh-agent";
 import { BasicCompactionEngine } from "@deepseek-ai/dsh-compaction-basic";
+import { isolateHistoryRoots, writePiTranscript } from "./helpers/history-corpus.js";
 
 function prompt(text: string) { return createUserMessage({ content: [{ type: "text", text }], source: { kind: "user" } }); }
 async function run(agent: Agent, text: string): Promise<void> { agent.followup(prompt(text)); await agent.whenIdle(); }
@@ -30,6 +31,28 @@ function code(expected: string) { return (error: unknown) => (error as { code?: 
 
 // Critical lifecycle tests exercise the actual loop, DeepSeek HTTP adapter, tool registry,
 // token meter and SQLite query service. Only the provider is a scripted Messages server.
+test("dsh registered tools query other DSH sessions and foreign Pi files through the same session surface", async (t) => {
+	const { ctx, create, directory } = await dshFixture(t);
+	const roots = isolateHistoryRoots(t, directory);
+	await writePiTranscript(roots.pi, "foreign-pi");
+	const reader = await create(undefined, "reader"), target = await create(undefined, "target");
+	target.session.append("user/message", prompt("DSH needle"), { surfaceOp: "append" });
+	const invoke = (name: string, args: Record<string, unknown>) => ctx.tools.execute({ name, arguments: args, agent: reader, callId: ToolCallId("cross-session"), signal: new AbortController().signal });
+	const listed = await invoke("history_list", { session: "dsh:tar", query: "needle" });
+	assert.equal(listed.isError, false, JSON.stringify(listed));
+	const page = listed.value as { items: { session: string; seq: number }[] };
+	assert.equal(page.items[0]!.session, "dsh:target");
+	const read = await invoke("history_read", { session: page.items[0]!.session, seq: page.items[0]!.seq });
+	assert.equal(read.isError, false);
+	assert.equal((read.value as { text: string }).text, "DSH needle");
+	const foreign = await invoke("history_read", { session: "pi:foreign", seq: 1 });
+	assert.equal(foreign.isError, false);
+	assert.equal((foreign.value as { session: string }).session, "pi:foreign-pi");
+	const across = await invoke("history_list", { session: "*", query: "needle" });
+	assert.equal(across.isError, false, JSON.stringify(across));
+	assert.deepEqual(new Set((across.value as { items: { session: string }[] }).items.map((item) => item.session)), new Set(["dsh:target", "pi:foreign-pi"]));
+});
+
 test("dsh boot freezes across note writes, rotates before the next wire request, and keeps raw history", async (t) => {
 	const { ctx, engine, create, mock } = await dshFixture(t);
 	const agent = await create();

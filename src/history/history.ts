@@ -209,6 +209,7 @@ export function nestedCallSummary(event: HistoryEvent): { nested_calls?: Static<
 
 /** Stable identity and a verbatim preview, starting at the search match when present. */
 export const HistoryPageItemSchema = Type.Object({
+	session: Type.Optional(Type.String()),
 	seq: Type.Integer({ minimum: 1 }),
 	role: HistoryRoleSchema,
 	created_at: Type.Union([Type.String(), Type.Null()]),
@@ -221,6 +222,7 @@ export type HistoryPageItem = Static<typeof HistoryPageItemSchema>;
 
 /** A run of tool/context events the conversation view replaces with counts. */
 export const HistoryFoldedRowSchema = Type.Object({
+	session: Type.Optional(Type.String()),
 	folded: Type.Literal(true),
 	first_seq: Type.Integer({ minimum: 1 }),
 	last_seq: Type.Integer({ minimum: 1 }),

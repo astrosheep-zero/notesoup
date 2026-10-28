@@ -7,7 +7,7 @@ import { Check, Errors } from "typebox/value";
 import { notesList, notesRead, notesSearch, notesUpdate, notesWrite } from "../../src/tools/notes.js";
 import { historyList, historyRead } from "../../src/tools/history.js";
 import { success, type Operation } from "../../src/tools/result.js";
-import { historyProjection } from "./history.js";
+import { historyContext } from "./history.js";
 import { notesCwd, notesIdentity } from "./window.js";
 import { notesToolContext } from "../../src/tools/notes-context.js";
 import { measureBudget } from "./budget.js";
@@ -77,8 +77,8 @@ export function registerTools(ctx: Context, engine: NotesoupCompactionEngine): v
 	register(ctx, notesRead, (agent) => [toolContext(agent)] as const);
 	register(ctx, notesList, (agent) => [toolContext(agent)] as const);
 	register(ctx, notesSearch, (agent) => [toolContext(agent)] as const);
-	register(ctx, historyList, async (agent) => [await historyProjection(ctx, agent.session.id)] as const);
-	register(ctx, historyRead, async (agent) => [await historyProjection(ctx, agent.session.id)] as const);
+	register(ctx, historyList, (agent) => [historyContext(ctx, agent.session.id)] as const);
+	register(ctx, historyRead, (agent) => [historyContext(ctx, agent.session.id)] as const);
 	ctx.tools.register(defineTool({
 		name: "empty_brain",
 		description: "Open a fresh context window after this tool batch. Write recovery notes first; notes and raw history stay on disk.",
