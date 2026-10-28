@@ -129,8 +129,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 		const windowId = reset?.data.windowId ?? rootWindowId(ctx.sessionManager.getSessionId());
 		try {
 			if (reset) {
-				if (!event.messages.some((message) => isWindowBoot(message, windowId))) throw new Error(`Missing boot for context window ${windowId}`);
-				return { messages: isCheckpointBackedReset(ctx, reset) ? event.messages : projectWindow(event.messages, windowId) };
+				return { messages: projectWindow(event.messages, windowId) };
 			}
 			return { messages: projectRootWindow(event.messages, windowId) };
 		} catch (error) {

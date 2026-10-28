@@ -77,6 +77,33 @@ test("custom reset marker removes old provider context while history remains sea
 	assert.equal(found.items[0]?.seq, oldSeq);
 });
 
+test("a checkpoint-backed reset projects from its boot and drops the empty compaction wrapper", async () => {
+	const sessionManager = manager();
+	const captured = makeExtension(sessionManager);
+	const ctx = context(sessionManager);
+	appendText(sessionManager, "user", "before the reset");
+	await call(captured, "empty_brain", {}, ctx);
+	assert.equal((await commitTurnEndBoundary(captured, sessionManager, ctx)).continue, true);
+
+	// Pi projects the empty retain-none checkpoint into a compactionSummary that precedes the boot.
+	const sessionMessages = sessionManager.buildSessionProjection().messages;
+	const wrapperIndex = sessionMessages.findIndex((message) => message.role === "compactionSummary");
+	const bootIndex = sessionMessages.findIndex((message) => message.role === "custom" && message.customType === BOOT_TYPE);
+	assert.ok(wrapperIndex >= 0 && wrapperIndex < bootIndex, "the empty wrapper sits before the boot");
+
+	const projected = await runContextWithSystemHook(captured, ctx, [
+		{ role: "system", content: "SYSTEM HEAD", timestamp: 0 },
+		...sessionMessages,
+	]);
+	const messages = (projected?.messages ?? []) as Array<{ role?: string; content?: unknown; customType?: string }>;
+	assert.equal(messages[0]?.role, "system", "the leading system message survives");
+	assert.equal(messages[0]?.role === "system" ? messages[0].content : undefined, "SYSTEM HEAD");
+	const first = messages[1];
+	assert.ok(first?.role === "custom", "the window starts at its boot");
+	assert.equal(first.customType, BOOT_TYPE);
+	assert.equal(messages.some((message) => message.role === "compactionSummary"), false, "the empty checkpoint wrapper never reaches the provider");
+});
+
 test("the root boot and reset boot carry durable window identity", async () => {
 	const sessionManager = manager();
 	const captured = makeExtension(sessionManager);
