@@ -45,7 +45,7 @@ export const NoteMetadataSchema = Type.Object({
 	created_at: Type.String(),
 	updated_at: Type.String(),
 	crumpled_at: Type.Optional(Type.String()),
-	project: Type.Optional(Type.String({ description: "The project this session note belongs to." })),
+	project: Type.Optional(Type.String()),
 	extra: Type.Record(Type.String(), Type.Unknown()),
 }, { additionalProperties: false });
 export type NoteMetadata = Static<typeof NoteMetadataSchema>;
@@ -104,14 +104,14 @@ function renderIdentity(identity: { address: string; project_key?: string; proje
 
 /** Display context a named project notebook adds to its receipts; ordinary notebooks omit both. */
 export const ProjectReceiptSchema = {
-	project_root: Type.Optional(Type.String({ description: "Where this project lives on disk." })),
-	project_siblings: Type.Optional(Type.Array(Type.Object({ name: Type.String(), path: Type.String() }, { additionalProperties: false }), { description: "Other projects with a similar name; check you meant this one." })),
+	project_root: Type.Optional(Type.String()),
+	project_siblings: Type.Optional(Type.Array(Type.Object({ name: Type.String(), path: Type.String() }, { additionalProperties: false }))),
 };
 
 /** One note identity, shared by every receipt: read/list/search rows and all mutations alike. */
 export const NoteIdentitySchema = {
 	address: Type.String(),
-	project_key: Type.Optional(Type.String({ description: "The project `@project/` meant here." })),
+	project_key: Type.Optional(Type.String()),
 	...ProjectReceiptSchema,
 };
 
@@ -134,18 +134,18 @@ const SearchedFileSchema = Type.Object({
 
 export const SnapshotSchema = {
 	more: Type.Integer({ description: "How many more were left out." }),
-	namespaces_unavailable: Type.Array(Type.String(), { description: "Unreadable notebooks or notes; the results may be missing them." }),
+	namespaces_unavailable: Type.Array(Type.String(), { description: "Unreadable notebooks or notes." }),
 };
 
 export const NotesWriteDataSchema = Type.Object({
 	...NoteIdentitySchema,
-	outcome: Type.Union([Type.Literal("created"), Type.Literal("overwrote"), Type.Literal("uncrumpled")], { description: "`uncrumpled`: it was crumpled; this write brought it back." }),
+	outcome: Type.Union([Type.Literal("created"), Type.Literal("overwrote"), Type.Literal("uncrumpled")]),
 }, { additionalProperties: false });
 export type NotesWriteData = Static<typeof NotesWriteDataSchema>;
 
 export const NotesUpdateDataSchema = Type.Object({
 	...NoteIdentitySchema,
-	change_kind: Type.Union([Type.Literal("none"), Type.Literal("body"), Type.Literal("metadata"), Type.Literal("moved")], { description: "`none`: the note already looked like that." }),
+	change_kind: Type.Union([Type.Literal("none"), Type.Literal("body"), Type.Literal("metadata"), Type.Literal("moved")]),
 	rename_from: Type.Optional(Type.String()),
 }, { additionalProperties: false });
 export type NotesUpdateData = Static<typeof NotesUpdateDataSchema>;

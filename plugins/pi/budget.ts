@@ -11,7 +11,7 @@ import { arrangeAnchoredReminders, type AnchorDetails } from "./anchored.js";
 import { output } from "./tool-result.js";
 
 export const ContextRemainingOutputSchema = Type.Object({
-	remaining_tokens: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()], { description: "Tokens left before the forced wipe; null when unknown." }),
+	remaining_tokens: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
 }, { additionalProperties: false });
 
 /** Remaining tokens in the provider's active window, or null without a usable estimate. */
