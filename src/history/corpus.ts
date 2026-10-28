@@ -8,7 +8,7 @@ export type HistorySession = {
 	harness: HistoryHarness;
 	id: string;
 	modifiedAt: number;
-	load(): Promise<HistorySessionData>;
+	load(queries?: readonly string[]): Promise<HistorySessionData | undefined>;
 };
 export type HistoryCorpus = {
 	currentHarness: HistoryHarness;
@@ -57,8 +57,14 @@ export async function resolveSession(corpus: HistoryCorpus | undefined, selector
 	return success(matches[0]!);
 }
 
-export async function loadHistorySession(session: HistorySession): Promise<Outcome<HistorySessionData>> {
-	try { return success(await session.load()); }
+export function loadHistorySession(session: HistorySession): Promise<Outcome<HistorySessionData>>;
+export function loadHistorySession(session: HistorySession, queries: readonly string[] | undefined): Promise<Outcome<HistorySessionData | undefined>>;
+export async function loadHistorySession(session: HistorySession, queries?: readonly string[]): Promise<Outcome<HistorySessionData | undefined>> {
+	try {
+		const data = await session.load(queries);
+		if (data === undefined && !queries?.length) throw new Error("Session returned no history");
+		return success(data);
+	}
 	catch (error) {
 		return failure("history_unavailable", `Cannot read session ${sessionIdentity(session)}: ${error instanceof Error ? error.message : String(error)}`);
 	}

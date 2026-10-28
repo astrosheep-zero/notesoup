@@ -17,21 +17,23 @@ Within the requested harness an exact ID wins over prefixes. Without a harness, 
 
 Explicit targeting always returns the canonical `session: "<harness>:<full-id>"`, even when the target happens to be the current session. Headers become `session <harness>:<id> | seq <seq> | <role>`. `page_older`, `page_newer`, folded-row `expand`, and read `neighborhood` recipes carry that same canonical selector. Copy it into subsequent `history_read` calls, including reads continued with `next_offset_chars`.
 
-## Search across sessions
+## Browse or search across sessions
 
-Any selector containing `*` is a multi-session search; `*` matches any string and all other characters are literal. `*` covers all available harnesses, `pi:*` restricts to Pi, and `claude:prefix*` narrows by session ID.
+Any selector containing `*` selects multiple sessions; `*` matches any string and all other characters are literal. `*` covers all available harnesses, `pi:*` restricts to Pi, and `claude:prefix*` narrows by session ID.
 
 ```js
+history_list({ session: "*" }) // Recent sessions, one opening prompt/topic each
 history_list({ session: "*", query: ["deployment", "rollback"], limit: 20 })
 history_list({ session: "codex:*", query: "migration", roles: ["tool"], since: "2026-10-01" })
 ```
 
-- A non-empty `query` is required (`missing_query`). Empty strings/lists and lists containing only empty entries do not count. Matching is literal, case-insensitive, and ORs a list of texts, as in one-session search.
+- With a non-empty `query`, matching is literal, case-insensitive, and ORs a list of texts, as in one-session search. Local files are conservatively pre-filtered before full decoding: JSON escapes, Unicode case folding, generated event text and inherited Codex history must not lose hits. Uncertain cases use the full decoder.
+- Without `query` (including empty strings/lists or lists containing only empty entries), return a recent-sessions overview. Sessions are considered newest-modified first, or oldest-modified first with `from: "oldest"`; loading stops once `limit` sessions (default 20) produce a representative. Apply `roles`, `since` and `until` before choosing each representative: without roles, prefer the first visible user event, falling back to the latest visible dialogue event or latest event of any role; with roles, choose the latest matching visible event. Sort the chosen representatives by event time, oldest first. There are no folded rows.
 - `before_seq` and `after_seq` refuse with `invalid_bounds`: seqs from different sessions cannot define a common range.
 - `history_read` refuses wildcard selectors with `invalid_session`; take a specific `session` and `seq` from a search hit instead.
-- Every role is searched, including tool arguments/output and context; `roles` can narrow this. There are no folded rows.
+- With a query, every role is searched, including tool arguments/output and context; `roles` can narrow this. There are no folded rows.
 - `since` is inclusive and `until` exclusive. Time-bounded searches exclude events with no usable timestamp.
-- Files are discovered newest-modified first. Hits are merged by event time, oldest first, with a deterministic session/seq tie-break; untimed events sort before timed events. `limit` counts from the newest end by default, or the oldest with `from: "oldest"`. The complete text and structured result still share the 32 KiB budget, so a large hit can reduce the admitted page.
+- Search hits are merged by event time, oldest first, with a deterministic session/seq tie-break; untimed events sort before timed events. For query searches, `limit` counts from the newest event end by default, or the oldest with `from: "oldest"`. The complete text and structured result still share the 32 KiB budget, so large previews can reduce the admitted page.
 - Each event carries its canonical `session`. `page_older` and `page_newer` are always null. Narrow by session pattern, query, roles or time rather than trying to page across per-session seqs.
 
 ## Local discovery and limits
@@ -39,11 +41,11 @@ history_list({ session: "codex:*", query: "migration", roles: ["tool"], since: "
 | Harness | Default source | Selection/decoding |
 | --- | --- | --- |
 | Pi | `~/.pi/agent/sessions/<workspace>/<timestamp>_<id>.jsonl` | Current session uses the native active branch. Offline current-format files follow persisted parent links from the last tree entry, preserving append seqs and inactive-branch holes. |
-| Claude | `~/.claude/projects/<project>/<id>.jsonl` | The current session still requires its live, confirmed append head. Offline files require a unique graph leaf (including logical compact links); multiple possible leaves refuse rather than choosing by append order. Only confirmed ancestors are exposed. |
+| Claude | `~/.claude/projects/<project>/<id>.jsonl` | The current session still requires its live, confirmed append head. Offline files account for logical compact links, prefer non-attachment graph leaves when available, and select the last remaining leaf in transcript order. Only that leaf's confirmed ancestors are exposed; a graph with no leaves still refuses. |
 | Codex | `~/.codex/sessions/YYYY/MM/DD/rollout-...-<threadId>.jsonl(.zst)` | The same strict 0.160.1 rollout/lineage decoder as current-session history; compressed files need Node >=22.15. Root `session_id` is not a child thread ID. |
 | DSH | `ctx.sessionQuery.listSessions()` / `readSession(id)` | Available inside DSH only, over its live-preferred local session corpus. Other hosts cannot discover DSH files themselves. |
 
-Filesystem discovery does not follow directory symlinks or recurse into Claude subagent stores. Missing roots are empty. Repeated native files for one qualified ID produce one descriptor (newest modified); the current live binding wins over its on-disk descriptor. Discovery and decoding never mutate transcript bytes or modification times. Unsupported/corrupt or unreadable selected transcripts return `history_unavailable` naming the session; a wildcard search does not silently present partial results as complete. A readable Claude ancestry gap appears as an optional `notice` in cross-session page/read data and in rendered text; it stays outside event text and search/read offsets and counts against the output budget.
+Filesystem discovery does not follow directory symlinks or recurse into Claude subagent stores. Missing roots are empty. Repeated native files for one qualified ID produce one descriptor (newest modified); the current live binding wins over its on-disk descriptor. Discovery and decoding never mutate transcript bytes or modification times. Unsupported/corrupt or unreadable selected transcripts return `history_unavailable` naming the session for single-session list/read calls. Wildcard searches and overviews skip individual sessions that cannot load; an empty wildcard result is not proof that an event never happened. A readable Claude ancestry gap appears as an optional `notice` in cross-session page/read data and in rendered text; it stays outside event text and search/read offsets and counts against the output budget.
 
 The default roots respect `PI_CODING_AGENT_DIR` (Pi agent directory), `CLAUDE_CONFIG_DIR` (Claude config directory), and `CODEX_HOME` (Codex home). For direct root overrides use absolute paths in `NOTESOUP_HISTORY_PI_ROOT`, `NOTESOUP_HISTORY_CLAUDE_ROOT`, and `NOTESOUP_HISTORY_CODEX_ROOT`; these name the **sessions**, **projects**, and **sessions** directories respectively, not notes storage. `NOTESOUP_HOME` only changes notes.
 

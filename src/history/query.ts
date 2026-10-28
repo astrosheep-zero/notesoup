@@ -164,16 +164,27 @@ export function selectPage(projection: HistoryProjection, params: HistorySelecti
 
 /** Validate before corpus discovery or I/O: per-session seqs cannot bound a multi-session search. */
 export function corpusSelection(params: HistorySelection): Outcome<HistorySelection> {
-	const scoped = resolveSelection(params);
-	if (!scoped.ok) return scoped;
-	if (scoped.data.query === undefined) return failure("missing_query", "Wildcard session search requires a non-empty `query`.");
 	if (params.before_seq !== undefined || params.after_seq !== undefined) return failure("invalid_bounds", "`before_seq` and `after_seq` are per-session; omit them for wildcard session search.");
-	return scoped;
+	return resolveSelection(params);
 }
 
-/** Merge events, never folds or per-session cursors. Equal timestamps have a stable identity tie-break. */
+/** One topic per session, after role/time filtering; empty dialogue envelopes are not visible. */
+export function sessionRepresentative(projection: HistoryProjection, scoped: HistorySelection): HistoryEvent | undefined {
+	const events = filteredItems(projection, scoped, false).filter((event) =>
+		(event.role !== "user" && event.role !== "assistant") || eventDocument(event) !== "");
+	if (scoped.roles) return events.at(-1);
+	return events.find((event) => event.role === "user")
+		?? events.filter((event) => event.role === "assistant").at(-1)
+		?? events.at(-1);
+}
+
+/** Merge hits or session representatives, never folds or per-session cursors. Timestamp ties use identity. */
 export function selectCorpusPage(sessions: { session: string; projection: HistoryProjection }[], scoped: HistorySelection, fits: (page: HistoryPage) => boolean, maxChars: number): Outcome<HistoryPage> {
-	const candidates = sessions.flatMap(({ session, projection }) => prepareSelection(projection, { ...scoped, session }).candidates);
+	const candidates = sessions.flatMap(({ session, projection }): Candidate[] => {
+		if (scoped.query !== undefined) return prepareSelection(projection, { ...scoped, session }).candidates;
+		const event = sessionRepresentative(projection, scoped);
+		return event === undefined ? [] : [{ session, event }];
+	});
 	const time = (event: HistoryEvent) => event.createdAt === undefined || Number.isNaN(Date.parse(event.createdAt)) ? -Infinity : Date.parse(event.createdAt);
 	candidates.sort((a, b) => (time(a.event) - time(b.event) || a.session!.localeCompare(b.session!) || a.event.seq - b.event.seq));
 	return selectPrepared({ candidates, multi: true }, scoped, fits, maxChars);

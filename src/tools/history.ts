@@ -3,7 +3,7 @@ import { Type, type Static } from "typebox";
 import { HISTORY_PREVIEW_CHARS, MAX_READ_WINDOW_CHARS } from "./output.js";
 import { failure, fitsResult, resultSchema, readTextWindow, renderOutcome, renderTextWindow, success, TextWindowRequestSchema, TextWindowSchema, type Operation } from "./result.js";
 import { historyRoles, searchQuery } from "./schema.js";
-import { HistoryPageSchema, corpusSelection, selectCorpusPage, selectPage, type HistoryPage } from "../history/query.js";
+import { HistoryPageSchema, corpusSelection, selectCorpusPage, selectPage, sessionRepresentative, type HistoryPage } from "../history/query.js";
 import { currentHistory, loadHistorySession, matchesSession, parseSessionSelector, resolveSession, sessionIdentity, type HistoryContext } from "../history/corpus.js";
 import { allItems, eventDocument, nestedCallSummary, toolSummary, HistoryRoleSchema, NestedCallSummarySchema, ToolSummarySchema, type HistoryFoldedRow, type HistoryPageItem } from "../history/history.js";
 
@@ -77,7 +77,7 @@ const plainText: HistoryTextWrapper = (text) => text;
 
 /* ------------------------------------------------------------------ history_list */
 
-const sessionParameter = Type.Optional(Type.String({ minLength: 1, description: "(optional) Session ID or unique prefix, optionally pi:, claude:, codex:, or dsh:. Omit for this session. In history_list, * searches sessions (query required); history_read needs one session." }));
+const sessionParameter = Type.Optional(Type.String({ minLength: 1, description: "(optional) Session ID or unique prefix, optionally pi:, claude:, codex:, or dsh:. Omit for this session. In history_list, * searches sessions with query or lists recent sessions without it; history_read needs one session." }));
 
 export const historyListParameters = Type.Object({
 	session: sessionParameter,
@@ -95,7 +95,7 @@ export const historyListParameters = Type.Object({
 export const historyList: Operation<typeof historyListParameters, HistoryPage, [HistoryContext, HistoryTextWrapper?]> = {
 	name: "history_list",
 	label: "History list items",
-	description: "Browse or search events, a page at a time. Omit session for this session; pass an ID/prefix for another, or * with query to search across local harnesses. Read one in full with `history_read`.",
+	description: "Browse or search events, a page at a time. Omit session for this session; pass an ID/prefix for another, or * to browse recent sessions across local harnesses (add query to search). Read one in full with `history_read`.",
 	parameters: historyListParameters,
 	outputSchema: resultSchema(HistoryPageSchema),
 	async execute(params, context, wrapText = plainText) {
@@ -111,13 +111,17 @@ export const historyList: Operation<typeof historyListParameters, HistoryPage, [
 			if (!scoped.ok) return scoped;
 			if (corpus === undefined) return failure("unknown_session", "This host supplied no cross-session history corpus.");
 			const sessions = (await corpus.sessions(selector.data.harness)).filter((session) => matchesSession(session, selector.data));
+			const queries = Array.isArray(scoped.data.query) ? scoped.data.query : undefined;
+			if (!queries) sessions.sort((a, b) => (scoped.data.from === "oldest" ? a.modifiedAt - b.modifiedAt : b.modifiedAt - a.modifiedAt) || sessionIdentity(a).localeCompare(sessionIdentity(b)));
 			const loaded = [];
 			const notices: string[] = [];
 			for (const session of sessions) {
-				const result = await loadHistorySession(session);
-				if (!result.ok) return result;
+				const result = await loadHistorySession(session, queries);
+				if (!result.ok || !result.data) continue;
+				if (!queries && !sessionRepresentative(result.data.projection, scoped.data)) continue;
 				loaded.push({ session: sessionIdentity(session), projection: result.data.projection });
 				if (result.data.notice) notices.push(`session ${sessionIdentity(session)}: ${result.data.notice}`);
+				if (!queries && loaded.length >= Math.max(1, params.limit ?? 20)) break;
 			}
 			const notice = notices.length ? { notice: notices.join("") } : {};
 			const result = selectCorpusPage(loaded, scoped.data, (page) => fits({ ...page, ...notice }), maxChars);

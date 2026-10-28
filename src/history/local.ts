@@ -5,11 +5,12 @@ import { join } from "node:path";
 import { piHistoryFromJsonl } from "./pi.js";
 import { claudeHistoryFromJsonl, offlineClaudeHead } from "./claude.js";
 import { readCodexHistory } from "./codex.js";
-import { sessionIdentity, type HistoryCorpus, type HistoryHarness, type HistorySession, type HistorySessionData } from "./corpus.js";
+import { readCodexTranscriptBytes } from "./codex-transcript.js";
+import { sessionIdentity, type HistoryCorpus, type HistorySession } from "./corpus.js";
 
 export type LocalHistoryRoots = Partial<Record<"pi" | "claude" | "codex", string | null>>;
 export type LocalHistoryOptions = {
-	current: { harness: HistoryHarness; id: string; load(): Promise<HistorySessionData> };
+	current: Pick<HistorySession, "harness" | "id" | "load">;
 	/** Undefined uses the harness default; null disables that harness's filesystem discovery. */
 	roots?: LocalHistoryRoots;
 	home?: string;
@@ -42,6 +43,28 @@ async function filesAt(root: string, depth: number): Promise<string[]> {
 	return paths;
 }
 
+/** Only prove misses, not hits. Decode JSON escapes without building rows/projections.
+ * Use letter fragments so joined blocks/formatted arguments cannot hide a match. Keep nested
+ * escapes, generated presentation words and inherited Codex history for the full decoder.
+ */
+function mayMatch(text: string, queries: readonly string[], codex: boolean): boolean {
+	const raw = text.replace(/\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4})/g, (escape) => JSON.parse(`"${escape}"`) as string);
+	const presentation = `Codex unknown arguments not recorded output nested calls complete incomplete terminal ms image audio items null
+		copied subagent inference prefix omitted child-local history starts at native ordinal copied model context
+		does not prove original parent event addresses compaction boundary replacement_history is an inference checkpoint
+		not new conversation events opaque content omitted not recovered plaintext MCP completion without a recorded raw call
+		FunctionCallOutput display without raw output encrypted content unavailable world_state snapshot patch omitted from
+		the text projection not a newly spoken message native structured retained context not newly spoken dialogue`;
+	return raw.includes("\\") || (codex && raw.includes('"history_base"')) || queries.some((query) => {
+		const words = query.match(/\p{L}+/gu);
+		return words === null || words.some((word) => {
+			// Letter fragments are regex literals; use event search's Unicode folding.
+			const literal = new RegExp(word, "iu");
+			return literal.test(text) || literal.test(raw) || literal.test(presentation);
+		});
+	});
+}
+
 async function localSessions(harness: "pi" | "claude" | "codex", root: string): Promise<HistorySession[]> {
 	const paths = await filesAt(root, harness === "codex" ? 3 : 1);
 	const sessions: HistorySession[] = [];
@@ -56,9 +79,11 @@ async function localSessions(harness: "pi" | "claude" | "codex", root: string): 
 		catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
 		sessions.push({
 			harness, id, modifiedAt,
-			async load() {
+			async load(queries) {
+				if (harness === "codex" && !queries?.length) return { projection: (await readCodexHistory({ threadId: id, transcriptPath: path })).projection };
+				const text = harness === "codex" ? (await readCodexTranscriptBytes(path)).toString("utf8") : await readFile(path, "utf8");
+				if (queries?.length && !mayMatch(text, queries, harness === "codex")) return undefined;
 				if (harness === "codex") return { projection: (await readCodexHistory({ threadId: id, transcriptPath: path })).projection };
-				const text = await readFile(path, "utf8");
 				if (harness === "pi") return { projection: piHistoryFromJsonl(text, id) };
 				const projection = claudeHistoryFromJsonl(text, { sessionId: id, headUuid: offlineClaudeHead(text) });
 				const missing = projection.missingAncestors;

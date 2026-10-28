@@ -8,7 +8,7 @@ import { Check } from "typebox/value";
 import { localHistoryCorpus, type LocalHistoryRoots } from "../src/history/local.js";
 import { parseSessionSelector, type HistoryContext, type HistoryHarness, type HistorySession } from "../src/history/corpus.js";
 import { allItems, projectHistory, type DecodedHistoryItem, type HistoryProjection } from "../src/history/history.js";
-import { offlineClaudeHead } from "../src/history/claude.js";
+import { claudeHistoryFromJsonl, offlineClaudeHead } from "../src/history/claude.js";
 import { piHistoryFromJsonl } from "../src/history/pi.js";
 import { historyList, historyRead } from "../src/tools/history.js";
 import { TOOL_OUTPUT_MAX_BYTES } from "../src/tools/output.js";
@@ -138,11 +138,12 @@ test("all single-session recipes preserve the resolved identity, including folde
 
 test("wildcard refusals precede discovery, and read accepts no wildcard selector", async () => {
 	const ctx: HistoryContext = { current: () => { throw new Error("must not load current"); }, corpus: { currentHarness: "pi", sessions: async () => { throw new Error("must not discover"); } } };
-	for (const query of [undefined, "", [], ["", ""]]) {
-		refusal(await historyList.execute({ session: "*", query }, ctx), "missing_query");
-	}
-	for (const bounds of [{ before_seq: 10 }, { after_seq: 1 }, { before_seq: 10, after_seq: 1 }]) {
-		refusal(await historyList.execute({ session: "*", query: "needle", ...bounds }, ctx), "invalid_bounds");
+	for (const session of ["*", "pi:*", "pre*fix"]) {
+		for (const query of [undefined, "", [], ["", ""], "needle"]) {
+			for (const bounds of [{ before_seq: 10 }, { after_seq: 1 }, { before_seq: 10, after_seq: 1 }]) {
+				refusal(await historyList.execute({ session, query, ...bounds }, ctx), "invalid_bounds");
+			}
+		}
 	}
 	for (const session of ["*", "pi:*", "cl*", "dsh:pre*suffix"]) {
 		refusal(await historyRead.execute({ session, seq: 1 }, ctx), "invalid_session");
@@ -193,6 +194,108 @@ test("wildcard query merges every role chronologically, limits from either end, 
 	assert.equal(data(await historyList.execute({ session: "pi:absent*", query: "needle" }, ctx)).items.length, 0);
 	assert.ok(Check(historyList.outputSchema, page));
 	assert.match(historyList.render(result), /session pi:pi-one \| seq 1 \| user/);
+});
+
+test("query-less wildcards browse recent sessions, normalize empty queries, and keep canonical IDs", async (t) => {
+	const { ctx } = await fixture(t);
+	for (const query of [undefined, "", [], ["", ""]]) {
+		const result = await historyList.execute({ session: "*", query }, ctx);
+		const page = data(result);
+		assert.deepEqual(page.items.map((item) => "seq" in item ? [item.session, item.seq, item.role] : null), [
+			["pi:pi-one", 1, "user"], ["claude:claude-one", 1, "user"], ["pi:current", 1, "user"], [`codex:${CODEX}`, 2, "assistant"],
+		]);
+		assert.equal(page.page_older, null);
+		assert.equal(page.page_newer, null);
+		assert.ok(Check(historyList.outputSchema, page));
+	}
+	const harness = data(await historyList.execute({ session: "claude:*" }, ctx));
+	assert.deepEqual(harness.items.map((item) => item.session), ["claude:claude-one"]);
+	assert.equal(data(await historyList.execute({ session: "pi:absent*" }, ctx)).items.length, 0);
+});
+
+test("session overviews order discovery by mtime, stop at the session limit, then sort representatives by event time", async () => {
+	const loaded: number[] = [];
+	const sessions = Array.from({ length: 25 }, (_, index): HistorySession => {
+		const createdAt = new Date(Date.parse(AT) + (25 - index) * 1000).toISOString();
+		return {
+			harness: "pi", id: `s-${index}`, modifiedAt: index,
+			async load(queries) {
+				assert.equal(queries, undefined);
+				loaded.push(index);
+				return { projection: projectHistory([{ windowId: "w", items: [{ seq: 1, windowId: "w", role: "user", text: `topic ${index}`, createdAt }] }], 1, new Set([1])) };
+			},
+		};
+	});
+	const ctx = context(sessions);
+	const recent = data(await historyList.execute({ session: "*" }, ctx));
+	assert.deepEqual(loaded, Array.from({ length: 20 }, (_, index) => 24 - index));
+	assert.deepEqual(recent.items.map((item) => item.session), loaded.map((index) => `pi:s-${index}`));
+	loaded.length = 0;
+	const oldest = data(await historyList.execute({ session: "*", from: "oldest", limit: 2 }, ctx));
+	assert.deepEqual(loaded, [0, 1]);
+	assert.deepEqual(oldest.items.map((item) => item.session), ["pi:s-1", "pi:s-0"]);
+	loaded.length = 0;
+	const pattern = data(await historyList.execute({ session: "pi:s-2*", limit: 2 }, ctx));
+	assert.deepEqual(loaded, [24, 23]);
+	assert.deepEqual(pattern.items.map((item) => item.session), ["pi:s-24", "pi:s-23"]);
+});
+
+test("session representatives respect visibility, role/time filters, opening users and dialogue/any fallbacks", async () => {
+	const at = (seconds: number) => new Date(Date.parse(AT) + seconds * 1000).toISOString();
+	const messages: [DecodedHistoryItem["role"], string, number][] = [
+		["system", "early context", 0], ["user", "", 0], ["user", "opening topic", 1],
+		["assistant", "visible reply", 2], ["user", "later topic", 3], ["tool", "tool output", 4],
+		["assistant", "", 5], ["system", "late context", 6],
+	];
+	const p = projectHistory([{ windowId: "w", items: messages.map(([role, text, seconds], index) => ({ seq: index + 1, windowId: "w", role, text, createdAt: at(seconds) })) }], 8, new Set([1, 2, 3, 4, 5, 6, 7, 8]));
+	const ctx = context([descriptor("claude", "topic", p)]);
+	const chosen = async (params: Parameters<typeof historyList.execute>[0]) => data(await historyList.execute({ session: "*", ...params }, ctx)).items.map((item) => "seq" in item ? item.seq : "folded");
+	assert.deepEqual(await chosen({}), [3]);
+	assert.deepEqual(await chosen({ roles: ["user"] }), [5]);
+	assert.deepEqual(await chosen({ roles: ["assistant"] }), [4]);
+	assert.deepEqual(await chosen({ roles: ["user", "assistant"] }), [5]);
+	assert.deepEqual(await chosen({ roles: ["context", "tool"] }), [8]);
+	assert.deepEqual(await chosen({ roles: ["tool"] }), [6]);
+	assert.deepEqual(await chosen({ roles: [] }), []);
+	assert.deepEqual(await chosen({ since: at(2), until: at(3) }), [4]);
+	assert.deepEqual(await chosen({ since: at(3) }), [5]);
+	assert.deepEqual(await chosen({ until: at(1) }), [1]);
+	assert.deepEqual(await chosen({ since: at(4) }), [8]);
+	assert.deepEqual(await chosen({ since: at(4), roles: ["user"] }), []);
+	assert.deepEqual(await chosen({ since: at(7) }), []);
+	const noUsers = { ...p, windows: p.windows.map((window) => ({ ...window, items: window.items.filter((item) => item.role !== "user") })) };
+	const fallback = data(await historyList.execute({ session: "*" }, context([descriptor("pi", "assistant-topic", noUsers)])));
+	assert.deepEqual(fallback.items.map((item) => "seq" in item ? item.seq : null), [4]);
+});
+
+test("empty, filtered-out and unavailable sessions do not consume overview slots", async () => {
+	const loaded: string[] = [];
+	const sessions = [
+		{ ...descriptor("pi", "broken"), modifiedAt: 6, load: async () => { throw new Error("unreadable"); } },
+		{ ...descriptor("pi", "empty", projectHistory([], 0, new Set())), modifiedAt: 5 },
+		{ ...descriptor("pi", "filtered", projection("context", "system")), modifiedAt: 4 },
+		{ ...descriptor("pi", "topic"), modifiedAt: 3 },
+		{ ...descriptor("pi", "unneeded"), modifiedAt: 2, load: async () => { throw new Error("must not load beyond limit"); } },
+	].map((session) => ({ ...session, async load() { loaded.push(session.id); return session.load(); } }));
+	const page = data(await historyList.execute({ session: "*", roles: ["user"], limit: 1 }, context(sessions)));
+	assert.deepEqual(page.items.map((item) => item.session), ["pi:topic"]);
+	assert.ok(loaded.includes("empty") && loaded.includes("filtered") && !loaded.includes("unneeded"));
+	assert.deepEqual(data(await historyList.execute({ session: "*" }, context([]))), { items: [], page_older: null, page_newer: null });
+});
+
+test("wildcard queries reach lazy loaders and pre-filtered misses are not errors", async () => {
+	const seen: (readonly string[] | undefined)[] = [];
+	const ctx = context([
+		{ ...descriptor("pi", "miss"), async load(queries) { seen.push(queries); return undefined; } },
+		{ ...descriptor("pi", "broken"), async load(queries) { seen.push(queries); throw new Error("unsupported"); } },
+		{ ...descriptor("claude", "hit"), async load(queries) { seen.push(queries); return { projection: projection("other") }; } },
+	]);
+	const page = data(await historyList.execute({ session: "*", query: ["", "needle", "other"] }, ctx));
+	assert.equal(page.items.length, 5);
+	assert.ok(page.items.every((item) => item.session === "claude:hit"));
+	assert.deepEqual(seen, [["needle", "other"], ["needle", "other"], ["needle", "other"]]);
+	refusal(await historyList.execute({ session: "pi:miss" }, ctx), "history_unavailable");
+	refusal(await historyRead.execute({ session: "pi:broken", seq: 1 }, ctx), "history_unavailable");
 });
 
 test("query offsets and text continuation retain cross-session identity and Unicode coordinates", async (t) => {
@@ -262,6 +365,12 @@ test("oversized cross-session reads/searches obey both wire budgets and retain c
 	assert.ok(Buffer.byteLength(historyRead.render(read)) <= TOOL_OUTPUT_MAX_BYTES);
 	assert.equal(data(read).session, "codex:long-id");
 	assert.ok(data(read).next_offset_chars! > 0);
+	const overview = await historyList.execute({ session: "*", max_chars_per_item: 50_000 }, ctx);
+	assert.ok(Buffer.byteLength(JSON.stringify(data(overview))) <= TOOL_OUTPUT_MAX_BYTES);
+	assert.ok(Buffer.byteLength(historyList.render(overview)) <= TOOL_OUTPUT_MAX_BYTES);
+	assert.equal(data(overview).items.length, 1);
+	assert.equal(data(overview).page_older, null);
+	assert.equal(data(overview).page_newer, null);
 });
 
 test("qualified lookup and current-harness matches do not inspect unrelated roots", async (t) => {
@@ -296,12 +405,126 @@ test("cross-session Claude gaps are visible even on an empty page, budgeted, and
 	assert.ok(Buffer.byteLength(historyRead.render(read)) <= TOOL_OUTPUT_MAX_BYTES);
 });
 
-test("invalid persisted sessions refuse visibly instead of fabricating a successful partial corpus", async (t) => {
+test("wildcards skip corrupt and unreadable sessions, while single-session lists and reads still refuse", async (t) => {
 	const f = await fixture(t);
-	await f.put(join(f.roots.pi, "--workspace--", "2026-10-06_broken.jsonl"), "not-json\n");
-	const message = refusal(await historyList.execute({ session: "pi:*", query: "needle" }, f.ctx), "history_unavailable");
-	assert.match(message, /pi:broken/);
-	refusal(await historyRead.execute({ session: "pi:broken", seq: 1 }, f.ctx), "history_unavailable");
+	await f.put(join(f.roots.pi, "--workspace--", "2026-10-06_broken.jsonl"), "not-json needle\n", 100);
+	const sessions = await f.corpus.sessions();
+	await rm(f.claudePath);
+	const ctx: HistoryContext = { current: () => projection(), corpus: { currentHarness: "pi", sessions: async () => sessions } };
+	for (const query of [undefined, "needle"]) {
+		const page = data(await historyList.execute({ session: "*", query }, ctx));
+		assert.ok(page.items.length > 0);
+		assert.ok(page.items.every((item) => item.session !== "pi:broken" && item.session !== "claude:claude-one"));
+	}
+	for (const session of ["pi:broken", "claude:claude-one"]) {
+		assert.ok(refusal(await historyList.execute({ session, query: "absent" }, ctx), "history_unavailable").includes(session));
+		refusal(await historyRead.execute({ session, seq: 1 }, ctx), "history_unavailable");
+	}
+});
+
+test("local query misses skip full decoding for Pi, Claude and compressed/uncompressed Codex", async (t) => {
+	const f = await fixture(t);
+	for (const session of (await f.corpus.sessions()).filter((session) => session.id !== "current")) {
+		assert.equal(await session.load(["absentword"]), undefined, session.harness);
+		assert.ok(await session.load(["absentword", "NEEDLE"]), session.harness);
+	}
+	await f.put(f.codexPath.replace(/\.zst$/, ""), f.codexText, 100);
+	const uncompressed = (await f.corpus.sessions("codex"))[0]!;
+	assert.equal(await uncompressed.load(["absentword"]), undefined);
+	assert.ok(await uncompressed.load(["NEEDLE"]));
+	await f.put(f.piPath, "not-json unrelated\n");
+	await f.put(f.claudePath, "not-json unrelated\n");
+	await f.put(f.codexPath, zstdCompressSync(Buffer.from("not-json unrelated\n")));
+	await f.put(f.codexPath.replace(/\.zst$/, ""), "not-json unrelated\n", 100);
+	for (const session of (await f.corpus.sessions()).filter((session) => session.id !== "current")) {
+		assert.equal(await session.load(["needle"]), undefined, session.harness);
+		assert.equal(await session.load(["entirelyabsent phrasewithoutmatch"]), undefined, session.harness);
+		await assert.rejects(() => session.load());
+		await assert.rejects(() => session.load([]));
+		await assert.rejects(() => session.load(["unrelated"]));
+	}
+	await rm(f.codexPath.replace(/\.zst$/, ""));
+	const compressed = (await f.corpus.sessions("codex"))[0]!;
+	assert.equal(await compressed.load(["needle"]), undefined);
+	await assert.rejects(() => compressed.load());
+});
+
+test("raw filtering never loses escaped JSON, Unicode or OR-query matches", async (t) => {
+	const f = await fixture(t);
+	const content = 'NEEDLE 你好 😀 quote"slash\\ line\nbreak İ LONGſ CASEΣ';
+	const escapeText = (text: string) => text.replaceAll("NEEDLE", "\\u004e\\u0045\\u0045\\u0044\\u004c\\u0045")
+		.replaceAll("你好", "\\u4f60\\u597d").replaceAll("😀", "\\ud83d\\ude00").replaceAll("İ", "\\u0130");
+	await f.put(f.piPath, escapeText(rows([
+		{ type: "session", id: "pi-one" },
+		{ type: "message", id: "u", parentId: null, timestamp: AT, message: { role: "user", content } },
+	])));
+	await f.put(f.claudePath, escapeText(rows([
+		{ type: "user", uuid: "u", parentUuid: null, sessionId: "claude-one", timestamp: AT, message: { role: "user", content } },
+	])));
+	const codexText = escapeText(f.codexText.replace("Codex needle", JSON.stringify(content).slice(1, -1)));
+	await f.put(f.codexPath, zstdCompressSync(Buffer.from(codexText)));
+	for (const query of ["needle", "你好", "😀", 'quote"slash\\', "line\nbreak", "İ", "longs", "caseς", ["absentword", "needle"]]) {
+		const page = data(await historyList.execute({ session: "*", query }, f.ctx));
+		assert.deepEqual(page.items.map((item) => item.session), ["claude:claude-one", "pi:pi-one", `codex:${CODEX}`], JSON.stringify(query));
+	}
+	assert.deepEqual(data(await historyList.execute({ session: "*", query: "absentword" }, f.ctx)).items, []);
+});
+
+test("raw filtering preserves generated tool documents, compact arguments and nested JSON escapes", async (t) => {
+	const f = await fixture(t);
+	await f.put(f.piPath, rows([
+		{ type: "session", id: "pi-one" },
+		{ type: "message", id: "t", parentId: null, timestamp: AT, message: { role: "toolResult", content: [{ type: "text", text: "done" }] } },
+	]));
+	for (const query of ["unknown", "arguments", "output"]) {
+		const page = data(await historyList.execute({ session: "pi:pi-*", query }, f.ctx));
+		assert.equal(page.items.length, 1, query);
+	}
+	await f.put(f.piPath, rows([
+		{ type: "session", id: "pi-one" },
+		{ type: "message", id: "t", parentId: null, timestamp: AT, message: { role: "assistant", content: [{ type: "toolCall", id: "c", name: "read", arguments: { value: "\ud800" } }] } },
+	]));
+	assert.equal(data(await historyList.execute({ session: "pi:pi-*", query: "ud" }, f.ctx)).items.length, 1);
+	const codexRows = f.codexText.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+	codexRows[1].payload = { type: "function_call", call_id: "t", name: "read", arguments: '{ "path" : "\\u006eeedle" }' };
+	await f.put(f.codexPath, zstdCompressSync(Buffer.from(rows(codexRows))));
+	for (const query of ["needle", '"path":"needle"']) {
+		const page = data(await historyList.execute({ session: "codex:*", query }, f.ctx));
+		assert.equal(page.items.length, 1, query);
+	}
+});
+
+test("Codex raw pre-filtering preserves query hits inherited through history_base", async (t) => {
+	const f = await fixture(t);
+	const child = "019a0000-0000-7000-8000-000000000002";
+	const parent = rows([
+		{ type: "session_meta", ordinal: 0, timestamp: AT, payload: { id: CODEX, cwd: "/workspace", cli_version: "0.160.1", history_mode: "paginated", context_window: { window_id: WINDOW } } },
+		{ type: "response_item", ordinal: 1, timestamp: AT, payload: { type: "message", role: "user", content: [{ type: "input_text", text: "ancestralneedle" }] } },
+	]);
+	await f.put(f.codexPath, zstdCompressSync(Buffer.from(parent)));
+	await f.put(join(dirname(f.codexPath), `rollout-2026-10-06T01-02-03-${child}.jsonl`), rows([
+		{ type: "session_meta", ordinal: 2, timestamp: AT, payload: { id: child, cwd: "/workspace", cli_version: "0.160.1", history_mode: "paginated", history_base: { thread_id: CODEX, end_ordinal_exclusive: 2, end_byte_offset: Buffer.byteLength(parent) }, context_window: { window_id: WINDOW } } },
+		{ type: "response_item", ordinal: 3, timestamp: AT, payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "local only" }] } },
+	]));
+	const page = data(await historyList.execute({ session: `codex:${child}*`, query: "ancestralneedle" }, f.ctx));
+	assert.deepEqual(page.items.map((item) => "seq" in item ? [item.session, item.seq] : null), [[`codex:${child}`, 2]]);
+});
+
+test("offline Claude attachments and retry branches are readable and searchable through session selectors", async (t) => {
+	const f = await fixture(t);
+	await f.put(f.claudePath, rows([
+		{ type: "user", uuid: "u", parentUuid: null, sessionId: "claude-one", timestamp: AT, message: { role: "user", content: "topic" } },
+		{ type: "assistant", uuid: "left", parentUuid: "u", sessionId: "claude-one", timestamp: AT, message: { role: "assistant", content: "leftneedle" } },
+		{ type: "assistant", uuid: "right", parentUuid: "u", sessionId: "claude-one", timestamp: AT, message: { role: "assistant", content: "rightneedle" } },
+		{ type: "attachment", uuid: "hook", parentUuid: "u", sessionId: "claude-one", attachment: { type: "hook_success" } },
+	]));
+	assert.equal(data(await historyRead.execute({ session: "claude:claude-one", seq: 3 }, f.ctx)).text, "rightneedle");
+	refusal(await historyRead.execute({ session: "claude:claude-one", seq: 2 }, f.ctx), "not_on_branch");
+	for (const session of ["claude:claude-one", "claude:*"]) {
+		const page = data(await historyList.execute({ session, query: "needle" }, f.ctx));
+		assert.deepEqual(page.items.map((item) => "seq" in item ? item.seq : null), [3]);
+	}
+	assert.deepEqual(data(await historyList.execute({ session: "claude:*" }, f.ctx)).items.map((item) => "seq" in item ? item.seq : null), [1]);
 });
 
 test("offline Pi follows persisted parent links, preserves branch seq holes and rejects corrupt ancestry", async () => {
@@ -316,11 +539,22 @@ test("offline Pi follows persisted parent links, preserves branch seq holes and 
 	assert.throws(() => piHistoryFromJsonl(text, "wrong"), /different session/);
 });
 
-test("offline Claude requires one evidenced leaf, accounts for logical compact links, and never guesses among branches", () => {
+test("offline Claude prefers non-attachment leaves, then transcript order, and keeps compact links", () => {
 	const user = (uuid: string, parentUuid: string | null) => ({ type: "user", uuid, parentUuid, sessionId: "s", message: { role: "user", content: "text" } });
 	assert.equal(offlineClaudeHead(rows([user("u", null), user("a", "u")])), "a");
 	assert.equal(offlineClaudeHead(rows([user("u", null), { type: "system", uuid: "b", parentUuid: null, logicalParentUuid: "u", subtype: "compact_boundary" }, user("a", "b")])), "a");
 	assert.equal(offlineClaudeHead(rows([user("u", null), user("preserved", null), { type: "system", uuid: "b", parentUuid: null, logicalParentUuid: "u", subtype: "compact_boundary", compactMetadata: { preservedSegment: { headUuid: "preserved", tailUuid: "preserved" } } }, user("a", "b")])), "a");
-	assert.throws(() => offlineClaudeHead(rows([user("u", null), user("left", "u"), user("right", "u")])), /2 possible heads/);
+	const attachment = (uuid: string, parentUuid: string | null) => ({ type: "attachment", uuid, parentUuid, sessionId: "s", attachment: { type: "hook_success" } });
+	assert.equal(offlineClaudeHead(rows([user("u", null), user("left", "u"), user("right", "u")])), "right");
+	assert.equal(offlineClaudeHead(rows([user("u", null), user("right", "u"), user("left", "u")])), "left");
+	assert.equal(offlineClaudeHead(rows([user("u", null), user("left", "u"), user("right", "u"), user("left", "u")])), "left");
+	assert.equal(offlineClaudeHead(rows([user("u", null), user("answer", "u"), attachment("hook", "u")])), "answer");
+	assert.equal(offlineClaudeHead(rows([user("u", null), attachment("hook", "u")])), "hook");
+	assert.equal(offlineClaudeHead(rows([attachment("first", null), attachment("last", null)])), "last");
 	assert.throws(() => offlineClaudeHead(""), /0 possible heads/);
+	assert.throws(() => offlineClaudeHead(rows([user("a", "b"), user("b", "a")])), /0 possible heads/);
+	// Live decoding still requires a host-confirmed head, regardless of offline selection.
+	const branch = rows([user("u", null), user("left", "u"), user("right", "u")]);
+	assert.throws(() => claudeHistoryFromJsonl(branch, { sessionId: "s" }), /no confirmed active head/);
+	assert.deepEqual(allItems(claudeHistoryFromJsonl(branch, { sessionId: "s", headUuid: "left" })).map((item) => item.seq), [1, 2]);
 });

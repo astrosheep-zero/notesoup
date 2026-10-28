@@ -251,11 +251,14 @@ export function claudeHistoryFromJsonl(text: string, source: Omit<ClaudeHistoryS
 	return { ...projectHistory(windows, nextSeq - 1, branchSeqs), missingAncestors: [...missingAncestors], currentWindowOrdinal: "ordinal" in current ? current.ordinal : undefined };
 }
 
-/** Offline files have no live append binding. A unique graph leaf proves one ancestry; never pick among siblings by file order. */
+/** Offline files have no live append binding: prefer non-attachment leaves, then transcript order. */
 export function offlineClaudeHead(text: string): string {
 	const latest = new Map<string, Row>();
 	for (const row of rowsOf(text)) {
-		if (MESSAGE_TYPES.has(row.type as string)) latest.set(requiredString(row.uuid, "uuid"), row);
+		if (!MESSAGE_TYPES.has(row.type as string)) continue;
+		const uuid = requiredString(row.uuid, "uuid");
+		latest.delete(uuid);
+		latest.set(uuid, row);
 	}
 	const ancestors = new Set<string>();
 	for (const row of latest.values()) {
@@ -276,8 +279,10 @@ export function offlineClaudeHead(text: string): string {
 		}
 	}
 	const leaves = [...latest.keys()].filter((uuid) => !ancestors.has(uuid));
-	if (leaves.length !== 1) throw new Error(`Offline Claude transcript has ${leaves.length} possible heads; no confirmed unique leaf (refusing to guess a selected branch)`);
-	return leaves[0]!;
+	if (leaves.length === 0) throw new Error("Offline Claude transcript has 0 possible heads");
+	const nonAttachments = leaves.filter((uuid) => latest.get(uuid)!.type !== "attachment");
+	const candidates = nonAttachments.length ? nonAttachments : leaves;
+	return candidates.at(-1)!;
 }
 
 export async function readClaudeHistory(source: ClaudeHistorySource): Promise<ClaudeHistoryProjection> {

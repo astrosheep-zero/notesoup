@@ -172,7 +172,8 @@ async function referencedPath(home: string, rolloutId: string): Promise<string> 
 	if (matches.length !== 1) throw new Error(`Unavailable Codex lineage: rollout ${rolloutId} has ${matches.length ? "ambiguous native files" : "no local source file"}`);
 	return matches[0]!;
 }
-async function decodedBytes(path: string, remaining: number): Promise<Buffer> {
+/** Bounded decoded bytes, also used by the local corpus's pre-projection miss check. */
+export async function readCodexTranscriptBytes(path: string, remaining = MAX_BYTES): Promise<Buffer> {
 	const info = await stat(path);
 	if (!info.isFile() || info.size > remaining) throw new Error("Unavailable Codex transcript: read size limit exceeded or not a regular file");
 	const bytes = await readFile(path);
@@ -194,7 +195,7 @@ export async function readCodexTranscript(source: CodexTranscriptSource): Promis
 		while (true) {
 			if (segments.length >= MAX_SEGMENTS || seen.has(path)) throw new Error("Unavailable Codex lineage: cycle or ancestry depth limit exceeded");
 			seen.add(path);
-			const bytes = await decodedBytes(path, remaining);
+			const bytes = await readCodexTranscriptBytes(path, remaining);
 			remaining -= bytes.length;
 			const segment = segmentFromBytes(bytes, cutoff);
 			if (segments.length === 0 && segment.meta.id !== source.threadId) throw new Error(`Codex transcript belongs to thread ${String(segment.meta.id)}, not requested threadId ${source.threadId} (session_id is root-scoped)`);
