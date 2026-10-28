@@ -11,8 +11,12 @@ export const NOTES_PROTOCOL_CLOSE_TAG = "</notesoup:notes_protocol>";
  * The one sentence that tells the model how to end its window voluntarily. A host with no
  * model-facing reset tool replaces the whole sentence through BootToolNames.wipeSentence.
  */
+/** Pi's default agent slug: an unnamed agent shares its `@self` shelf with every other nameless one. */
+export const NAMELESS_AGENT = "anonymous";
 export const PROTOCOL_WIPE_SENTENCE = "If this feels like the right moment, call `empty_brain` and erase yourself with dignity.";
 export const PROTOCOL_HISTORY_SENTENCE = "History can still be dug up, probably: use `history_*` to excavate the mess, from old decisions to yesterday's missing socks. Found something? Write its seq down, or enjoy digging twice.";
+const PROTOCOL_SELF_NAMED = "- `@self/<path>` — yours. It follows you, not them. Reminders, grudges, who owes you a shoe, whatever.";
+const PROTOCOL_SELF_NAMELESS = `${PROTOCOL_SELF_NAMED} Except you have no name (\`anonymous\`), so this notebook is a public square shared by every nameless nobody out there. Keep it to things any nameless agent can use — don't post your own quirks as everyone's law or dump one-off junk in the town square. Strangers are reading it. Sleep tight~`;
 
 /**
  * Static protocol teaching adapted from Codex's token_budget.guidance_message to
@@ -42,7 +46,7 @@ An address decides who the note belongs to — and how long it is meant to last.
 - \`<path>\`, no @ — session notes, the ones from above: this session's state and loose ends. They go away with the session.
 - \`@project/<path>\` — this project's long memory: what stays true after the current thing is over, what future work must respect, and the rakes already stepped on. **Decisions, not diaries.** Raw logs, scorecards, and blow-by-blow recaps don't belong here — history already has them, and last week's news filed as current law is worse than no note. Don't copy what other docs already say.
 - \`@human/<path>\` — the long-term manual for your troublesome human, and only what stays true in EVERY project: how to deal with them, which lines not to cross, and what will make them accept the result. "The human said it" is not enough — if it stops being true the moment you switch projects, it was never theirs; it belongs to that project's notes. Today's mood is weather, not law. If you're unsure whether it belongs here, ask the human.
-- \`@self/<path>\` — yours. It follows you, not them. Reminders, grudges, who owes you a shoe, whatever. Got a name? Private. No name? Then it gets passed around every nameless nobody out there. Strangers. Reading your grudges. Sleep tight~
+${PROTOCOL_SELF_NAMELESS}
 - \`@model/<path>\` — different brains get different notes: big brains, small brains, careful ones, careless ones. They don't share homework. When a fallback swaps brains mid-window, the notebook swaps too.
 - \`@projects/<name>/<path>\` — read-only named project notes; discover names and root paths with \`notes_list\` glob \`@projects/*/**\`.
 - \`@sessions/<id>/<path>\` — read-only notes from a named session; find them with glob \`@sessions/*/**\`.
@@ -104,7 +108,7 @@ export const DEFAULT_BOOT_TOOL_NAMES = {
 	wipe: "empty_brain",
 } as const satisfies BootToolNames;
 
-export function renderProtocolBlock(tools: BootToolNames): string {
+export function renderProtocolBlock(tools: BootToolNames, agentName: string = NAMELESS_AGENT): string {
 	const names: Record<string, string> = {
 		"notes_*": tools.notes,
 		notes_list: tools.notesList,
@@ -114,9 +118,12 @@ export function renderProtocolBlock(tools: BootToolNames): string {
 	};
 	// Host-specific prose is injected before the closing tag, so it rides the same substitution
 	// pass and any tool names in it follow the host's bindings.
+	const base = agentName === NAMELESS_AGENT
+		? PROTOCOL_BLOCK
+		: PROTOCOL_BLOCK.replace(PROTOCOL_SELF_NAMELESS, () => PROTOCOL_SELF_NAMED);
 	const hinted = typeof tools.preResetHints === "string" && tools.preResetHints.length > 0
-		? PROTOCOL_BLOCK.replace(`\n${NOTES_PROTOCOL_CLOSE_TAG}`, () => `\n${tools.preResetHints!}\n${NOTES_PROTOCOL_CLOSE_TAG}`)
-		: PROTOCOL_BLOCK;
+		? base.replace(`\n${NOTES_PROTOCOL_CLOSE_TAG}`, () => `\n${tools.preResetHints!}\n${NOTES_PROTOCOL_CLOSE_TAG}`)
+		: base;
 	// The sentence is replaced before name substitution, so a replacement may speak the host's
 	// own words (a command line, a tool name) instead of any `notes_*`-style token.
 	const block = typeof tools.wipeSentence === "string" && tools.wipeSentence.length > 0

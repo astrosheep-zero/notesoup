@@ -1,5 +1,5 @@
 import type { NotesNamespace, NotesSnapshot } from "./snapshot.js";
-import { WINDOW_IDENTITY_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG, MAPS_BLOCK, CHEATSHEET_BOOT_MAX_CHARS, MAP_BOOT_MAX_CHARS, SHELF_FRESH_LIMIT, renderProtocolBlock, type BootToolNames } from "./text.js";
+import { WINDOW_IDENTITY_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG, MAPS_BLOCK, CHEATSHEET_BOOT_MAX_CHARS, MAP_BOOT_MAX_CHARS, NAMELESS_AGENT, SHELF_FRESH_LIMIT, renderProtocolBlock, type BootToolNames } from "./text.js";
 
 function relativeTime(timestamp: number, now: number): string {
 	const seconds = Math.trunc((timestamp - now) / 1000);
@@ -31,9 +31,6 @@ function indent(text: string): string {
 function section(label: string, body: string): string {
 	return `${label}\n${"─".repeat(Array.from(label).length)}\n\n${body}`;
 }
-
-/** Pi's default agent slug: an unnamed agent shares its `@self` shelf with every other nameless one. */
-const NAMELESS_AGENT = "anonymous";
 
 /** One closed boot snapshot: five tabbed shelves, current hands first, durable last; each shelf keeps its pinned pages and its own freshest pages. */
 function notesIndex(snapshot: NotesSnapshot, tools: BootToolNames, agentName: string, modelName: string): string {
@@ -121,5 +118,5 @@ export function renderBootBlock(data: BootRenderData): string {
 		}),
 	];
 	const identity = `${WINDOW_IDENTITY_OPEN_TAG}\n${lines.join("\n")}\n${WINDOW_IDENTITY_CLOSE_TAG}`;
-	return [identity, renderProtocolBlock(data.tools), MAPS_BLOCK, notesIndex(data.notes, data.tools, data.agentName, data.modelName)].join("\n\n");
+	return [identity, renderProtocolBlock(data.tools, data.agentName), MAPS_BLOCK, notesIndex(data.notes, data.tools, data.agentName, data.modelName)].join("\n\n");
 }

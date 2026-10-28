@@ -208,11 +208,13 @@ test("the shelves name their reader and the @self shelf says when it is shared",
 	]);
 	const named = await boot("faye", rows);
 	assert.ok(named.includes("@self — faye only"));
+	assert.equal(named.includes("public square"), false, "a named agent gets private @self copy without the anonymous square warning");
 	assert.ok(named.includes("@model — default only"));
 	assert.ok(named.includes("recent\n\n  SHARED_BODY"), "fresh pages sit under the renamed sub-heading");
 	assert.ok(named.indexOf("@self — faye only") < named.indexOf("@model — default only"), "shelf order is unchanged");
 	const nameless = await boot("anonymous", rows);
 	assert.ok(nameless.includes("@self — every nameless agent shares this"));
+	assert.ok(nameless.includes("public square shared by every nameless nobody out there"));
 	assert.equal(nameless.includes("@self — anonymous only"), false);
 	assert.equal(/memory|window/i.test(nameless.split("YOUR NOTES")[1] ?? ""), false, "a shelf label names a reader, not memory or a window");
 });
