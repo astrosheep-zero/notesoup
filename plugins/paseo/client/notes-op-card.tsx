@@ -50,11 +50,11 @@ export function NotesOpCard({ item, layout, theme }: PluginTimelineItemProps<Not
         disabled={!hasBody}
         style={({ pressed }) => ({ gap: 4, opacity: pressed && hasBody ? 0.7 : 1 })}
       >
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingRight: 10 }}>
-          <Text style={{ color: paper.inkMuted, fontSize: 11.5 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <Text style={{ color: paper.inkMuted, fontSize: 12 }}>
             {data.crumpled ? "crumpled" : title}{data.status === "running" ? " …" : ""}
           </Text>
-          <Text numberOfLines={1} style={{ color: data.crumpled ? paper.inkMuted : paper.ink, fontSize: 13, flex: 1, textDecorationLine: data.crumpled ? "line-through" : "none" }}>
+          <Text numberOfLines={1} style={{ color: data.crumpled ? paper.inkMuted : paper.ink, fontSize: 12, flex: 1, textDecorationLine: data.crumpled ? "line-through" : "none" }}>
             {data.address}
           </Text>
           {hasBody && <Icon name={expanded ? "ChevronUp" : "ChevronDown"} size={16} color={paper.inkMuted} />}
@@ -67,14 +67,14 @@ export function NotesOpCard({ item, layout, theme }: PluginTimelineItemProps<Not
             numberOfLines={2}
           />
         )}
-        {data.error !== undefined && <Text selectable style={{ color: paper.removed, fontSize: 13, lineHeight: 19 }}>{data.error}</Text>}
+        {data.error !== undefined && <Text selectable style={{ color: paper.removed, fontSize: 12, lineHeight: 18 }}>{data.error}</Text>}
       </Pressable>
       {expanded && hasBody && (
         <ScrollView style={{ maxHeight: layout.compact ? 280 : 400, marginTop: 2, borderTopWidth: 1, borderTopColor: paper.edge }} contentContainerStyle={{ gap: 5, paddingTop: 8 }} nestedScrollEnabled>
           {data.text !== undefined && <NoteMarkdown text={outputPreview(data.text)} paper={paper} />}
-          {data.preview !== undefined && <NoteMarkdown text={outputPreview(data.preview)} paper={paper} muted />}
+          {data.preview !== undefined && <NoteMarkdown text={outputPreview(data.preview)} paper={paper} />}
           {data.diff !== undefined && <DiffBody diff={outputPreview(data.diff)} paper={paper} />}
-          {data.renamedFrom !== undefined && <Text style={{ color: paper.inkMuted, fontSize: 11 }}>renamed from {data.renamedFrom}</Text>}
+          {data.renamedFrom !== undefined && <Text style={{ color: paper.inkMuted, fontSize: 12 }}>renamed from {data.renamedFrom}</Text>}
         </ScrollView>
       )}
     </PaperCard>

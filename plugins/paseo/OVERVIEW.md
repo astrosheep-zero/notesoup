@@ -8,7 +8,7 @@ Notes cards start collapsed; update cards also show the sentence just added. The
 
 Notes cards use the same projection for Pi live events and replayed history; Claude supplies its receipt text under the adapter's `output` field and its edits under `input.edits`. The UI does not depend on Pi's live-only `structuredContent`. Failed calls also read the adapter's error content (string or text blocks) or transport message when no result is available.
 
-`empty_brain` (including `mcp__notesoup__empty_brain`) becomes a divider for running, completed and failed calls. Pi's JSON rollover outcomes are preserved. Claude's plain acknowledgement only completes the tool call; it does not invent a Pi outcome or assert that the deferred reset has committed.
+`empty_brain` (including `mcp__notesoup__empty_brain`) becomes a divider for running, completed and failed calls. Pi's JSON rollover outcomes are preserved. A successful `brain emptied` divider with a `last_word` argument opens a selectable last-word modal when clicked. Claude's plain acknowledgement only completes the tool call; it does not invent a Pi outcome or assert that the deferred reset has committed.
 
 Automated tests check transformer payloads with source-derived adapter fixtures, not a live Paseo UI session.
 

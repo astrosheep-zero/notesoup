@@ -7,6 +7,7 @@ export const brainEmptySchema = z.object({
   status: z.enum(["running", "completed", "failed"]),
   // completed: rollover_requested | rollover_already_pending
   outcome: z.string().optional(),
+  lastWord: z.string().optional(),
   error: z.string().optional(),
 });
 export type BrainEmpty = z.infer<typeof brainEmptySchema>;

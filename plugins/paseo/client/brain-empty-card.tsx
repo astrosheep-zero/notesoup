@@ -1,5 +1,7 @@
 import type { PluginTimelineItemProps } from "@getpaseo/plugin/client";
-import { Text, View } from "react-native";
+import { Modal } from "@getpaseo/plugin/client/react-native";
+import { useState } from "react";
+import { Pressable, Text, View } from "react-native";
 import type { BrainEmpty } from "../shared/brain-empty.ts";
 
 function label(data: BrainEmpty): string {
@@ -23,18 +25,35 @@ function CutLine({ color }: { color: string }) {
 }
 
 export function BrainEmptyDivider({ item, theme }: PluginTimelineItemProps<BrainEmpty>) {
+  const [lastWordOpen, setLastWordOpen] = useState(false);
   const data = item.data;
   const refused = data.error !== undefined || data.status === "failed";
   const color = refused ? theme.colors.statusDanger : theme.colors.foregroundMuted;
+  const hasLastWord = data.outcome === "rollover_requested" && data.lastWord !== undefined;
   return (
-    <View style={{ paddingVertical: 6, gap: 3 }}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-        <CutLine color={color} />
-        <Text style={{ color, fontSize: 11.5, letterSpacing: 0.3 }}>{label(data)}</Text>
-        <CutLine color={color} />
-      </View>
-      {data.error !== undefined && (
-        <Text selectable style={{ color: theme.colors.statusDanger, fontSize: 12, textAlign: "center" }}>{data.error}</Text>
+    <View style={{ paddingVertical: 6 }}>
+      <Pressable
+        accessibilityRole={hasLastWord ? "button" : undefined}
+        accessibilityLabel={hasLastWord ? "Show last word" : undefined}
+        disabled={!hasLastWord}
+        onPress={hasLastWord ? () => setLastWordOpen(true) : undefined}
+        style={({ pressed }) => ({ gap: 3, opacity: pressed ? 0.7 : 1 })}
+      >
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+          <CutLine color={color} />
+          <Text style={{ color, fontSize: 11.5, letterSpacing: 0.3 }}>{label(data)}</Text>
+          <CutLine color={color} />
+        </View>
+        {data.error !== undefined && (
+          <Text selectable style={{ color: theme.colors.statusDanger, fontSize: 12, textAlign: "center" }}>{data.error}</Text>
+        )}
+      </Pressable>
+      {hasLastWord && (
+        <Modal title="Last word" open={lastWordOpen} onOpenChange={setLastWordOpen}>
+          <Modal.Content style={{ backgroundColor: theme.colors.surface2 }}>
+            <Text selectable style={{ color: theme.colors.foreground, fontSize: 14, lineHeight: 21 }}>{data.lastWord}</Text>
+          </Modal.Content>
+        </Modal>
       )}
     </View>
   );

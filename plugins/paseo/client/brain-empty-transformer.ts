@@ -20,11 +20,15 @@ function resultJson(output: unknown): Record<string, unknown> | undefined {
 
 function brainEmptyData(item: ToolCallItem): BrainEmpty | undefined {
   if (item.detail.type !== "unknown") return undefined;
+  const input = isRecord(item.detail.input) ? item.detail.input : undefined;
+  const rawLastWord = input?.last_word;
+  const lastWord = typeof rawLastWord === "string" ? rawLastWord.trim() : "";
+  const base = lastWord ? { lastWord } : {};
   if (item.status === "running") return { status: "running" };
   const wire = resultJson(item.detail.output);
   if (wire && typeof wire.error === "string") return { status: item.status === "failed" ? "failed" : "completed", error: wire.error };
   if (item.status === "failed") return { status: "failed", error: resultError(item.detail.output, item.error) };
-  if (wire && typeof wire.status === "string") return { status: "completed", outcome: wire.status };
+  if (wire && typeof wire.status === "string") return { status: "completed", outcome: wire.status, ...(wire.status === "rollover_requested" ? base : {}) };
   return { status: "completed" };
 }
 

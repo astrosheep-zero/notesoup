@@ -24,6 +24,14 @@ test("a successful call is a completed divider with the rollover outcome", () =>
   assert.deepEqual(brainEmptySchema.parse(result!.items[0]!.data), { status: "completed", outcome: "rollover_requested" });
 });
 
+test("a successful call carries its last word for the divider modal", () => {
+  const detail = jsonOut({ status: "rollover_requested" });
+  const result = transform({ detail: { ...detail, input: { last_word: "  remember the shoe  " } } });
+  assert.deepEqual(brainEmptySchema.parse(result!.items[0]!.data), {
+    status: "completed", outcome: "rollover_requested", lastWord: "remember the shoe",
+  });
+});
+
 test("an in-flight call shows as running from the call alone", () => {
   const result = transform({ status: "running", detail: { type: "unknown", input: { last_word: "bye" }, output: null } });
   assert.deepEqual(brainEmptySchema.parse(result!.items[0]!.data), { status: "running" });

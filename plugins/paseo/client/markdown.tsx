@@ -15,25 +15,25 @@ type Styles = {
 
 function markdownStyles(paper: PaperPalette): Styles {
   return {
-    block: { gap: 6 },
-    text: { color: paper.ink, fontSize: 13, lineHeight: 19 },
-    muted: { color: paper.inkMuted, fontSize: 13, lineHeight: 19 },
-    strong: { fontWeight: "500", color: paper.ink },
+    block: { gap: 8 },
+    text: { color: paper.ink, fontSize: 12, lineHeight: 19 },
+    muted: { color: paper.inkMuted, fontSize: 12, lineHeight: 19 },
+    strong: { fontWeight: "600" },
     em: { color: paper.inkMuted, fontStyle: "italic" },
     del: { color: paper.inkMuted, textDecorationLine: "line-through" },
-    codespan: { fontFamily: MONO },
+    codespan: { fontFamily: MONO, fontSize: 12, backgroundColor: paper.crumpled },
     link: { color: paper.added, textDecorationLine: "underline" },
-    heading: { fontWeight: "500", color: paper.ink },
-    quote: { borderLeftWidth: 2, borderLeftColor: paper.edge, paddingLeft: 8, gap: 4 },
-    quoteText: { color: paper.inkMuted, fontSize: 13, lineHeight: 19 },
+    heading: { fontWeight: "600" },
+    quote: { borderLeftWidth: 2, borderLeftColor: paper.edge, paddingLeft: 10, gap: 4, marginTop: 4 },
+    quoteText: { color: paper.inkMuted, fontSize: 12, lineHeight: 19 },
     code: {
-      fontFamily: MONO, fontSize: 13, lineHeight: 19, color: paper.ink,
+      fontFamily: MONO, fontSize: 12, lineHeight: 18, color: paper.ink,
       backgroundColor: paper.crumpled, borderRadius: 3, paddingVertical: 6, paddingHorizontal: 8,
     },
     hr: { height: StyleSheet.hairlineWidth, backgroundColor: paper.edge },
-    list: { gap: 3 },
-    listItem: { flexDirection: "row", gap: 6 },
-    marker: { color: paper.inkMuted, minWidth: 14 },
+    list: { gap: 8 },
+    listItem: { flexDirection: "row" },
+    marker: { color: paper.inkMuted, minWidth: 14, paddingRight: 4 },
     table: { gap: 2 },
     tableRow: { flexDirection: "row", gap: 8 },
     tableCell: { flex: 1 },
@@ -93,7 +93,8 @@ function renderBlocks(tokens: Token[] | undefined, styles: Styles, keyPrefix: st
       case "code":
         return <Text key={key} selectable style={styles.code}>{token.text}</Text>;
       case "heading":
-        return <Text key={key} selectable style={[textStyle, styles.heading]}>{renderInlines(token.tokens, styles, key)}</Text>;
+        return <Text key={key} selectable style={[textStyle, styles.heading,
+          { marginTop: index === 0 ? 2 : token.depth === 1 ? 2 : 6 }]}>{renderInlines(token.tokens, styles, key)}</Text>;
       case "blockquote":
         return <View key={key} style={styles.quote}>{renderBlocks(token.tokens, styles, key, styles.quoteText)}</View>;
       case "list": {
