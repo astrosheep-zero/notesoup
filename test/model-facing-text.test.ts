@@ -129,7 +129,7 @@ test("the countdown closes the second-tier notice only, in both hosts", () => {
 test("only Pi's protocol explains that reset erases the human's view", () => {
 	assert.equal(PI_PRE_RESET_HINTS, "Anything you say here is erased with the reset — the human can't read it afterward either. Put the handoff in your notes; explanations belong after the reset.\nUnless the human explicitly directs otherwise, decide for yourself when to call empty_brain. Don't keep asking them whether to reset.");
 	assert.equal(COMMAND_NOTICE.bare, "The human ran /empty. Save your notes now and call `empty_brain` immediately. Anything you say here will be erased afterward — put the handoff in your notes. Anything the human sends from now on should be handled after the reset.");
-	assert.equal(COMMAND_NOTICE.prompted, "The human ran /empty. Save your notes now and call `empty_brain` immediately. Anything you say here will be erased afterward — put the handoff in your notes. The prompt below, and anything the human sends from now on, should be handled after the reset.");
+	assert.equal(COMMAND_NOTICE.prompted, "The human ran /empty. Save your notes now and call `empty_brain` immediately. Anything you say here will be erased afterward — put the handoff in your notes. The command below is context for your notes, not a task for the fresh window. Anything the human sends separately from now on should be handled after the reset.");
 	const pi = renderProtocolBlock({ ...DEFAULT_BOOT_TOOL_NAMES, preResetHints: PI_PRE_RESET_HINTS });
 	assert.ok(pi.includes(`\n${PI_PRE_RESET_HINTS}\n${NOTES_PROTOCOL_CLOSE_TAG}`), "both hints end the protocol, before the closing tag");
 	assert.equal(pi.split(PI_PRE_RESET_HINTS).length - 1, 1, "the hints appear once");

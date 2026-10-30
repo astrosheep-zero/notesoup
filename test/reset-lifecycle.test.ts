@@ -279,25 +279,23 @@ test("manual /empty with a prompt shows the human's command line in the close-ou
 	const promptLine = "/empty Continue reviewing the implementation";
 	const promptIndex = content.indexOf(promptLine);
 	assert.ok(promptIndex >= 0, "the human's raw command line reaches the closing model");
-	assert.ok(promptIndex > content.indexOf("</notesoup:budget_notice>"), "deferred work is outside the notice");
+	assert.ok(promptIndex > content.indexOf("</notesoup:budget_notice>"), "command context is outside the notice");
 	assert.ok(content.includes("Then call `empty_brain`. Nothing in between.\n" + COUNTDOWN_LINE), "the countdown immediately follows the reset call");
 	assert.equal(content.split(COUNTDOWN_LINE).length - 1, 1, "the notice carries the countdown once");
-	// The same original text becomes the new window's task, not a notes-only hint.
+	// Command text is close-out context only.
 	const settle = resultEntries(await h.emit("agent_before_settle", {
 		type: "agent_before_settle",
 		entries: [],
 		outcome: "completed",
 		context: { contextEntries: [], contextMessages: [], llmMessages: [], pendingMessages: [], canContinue: true },
 	}));
-	assert.equal(settle.continue, true, "a prompted close-out continues in the fresh window");
+	assert.equal(settle.continue, false, "a prompted close-out stops in the fresh window");
 	assert.deepEqual(settle.entries.map((entry) => entry.type === "compaction" ? "native-compaction" : (entry as { customType?: string }).customType), [
 		"native-compaction",
 		RESET_MARKER_TYPE,
 		BOOT_TYPE,
 		CONTINUATION_TYPE,
-		CARRIED_INPUT_TYPE,
-	], "the reset tail ends with the carried human input");
-	assert.deepEqual(settle.entries.at(-1), { type: "custom_message", customType: CARRIED_INPUT_TYPE, content: "Continue reviewing the implementation", display: true });
+	], "the reset tail contains no command argument");
 });
 
 test("input arriving during reset construction survives even when the hidden steer is never delivered", async () => {

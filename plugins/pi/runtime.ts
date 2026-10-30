@@ -170,8 +170,8 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 		},
 	});
 
-	const emptyBrainCommand = {
-		description: "Flush memory to notes and continue in a fresh window; optional prompt runs there",
+	const emptyBrainCommand = (name: "empty" | "fresh-window") => ({
+		description: "Flush memory to notes, reset, and stop; optional text provides close-out context",
 		handler: async (args: string, cmdCtx: ExtensionCommandContext) => {
 			if (!enabled) {
 				cmdCtx.ui.notify("🥣 notesoup is off · no brain to empty", "error");
@@ -182,26 +182,26 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 				await cmdCtx.waitForIdle();
 				if (!enabled || currentWindowId(cmdCtx) !== requestedWindowId) return;
 			}
-			// Manual wipes close out at settlement, then stop or continue with the prompt. The hidden warning goes out in both cases — triggered when idle,
+			// Manual wipes close out at settlement, then stop unless later human input arrives. The hidden warning is triggered when idle,
 			// steered into the running turn when busy — so the agent closes out promptly
 			// instead of the reset waiting for the whole run.
 			const prompt = args.trim() ? args : undefined;
-			const armed = resets.command(requestedWindowId, prompt !== undefined, prompt);
+			const armed = resets.command(requestedWindowId, false);
 			if (armed === "already-pending") {
 				cmdCtx.ui.notify("🥣 Brain already being emptied", "info");
 				return;
 			}
 			cmdCtx.ui.notify("🥣 Dumping Brain", "info");
 			try {
-				pi.sendMessage({ customType: MANUAL_WIPE_TYPE, content: commandWarningContent(prompt !== undefined ? `/empty ${prompt}` : undefined), display: false }, { triggerTurn: true, deliverAs: "steer" });
+				pi.sendMessage({ customType: MANUAL_WIPE_TYPE, content: commandWarningContent(prompt !== undefined ? `/${name} ${prompt}` : undefined), display: false }, { triggerTurn: true, deliverAs: "steer" });
 			} catch (error) {
 				resets.clear();
 				cmdCtx.ui.notify(`🥣 Brain refused to empty: ${errorMessage(error)}`, "error");
 			}
 		},
-	};
-	pi.registerCommand("empty", emptyBrainCommand);
-	pi.registerCommand("fresh-window", emptyBrainCommand);
+	});
+	pi.registerCommand("empty", emptyBrainCommand("empty"));
+	pi.registerCommand("fresh-window", emptyBrainCommand("fresh-window"));
 
 	pi.registerTool(defineTool({
 		name: "empty_brain",

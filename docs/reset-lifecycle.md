@@ -4,18 +4,18 @@ Pi reset control lives in `plugins/pi/reset/lifecycle.ts`: the pure `reduceReset
 
 ## Lifecycle at a glance
 
-**Human input not yet answered must survive a reset and be answered afterward. Only a bare `/empty` with no later human input stops after resetting.**
+**Human input not yet answered must survive a reset and be answered afterward. Every `/empty` or `/fresh-window` stops after resetting unless separate human input arrives during emptying.**
 
 | Trigger | Behavior |
 | --- | --- |
 | `empty_brain` tool | Record the actual call and optional last word. Without command policy, reset after the whole tool batch at `turn_end` and continue. Under command policy, wait for settlement. |
-| `/empty <text>` or `/fresh-window <text>` | Send a hidden close-out warning (trigger when idle, steer when busy), then reset and continue. Carry the argument text verbatim as the next window's human message; it is not merely a notes hint. |
+| `/empty <text>` or `/fresh-window <text>` | Send a hidden close-out warning (trigger when idle, steer when busy), with the argument verbatim as context for notes, then reset and stop unless separate human input arrives during emptying. |
 | Bare `/empty` or `/fresh-window` | Close out, reset, and stop, unless more human input arrives while close-out is pending. |
 | Human input during command close-out | Intercept public `input` events except source `extension`, return `handled`, and stash text/images in command state. Also hidden-steer the bare `<notesoup:next_window_prompt>` block plus original images to the closing model. The originals are carried even if that steer never arrives; any carried input makes the reset continue. |
 | Passive provider overflow / recoverable length | With automatic reset enabled, force a retain-none reset and continue once. Carry the failed logical run's human messages: starting prompt and delivered steering/follow-ups. A run started by our own continuation has no human input to carry. |
-| Command close-out overflow | Force a reset even if automatic reset is disabled. Apply command policy: continue with text/carried input, otherwise stop. The recovery attempt is spent, so an oversized carried prompt cannot loop. |
+| Command close-out overflow | Force a reset even if automatic reset is disabled. Apply command policy: continue with separate carried input, otherwise stop. The recovery attempt is spent, so an oversized carried prompt cannot loop. |
 | Budget warning | Stage reminders when automatic reset is enabled. Warnings alone never authorize reset. |
-| Hard reserve | Independently reset at `turn_end` when automatic reset is enabled. A bare-command stop latch cancels empty tool follow-ups, but never real queued or carried human input. |
+| Hard reserve | Independently reset at `turn_end` when automatic reset is enabled. A command stop latch cancels empty tool follow-ups, but never real queued or carried human input. |
 | Abort / ordinary error | Restore stashed originals as visible user-content custom messages before clearing command state. Explicit abort stays stopped; ordinary close-out errors do not force reset. |
 | `/compact` while active | Cancel native compaction; manual attempts receive a `/fresh-window` notice. |
 

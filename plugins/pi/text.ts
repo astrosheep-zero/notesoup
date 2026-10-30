@@ -23,7 +23,7 @@ export function promptBlock(commandLine: string): string {
 
 /** Approved manual close-out notices; both variants live here. */
 export const COMMAND_NOTICE = {
-	prompted: "The human ran /empty. Save your notes now and call `empty_brain` immediately. Anything you say here will be erased afterward — put the handoff in your notes. The prompt below, and anything the human sends from now on, should be handled after the reset.",
+	prompted: "The human ran /empty. Save your notes now and call `empty_brain` immediately. Anything you say here will be erased afterward — put the handoff in your notes. The command below is context for your notes, not a task for the fresh window. Anything the human sends separately from now on should be handled after the reset.",
 	bare: "The human ran /empty. Save your notes now and call `empty_brain` immediately. Anything you say here will be erased afterward — put the handoff in your notes. Anything the human sends from now on should be handled after the reset.",
 };
 

@@ -604,7 +604,7 @@ test("real AgentSession: manual command spans its tool batch and stops at settle
 	}
 });
 
-test("real AgentSession: /empty text is carried verbatim and answered after close-out", async () => {
+test("real AgentSession: /empty text is close-out context and stops after reset", async () => {
 	let fixture!: Fixture;
 	const prompt = 'AFTER_CLEAR_PROMPT_SENTINEL /cm "literal text"  \nsecond line';
 	fixture = await openFixture({
@@ -615,21 +615,18 @@ test("real AgentSession: /empty text is carried verbatim and answered after clos
 				assert.ok(text(context).includes(JSON.stringify(promptBlock(`/empty ${prompt}`)).slice(1, -1)));
 				return assistant(fixture, [{ type: "toolCall", id: "prompt-wipe", name: "empty_brain", arguments: { last_word: "saved" } }], "toolUse");
 			}
-			assert.equal(request, 3);
-			assertFreshRequest(fixture, 2, "PROMPT_RESET_OLD_SENTINEL");
-			assertUserContent(context, [{ type: "text", text: prompt }]);
-			return assistant(fixture, [{ type: "text", text: "prompt handled" }]);
+			throw new Error("command argument must not start fresh-window work");
 		},
 	});
 	try {
 		await fixture.session.prompt("PROMPT_RESET_OLD_SENTINEL");
 		await fixture.session.prompt(`/empty ${prompt}`);
 		await fixture.session.waitForIdle();
-		assert.equal(fixture.requests.length, 3);
+		assert.equal(fixture.requests.length, 2);
 		assert.equal(resetMarkers(fixture).length, 1);
 		const branch = fixture.sessionManager.getBranch();
-		const continuationIndex = branch.findIndex((entry) => entry.type === "custom_message" && entry.customType === CONTINUATION_TYPE);
-		assert.deepEqual(branch.slice(continuationIndex + 1, continuationIndex + 3).map((entry) => entry.type === "custom_message" ? entry.customType : entry.type), ["notesoup/reset-last-word", CARRIED_INPUT_TYPE]);
+		assert.equal(branch.some((entry) => entry.type === "custom_message" && entry.customType === CARRIED_INPUT_TYPE), false);
+		assert.equal(JSON.stringify(fixture.sessionManager.buildSessionProjection().messages).includes("AFTER_CLEAR_PROMPT_SENTINEL"), false);
 		assert.equal(fixture.notices.some(isResetSuccessNotice), false);
 	} finally { fixture.close(); }
 });
@@ -663,16 +660,12 @@ test("real AgentSession: streaming clear prompt keeps the first request", async 
 			if (request === 1) { started(); await gate; }
 			if (request === 1) assert.equal(text(context).includes("FIRST_RESET_PROMPT"), false, "the prompt belongs to the close-out, not the turn already running");
 			// The close-out embeds the human's command line verbatim, so the closing turn sees
-			// what the next window was asked to do. Only the accepted command appears.
+			// the command context. Only the accepted command appears.
 			if (request === 2) {
-				assert.ok(text(context).includes("FIRST_RESET_PROMPT"), "the close-out carries the command line");
+				assert.ok(text(context).includes(JSON.stringify(promptBlock("/fresh-window FIRST_RESET_PROMPT")).slice(1, -1)), "the close-out carries the original command line");
 				assert.equal(text(context).includes("IGNORED_RESET_PROMPT"), false, "the refused repeat never enters the close-out");
 			}
-			if (request === 3) {
-				assert.ok(text(context).includes("FIRST_RESET_PROMPT"), "the fresh window still receives the prompt");
-				assert.equal(text(context).includes("IGNORED_RESET_PROMPT"), false);
-			}
-			assert.ok(request <= 3);
+			assert.ok(request <= 2);
 			return assistant(fixture, [{ type: "text", text: "done" }]);
 		},
 	});
@@ -684,7 +677,8 @@ test("real AgentSession: streaming clear prompt keeps the first request", async 
 		release();
 		await running;
 		await fixture.session.waitForIdle();
-		assert.equal(fixture.requests.length, 3);
+		assert.equal(fixture.requests.length, 2);
+		assert.equal(fixture.sessionManager.getBranch().some((entry) => entry.type === "custom_message" && entry.customType === CARRIED_INPUT_TYPE), false);
 		assert.equal(resetMarkers(fixture).length, 1);
 		assert.ok(fixture.notices.some((notice) => notice.includes("Brain already being emptied")));
 	} finally { release(); fixture.close(); }
@@ -731,13 +725,12 @@ test("real AgentSession: manual hard-reserve reset stops clean and mixed-tool tu
 	}
 });
 
-test("real AgentSession: overflowing /empty close-out forces a reset and retries its text only once", async () => {
+test("real AgentSession: overflowing /empty close-out forces a reset and stops", async () => {
 	let fixture!: Fixture;
 	fixture = await openFixture({
-		script: (request, context) => {
+		script: (request) => {
 			if (request === 1) return assistant(fixture, [{ type: "text", text: "before overflow" }]);
-			assert.ok(request <= 3, "an oversized carried prompt cannot loop");
-			if (request === 3) assertUserContent(context, [{ type: "text", text: "OVERSIZED_MANUAL_PROMPT" }]);
+			assert.equal(request, 2, "command text must not trigger a retry");
 			return assistant(fixture, [], "error", { errorMessage: "Prompt too long: context exceeds maximum context length" });
 		},
 	});
@@ -745,9 +738,9 @@ test("real AgentSession: overflowing /empty close-out forces a reset and retries
 		await fixture.session.prompt("MANUAL_OVERFLOW_OLD_SENTINEL");
 		await fixture.session.prompt("/empty OVERSIZED_MANUAL_PROMPT");
 		await fixture.session.waitForIdle();
-		assert.equal(fixture.requests.length, 3);
+		assert.equal(fixture.requests.length, 2);
 		assert.equal(resetMarkers(fixture).length, 1);
-		assertFreshRequest(fixture, 2, "MANUAL_OVERFLOW_OLD_SENTINEL");
+		assert.equal(fixture.sessionManager.getBranch().some((entry) => entry.type === "custom_message" && entry.customType === CARRIED_INPUT_TYPE), false);
 		assert.equal((resetMarkers(fixture)[0] as { data: { origin: string } }).data.origin, "forced");
 		assert.ok(fixture.notices.some(isResetSuccessNotice));
 	} finally { fixture.close(); }
@@ -868,7 +861,7 @@ test("real AgentSession: user abort, synthetic aborted response, and generic err
 	}
 });
 
-test("real AgentSession: input during bare /empty is hidden-steered, carried with images, and answered after a safety reset", async () => {
+test("real AgentSession: input during prompted /empty is hidden-steered, carried with images, and answered after a safety reset", async () => {
 	let fixture!: Fixture;
 	let started!: () => void;
 	let release!: () => void;
@@ -886,14 +879,14 @@ test("real AgentSession: input during bare /empty is hidden-steered, carried wit
 				assertUserContent(context, [{ type: "text", text: promptBlock(input) }, image]);
 				return assistant(fixture, [{ type: "toolCall", id: "deferred-pressure", name: "notes_write", arguments: { address: "deferred.md", content: "saved" } }], "toolUse", { usage: usage(80_000) });
 			}
-			assert.equal(request, 3, "carried input continues instead of taking the bare-command stop");
+			assert.equal(request, 3, "carried input continues despite command stop policy");
 			assertFreshRequest(fixture, 2, "saving notes");
 			assertUserContent(context, [{ type: "text", text: input }, image]);
 			return assistant(fixture, [{ type: "text", text: "deferred input answered" }]);
 		},
 	});
 	try {
-		const command = fixture.session.prompt("/empty");
+		const command = fixture.session.prompt("/empty CLOSE_OUT_CONTEXT");
 		await ready;
 		await fixture.session.prompt(input, { images: [image], streamingBehavior: "followUp" });
 		release();
