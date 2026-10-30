@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type SessionBoundaryDraft } from "@earendil-works/pi-coding-agent";
 import { BOOT_TYPE, CONTINUATION_TYPE, MARKER_TYPE, RESET_MARKER_TYPE } from "../plugins/pi/entries.js";
 import { nextHistorySeq } from "../plugins/pi/history.js";
-import { MARKER_INTERVAL } from "../plugins/pi/marker.js";
-import { appendText, context, installExtensionTestEnvironment, makeExtension, runCommand, runHandlers, sentOf } from "./helpers/extension.js";
+import { buildMarkerDraft, MARKER_INTERVAL } from "../plugins/pi/marker.js";
+import { appendText, call, commitTurnEndBoundary, context, installExtensionTestEnvironment, makeExtension, runCommand, runHandlers, sentOf } from "./helpers/extension.js";
 
 const env = installExtensionTestEnvironment("notesoup-marker-test");
 test.beforeEach(env.beforeEach);
@@ -16,7 +16,7 @@ function beforeAgentStart(captured: ReturnType<typeof makeExtension>, ctx: Retur
 }
 
 test("marker stamps its own seq at run start once the interval is reached, never mid-turn", async () => {
-	const sessionManager = managerWithMessages(119);
+	const sessionManager = managerWithMessages(99);
 	const captured = makeExtension(sessionManager);
 	const ctx = context(sessionManager);
 
@@ -27,11 +27,11 @@ test("marker stamps its own seq at run start once the interval is reached, never
 	await beforeAgentStart(captured, ctx);
 	const sent = sentOf(captured, MARKER_TYPE);
 	assert.equal(sent.length, 1);
-	assert.deepEqual(sent[0]!.message.details, { seq: 120 });
+	assert.deepEqual(sent[0]!.message.details, { seq: 100 });
 	assert.equal(sent[0]!.message.display, false);
 	assert.equal(sent[0]!.options?.triggerTurn, false);
-	assert.equal(sent[0]!.message.content, '<notesoup:marker seq="120" />');
-	assert.equal(nextHistorySeq(ctx), 121, "the marker occupies the seq it names");
+	assert.equal(sent[0]!.message.content, '<notesoup:marker seq="100" />');
+	assert.equal(nextHistorySeq(ctx), 101, "the marker occupies the seq it names");
 
 	// An immediate second run is only one seq later: no new marker.
 	await beforeAgentStart(captured, ctx);
@@ -39,23 +39,55 @@ test("marker stamps its own seq at run start once the interval is reached, never
 
 	// The next marker lands one interval after the last.
 	appendText(sessionManager, "user", "x");
-	for (let i = 0; i < 118; i++) appendText(sessionManager, "assistant", "y");
+	for (let i = 0; i < 98; i++) appendText(sessionManager, "assistant", "y");
 	await beforeAgentStart(captured, ctx);
 	const all = sentOf(captured, MARKER_TYPE);
 	assert.equal(all.length, 2);
-	assert.deepEqual(all[1]!.message.details, { seq: 240 });
+	assert.deepEqual(all[1]!.message.details, { seq: 200 });
+});
+
+test("turn-end appends a due marker without requesting continuation or duplicating it at run start", async () => {
+	const sessionManager = managerWithMessages(99);
+	const captured = makeExtension(sessionManager);
+	const ctx = context(sessionManager);
+	const boundary = await commitTurnEndBoundary(captured, sessionManager, ctx);
+	assert.equal(boundary.continue, false);
+	assert.deepEqual(boundary.entries, [{ type: "custom_message", customType: MARKER_TYPE, content: '<notesoup:marker seq="100" />', display: false, details: { seq: 100 } }]);
+	assert.equal(nextHistorySeq(ctx), 101);
+	await beforeAgentStart(captured, ctx);
+	assert.equal(sentOf(captured, MARKER_TYPE).length, 0, "the committed turn-end marker already anchored this interval");
+});
+
+test("marker seq includes incoming boundary drafts, and a drafted reset or boot suppresses another marker", () => {
+	const ctx = context(managerWithMessages(98));
+	const incoming: SessionBoundaryDraft[] = [{ type: "custom_message", customType: "other/context", content: "context", display: false }];
+	assert.deepEqual(buildMarkerDraft(ctx, incoming)?.details, { seq: 100 });
+	assert.equal(buildMarkerDraft(ctx, [{ type: "custom", customType: RESET_MARKER_TYPE, data: { windowId: "pcw:new" } }]), undefined);
+	assert.equal(buildMarkerDraft(ctx, [{ type: "custom_message", customType: BOOT_TYPE, content: "boot", display: false }]), undefined);
+});
+
+test("a due tool reset uses its boot instead of inserting a marker in the reset boundary", async () => {
+	const sessionManager = managerWithMessages(99);
+	const captured = makeExtension(sessionManager);
+	const ctx = context(sessionManager);
+	await call(captured, "empty_brain", {}, ctx);
+	const boundary = await commitTurnEndBoundary(captured, sessionManager, ctx);
+	assert.ok(boundary.entries.some((entry) => entry.type === "custom_message" && entry.customType === BOOT_TYPE));
+	assert.equal(boundary.entries.some((entry) => entry.type === "custom_message" && entry.customType === MARKER_TYPE), false);
+	await beforeAgentStart(captured, ctx);
+	assert.equal(sentOf(captured, MARKER_TYPE).length, 0);
 });
 
 test("no marker before the interval", async () => {
-	const sessionManager = managerWithMessages(118);
+	const sessionManager = managerWithMessages(98);
 	const captured = makeExtension(sessionManager);
 	await beforeAgentStart(captured, context(sessionManager));
 	assert.equal(sentOf(captured, MARKER_TYPE).length, 0);
-	assert.equal(MARKER_INTERVAL, 120);
+	assert.equal(MARKER_INTERVAL, 100);
 });
 
 test("a reset tail awaiting repair blocks markers, and boot anchors the new window's interval", async () => {
-	const sessionManager = managerWithMessages(119);
+	const sessionManager = managerWithMessages(99);
 	const captured = makeExtension(sessionManager);
 	const ctx = context(sessionManager);
 
@@ -69,24 +101,26 @@ test("a reset tail awaiting repair blocks markers, and boot anchors the new wind
 	await beforeAgentStart(captured, ctx);
 	assert.equal(sentOf(captured, MARKER_TYPE).length, 0);
 
-	// Once the reset tail is closed, boot (seq 120) already anchored the window's start seq.
+	// Once the reset tail is closed, boot (seq 100) already anchored the window's start seq.
 	sessionManager.appendCustomMessageEntry(CONTINUATION_TYPE, "continued", false);
 	await beforeAgentStart(captured, ctx);
 	assert.equal(sentOf(captured, MARKER_TYPE).length, 0);
 
-	for (let i = 0; i < 118; i++) appendText(sessionManager, "assistant", "y");
+	for (let i = 0; i < 98; i++) appendText(sessionManager, "assistant", "y");
 	await beforeAgentStart(captured, ctx);
 	const sent = sentOf(captured, MARKER_TYPE);
 	assert.equal(sent.length, 1);
-	assert.deepEqual(sent[0]!.message.details, { seq: 240 });
+	assert.deepEqual(sent[0]!.message.details, { seq: 200 });
 });
 
 test("notesoup off silences the odometer", async () => {
-	const sessionManager = managerWithMessages(119);
+	const sessionManager = managerWithMessages(99);
 	const captured = makeExtension(sessionManager);
 	const ctx = context(sessionManager);
 	await runCommand(captured, "notesoup", "off", ctx);
 	await beforeAgentStart(captured, ctx);
+	const boundary = await commitTurnEndBoundary(captured, sessionManager, ctx);
+	assert.equal(boundary.entries.length, 0);
 	assert.equal(sentOf(captured, MARKER_TYPE).length, 0);
 });
 

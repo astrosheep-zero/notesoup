@@ -18,8 +18,9 @@ import {
 	type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import notesoup, { createNotesoup } from "../plugins/pi/extension.js";
-import { BOOT_TYPE, CARRIED_INPUT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, MANUAL_WIPE_TYPE, NEXT_WINDOW_PROMPT_TYPE, RESET_MARKER_TYPE, WARNING_TYPE } from "../plugins/pi/entries.js";
+import { BOOT_TYPE, CARRIED_INPUT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, MANUAL_WIPE_TYPE, MARKER_TYPE, NEXT_WINDOW_PROMPT_TYPE, RESET_MARKER_TYPE, WARNING_TYPE } from "../plugins/pi/entries.js";
 import { historyFromSession } from "../plugins/pi/history.js";
+import { MARKER_INTERVAL } from "../plugins/pi/marker.js";
 import { assertBootHistory } from "./helpers/extension.js";
 import { NOTES_PROTOCOL_OPEN_TAG, WINDOW_IDENTITY_OPEN_TAG } from "../src/boot/text.js";
 import { FORCED_CONTINUATIONS, GUIDANCE_OPEN_TAG, NORMAL_CONTINUATIONS, warningPrompt } from "../src/budget/text.js";
@@ -289,6 +290,47 @@ function assertFreshRequest(fixture: Fixture, requestIndex: number, oldSentinel:
 	assert.ok(body.includes(WINDOW_IDENTITY_OPEN_TAG), "the new provider request includes the fresh context-window boot");
 	assert.deepEqual(continuationLinesIn(body).length, 1, "the fresh window carries exactly one reset paragraph");
 }
+
+test("real AgentSession: turn-end markers reach tool continuations and allow one-turn lag when steering crosses the interval", async () => {
+	for (const seedCount of [MARKER_INTERVAL - 4, MARKER_INTERVAL - 7]) {
+		let starts = 0;
+		let fixture!: Fixture;
+		fixture = await openFixture({
+			compactionEnabled: false,
+			hook: (pi, getSession) => {
+				pi.on("before_agent_start", () => { starts++; });
+				pi.on("tool_call", async () => { await getSession().steer("MARKER_MID_RUN_USER"); });
+			},
+			script: (request) => request === 1
+				? assistant(fixture, [{ type: "toolCall", id: "marker-tool", name: "get_context_remaining", arguments: {} }], "toolUse")
+				: assistant(fixture, [{ type: "text", text: "steered input handled" }]),
+		});
+		try {
+			for (let i = 0; i < seedCount; i++) fixture.sessionManager.appendMessage(assistant(fixture, [{ type: "text", text: "seed" }]));
+			await fixture.session.prompt("MARKER_INITIAL_USER");
+			await fixture.session.waitForIdle();
+			assert.equal(starts, 1);
+			assert.equal(fixture.requests.length, 2, "the marker does not create another model request");
+			assert.equal(text(fixture.requests[0]).includes("notesoup:marker"), false);
+			assert.equal(text(fixture.requests[1]).includes("notesoup:marker"), seedCount === MARKER_INTERVAL - 4);
+			assert.equal(text(fixture.requests[1]).split("MARKER_MID_RUN_USER").length - 1, 1);
+			const branch = fixture.sessionManager.getBranch();
+			const markers = branch.filter((entry) => entry.type === "custom_message" && entry.customType === MARKER_TYPE);
+			assert.equal(markers.length, 1);
+			const marker = markers[0]!;
+			const markerIndex = branch.indexOf(marker);
+			const userIndex = branch.findIndex((entry) => entry.type === "message" && entry.message.role === "user" && JSON.stringify(entry.message.content).includes("MARKER_MID_RUN_USER"));
+			assert.equal(markerIndex < userIndex, seedCount === MARKER_INTERVAL - 4, "a steering-only threshold crossing is marked after its response");
+			assert.ok(branch.slice(0, markerIndex).some((entry) => entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolCallId === "marker-tool"));
+			const projection = historyFromSession({ sessionManager: fixture.sessionManager });
+			const addressed = projection.windows.flatMap((window) => window.items).find((item) => item.text.includes("<notesoup:marker"));
+			assert.ok(addressed);
+			assert.deepEqual(marker.type === "custom_message" ? marker.details : undefined, { seq: addressed.seq });
+		} finally {
+			fixture.close();
+		}
+	}
+});
 
 test("real Pi codemode receives typed notes/history outcomes, including expected errors", async () => {
 	let fixture!: Fixture;

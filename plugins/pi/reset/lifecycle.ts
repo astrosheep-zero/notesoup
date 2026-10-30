@@ -4,6 +4,7 @@ import { getCurrentSystemMessage, isContextOverflow, isRecoverableLength } from 
 import type { AgentBeforeSettleEvent, ExtensionAPI, ExtensionContext, SessionBoundaryDraft } from "@earendil-works/pi-coding-agent";
 import { currentReset, currentWindowId } from "../window.js";
 import { nextHistorySeq } from "../history.js";
+import { buildMarkerDraft } from "../marker.js";
 import { resetBoundaryCommitted } from "./committed.js";
 import type { ResetOrigin } from "../../../src/budget/text.js";
 import { errorMessage } from "../../../src/error-message.js";
@@ -335,6 +336,10 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 		if (decision.effect === "build-boundary") return await resetBoundaryResult(entries, ctx, decision);
 		if (aborted || (event.outcome === "error" && decision.state.request.phase === "none")) restoreCommandInputs();
 		control = decision.state;
+		if (!aborted && event.outcome !== "error" && options.isEnabled()) {
+			const marker = buildMarkerDraft(ctx, entries);
+			if (marker) entries.push(marker);
+		}
 		return entries.length > 0 ? { entries } : undefined;
 	});
 
