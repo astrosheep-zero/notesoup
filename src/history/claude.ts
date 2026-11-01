@@ -115,9 +115,13 @@ function bootOrdinal(row: Row, retained: boolean): number | undefined {
 
 /** All addresses are allocated on the full first-occurrence log, before branch selection. */
 export function claudeHistoryFromJsonl(text: string, source: Omit<ClaudeHistorySource, "transcriptPath">): ClaudeHistoryProjection {
+	return claudeHistoryFromRows(rowsOf(text), source);
+}
+
+function claudeHistoryFromRows(rows: Row[], source: Omit<ClaudeHistorySource, "transcriptPath">): ClaudeHistoryProjection {
 	const nodes = new Map<string, Node>();
 	let nextSeq = 1;
-	for (const row of rowsOf(text)) {
+	for (const row of rows) {
 		// Ignore non-message records, including future metadata. If selected ancestry
 		// reaches a skipped UUID, it becomes a gap, never permission to expose its payload.
 		if (!MESSAGE_TYPES.has(row.type as string)) continue;
@@ -253,8 +257,12 @@ export function claudeHistoryFromJsonl(text: string, source: Omit<ClaudeHistoryS
 
 /** Offline files have no live append binding: prefer non-attachment leaves, then transcript order. */
 export function offlineClaudeHead(text: string): string {
+	return offlineClaudeHeadFromRows(rowsOf(text));
+}
+
+function offlineClaudeHeadFromRows(rows: Row[]): string {
 	const latest = new Map<string, Row>();
-	for (const row of rowsOf(text)) {
+	for (const row of rows) {
 		if (!MESSAGE_TYPES.has(row.type as string)) continue;
 		const uuid = requiredString(row.uuid, "uuid");
 		latest.delete(uuid);
@@ -283,6 +291,12 @@ export function offlineClaudeHead(text: string): string {
 	const nonAttachments = leaves.filter((uuid) => latest.get(uuid)!.type !== "attachment");
 	const candidates = nonAttachments.length ? nonAttachments : leaves;
 	return candidates.at(-1)!;
+}
+
+/** Select an offline head and build its projection from the same decoded records. */
+export function offlineClaudeHistoryFromJsonl(text: string, sessionId: string): ClaudeHistoryProjection {
+	const rows = rowsOf(text);
+	return claudeHistoryFromRows(rows, { sessionId, headUuid: offlineClaudeHeadFromRows(rows) });
 }
 
 export async function readClaudeHistory(source: ClaudeHistorySource): Promise<ClaudeHistoryProjection> {

@@ -3,7 +3,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { piHistoryFromJsonl } from "./pi.js";
-import { claudeHistoryFromJsonl, offlineClaudeHead } from "./claude.js";
+import { offlineClaudeHistoryFromJsonl } from "./claude.js";
 import { readCodexHistory } from "./codex.js";
 import { readCodexTranscriptBytes } from "./codex-transcript.js";
 import { sessionIdentity, type HistoryCorpus, type HistorySession } from "./corpus.js";
@@ -92,7 +92,7 @@ async function localSessions(harness: "pi" | "claude" | "codex", root: string): 
 				if (queries?.length && !mayMatch(text, queries, harness === "codex")) return undefined;
 				if (harness === "codex") return { projection: (await readCodexHistory({ threadId: id, transcriptPath: path })).projection };
 				if (harness === "pi") return { projection: piHistoryFromJsonl(text, id) };
-				const projection = claudeHistoryFromJsonl(text, { sessionId: id, headUuid: offlineClaudeHead(text) });
+				const projection = offlineClaudeHistoryFromJsonl(text, id);
 				const missing = projection.missingAncestors;
 				return { projection, ...(missing.length === 0 ? {} : { notice: `Claude history is incomplete: missing ancestor UUID(s): ${missing.slice(0, 5).map((uuid) => JSON.stringify(uuid.slice(0, 160))).join(", ")}. Only confirmed ancestry is returned; disconnected prefixes are excluded.\n\n` }) };
 			},

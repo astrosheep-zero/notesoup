@@ -8,7 +8,7 @@ import { Check } from "typebox/value";
 import { localHistoryCorpus, type LocalHistoryRoots } from "../src/history/local.js";
 import { parseSessionSelector, type HistoryContext, type HistoryHarness, type HistorySession } from "../src/history/corpus.js";
 import { allItems, projectHistory, type DecodedHistoryItem, type HistoryProjection } from "../src/history/history.js";
-import { claudeHistoryFromJsonl, offlineClaudeHead } from "../src/history/claude.js";
+import { claudeHistoryFromJsonl, offlineClaudeHead, offlineClaudeHistoryFromJsonl } from "../src/history/claude.js";
 import { piHistoryFromJsonl } from "../src/history/pi.js";
 import { historyList, historyRead } from "../src/tools/history.js";
 import { TOOL_OUTPUT_MAX_BYTES } from "../src/tools/output.js";
@@ -559,4 +559,25 @@ test("offline Claude prefers non-attachment leaves, then transcript order, and k
 	const branch = rows([user("u", null), user("left", "u"), user("right", "u")]);
 	assert.throws(() => claudeHistoryFromJsonl(branch, { sessionId: "s" }), /no confirmed active head/);
 	assert.deepEqual(allItems(claudeHistoryFromJsonl(branch, { sessionId: "s", headUuid: "left" })).map((item) => item.seq), [1, 2]);
+});
+
+test("offline Claude parses each record once and preserves branch, attachment and gap projection", () => {
+	const user = (uuid: string, parentUuid: string | null) => ({ type: "user", uuid, parentUuid, sessionId: "s", message: { role: "user", content: uuid } });
+	const records = [user("root", "missing"), user("left", "root"), user("right", "root"),
+		{ type: "attachment", uuid: "hook", parentUuid: "root", sessionId: "s" }];
+	const text = rows(records);
+	const expected = claudeHistoryFromJsonl(text, { sessionId: "s", headUuid: offlineClaudeHead(text) });
+	const parse = JSON.parse;
+	let calls = 0;
+	let actual;
+	try {
+		JSON.parse = (...args: Parameters<typeof JSON.parse>) => { calls++; return parse(...args); };
+		actual = offlineClaudeHistoryFromJsonl(text, "s");
+	} finally { JSON.parse = parse; }
+	assert.equal(calls, records.length);
+	assert.deepEqual(actual, expected);
+	assert.deepEqual(allItems(actual).map((item) => [item.seq, item.text]), [[1, "root"], [3, "right"]]);
+	assert.deepEqual(actual.missingAncestors, ["missing"]);
+	assert.deepEqual(offlineClaudeHistoryFromJsonl(text + '{"partial":', "s"), expected);
+	assert.throws(() => offlineClaudeHistoryFromJsonl(text + "bad\n", "s"), /malformed Claude transcript JSON/);
 });
