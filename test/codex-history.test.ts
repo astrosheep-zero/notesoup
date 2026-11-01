@@ -218,7 +218,7 @@ test("two native checkpoints retain old raw history; replacement_history is not 
 	assert.match(historyList.render(earlier), /^seq 6 \| user\nmiddle text$/);
 	const old = await historyRead.execute({ seq: 2 }, second.projection);
 	assert.match(historyRead.render(old), /old raw text/);
-	const { projection: _projection, dependencies: _dependencies, ...facts } = second;
+	const { projection: _projection, dependencies: _dependencies, lineageSources: _lineageSources, ...facts } = second;
 	assert.deepEqual(await readCodexTranscriptState({ transcriptPath: f.path, threadId: ROOT }), facts);
 	assert.deepEqual(await readCodexHistory({ transcriptPath: f.path, threadId: ROOT }), second);
 });

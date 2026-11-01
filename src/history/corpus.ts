@@ -1,14 +1,18 @@
 /** A read-only history corpus: identity/discovery is separate from loading a projection. */
 import { failure, success, type Outcome } from "../tools/result.js";
-import type { HistoryProjection } from "./history.js";
+import type { HistoryEvent, HistoryProjection } from "./history.js";
+import { sessionRepresentative } from "./query.js";
 
 export type HistoryHarness = "pi" | "claude" | "codex" | "dsh";
 export type HistorySessionData = { projection: HistoryProjection; notice?: string };
+export type HistorySessionRepresentative = { event: HistoryEvent | undefined; notice?: string };
 export type HistorySession = {
 	harness: HistoryHarness;
 	id: string;
 	modifiedAt: number;
 	load(queries?: readonly string[]): Promise<HistorySessionData | undefined>;
+	/** Strict, unfiltered overview only; never used for a live binding or filtered history. */
+	loadRepresentative?(): Promise<HistorySessionRepresentative>;
 };
 export type HistoryCorpus = {
 	currentHarness: HistoryHarness;
@@ -57,6 +61,19 @@ export async function resolveSession(corpus: HistoryCorpus | undefined, selector
 	return success(matches[0]!);
 }
 
+export async function loadHistoryRepresentative(session: HistorySession): Promise<Outcome<HistorySessionRepresentative>> {
+	if (session.loadRepresentative) {
+		try { return success(await session.loadRepresentative()); }
+		catch (error) { return unavailableSession(session, error); }
+	}
+	const result = await loadHistorySession(session);
+	return result.ok ? success({ event: sessionRepresentative(result.data.projection, {}), notice: result.data.notice }) : result;
+}
+
+function unavailableSession(session: HistorySession, error: unknown): Outcome<never> {
+	return failure("history_unavailable", `Cannot read session ${sessionIdentity(session)}: ${error instanceof Error ? error.message : String(error)}`);
+}
+
 export function loadHistorySession(session: HistorySession): Promise<Outcome<HistorySessionData>>;
 export function loadHistorySession(session: HistorySession, queries: readonly string[] | undefined): Promise<Outcome<HistorySessionData | undefined>>;
 export async function loadHistorySession(session: HistorySession, queries?: readonly string[]): Promise<Outcome<HistorySessionData | undefined>> {
@@ -66,7 +83,7 @@ export async function loadHistorySession(session: HistorySession, queries?: read
 		return success(data);
 	}
 	catch (error) {
-		return failure("history_unavailable", `Cannot read session ${sessionIdentity(session)}: ${error instanceof Error ? error.message : String(error)}`);
+		return unavailableSession(session, error);
 	}
 }
 

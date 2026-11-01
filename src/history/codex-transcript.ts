@@ -8,6 +8,8 @@ import { basename, dirname, join, relative, sep } from "node:path";
 import * as zlib from "node:zlib";
 
 export type CodexTranscriptSource = { transcriptPath: string; threadId: string };
+/** A successful native discovery decision, rechecked before trusting an offline summary. */
+export type CodexLineageSource = { home: string; rolloutId: string; path: string };
 export type CodexTranscriptState = {
 	threadId: string;
 	rootSessionId: string;
@@ -173,6 +175,20 @@ async function referencedPath(home: string, rolloutId: string): Promise<string> 
 	if (matches.length !== 1) throw new Error(`Unavailable Codex lineage: rollout ${rolloutId} has ${matches.length ? "ambiguous native files" : "no local source file"}`);
 	return matches[0]!;
 }
+async function resolveLineageSource(home: string, rolloutId: string): Promise<string> {
+	const path = await realpath(await referencedPath(home, rolloutId));
+	if (![join(home, "sessions"), join(home, "archived_sessions")].some((root) => within(root, path))) throw new Error("Unsafe Codex lineage: referenced path escapes native storage roots");
+	return path;
+}
+
+/** Fingerprints alone cannot detect a newly ambiguous or missing native rollout source. */
+export async function validateCodexLineageSources(sources: CodexLineageSource[]): Promise<boolean> {
+	try {
+		for (const source of sources) if (await resolveLineageSource(source.home, source.rolloutId) !== source.path) return false;
+		return true;
+	} catch { return false; }
+}
+
 export type CodexTranscriptReader = (path: string, remaining?: number) => Promise<Buffer>;
 
 /** One load only: prefilter and lineage decoder share the original decoded Buffers. */
@@ -203,13 +219,14 @@ export function createCodexTranscriptReader(): CodexTranscriptReader {
 }
 
 /** Internal shared read: both boot facts and history use exactly this lineage and window owner. */
-export async function readCodexTranscript(source: CodexTranscriptSource, readBytes = createCodexTranscriptReader()): Promise<{ state: CodexTranscriptState; records: CodexRecord[]; highestSeq: number; dependencies: string[] }> {
+export async function readCodexTranscript(source: CodexTranscriptSource, readBytes = createCodexTranscriptReader()): Promise<{ state: CodexTranscriptState; records: CodexRecord[]; highestSeq: number; dependencies: string[]; lineageSources: CodexLineageSource[] }> {
 	if (!source || typeof source.transcriptPath !== "string" || !source.transcriptPath) throw new Error("Codex transcript_path is unavailable");
 	id(source.threadId, "requested threadId");
 	try {
 		let path = await realpath(source.transcriptPath), cutoff: Position | undefined, home: string | undefined;
 		let remaining = CODEX_TRANSCRIPT_MAX_BYTES;
 		const segments: Segment[] = [], seen = new Set<string>();
+		const lineageSources: CodexLineageSource[] = [];
 		while (true) {
 			if (segments.length >= MAX_SEGMENTS || seen.has(path)) throw new Error("Unavailable Codex lineage: cycle or ancestry depth limit exceeded");
 			seen.add(path);
@@ -226,8 +243,8 @@ export async function readCodexTranscript(source: CodexTranscriptSource, readByt
 			if (!base) break;
 			if (base.end_ordinal_exclusive === 0) throw new Error("Invalid Codex lineage: history_base must include source metadata");
 			home ??= storageHome(path);
-			path = await realpath(await referencedPath(home, base.thread_id));
-			if (![join(home, "sessions"), join(home, "archived_sessions")].some((root) => within(root, path))) throw new Error("Unsafe Codex lineage: referenced path escapes native storage roots");
+			path = await resolveLineageSource(home, base.thread_id);
+			lineageSources.push({ home, rolloutId: base.thread_id, path });
 			cutoff = base;
 		}
 		// history_base is physical; forked_from_ordinal_exclusive is the logical
@@ -283,7 +300,7 @@ export async function readCodexTranscript(source: CodexTranscriptSource, readByt
 		// Native latest model settings win over a frozen companion TurnContext after
 		// compaction (history/src/lib.rs latest_disabled_plugin_ids has same ownership).
 		if (settingsModel ?? contextModel) state.model = settingsModel ?? contextModel;
-		return { state, records, highestSeq: lastSeq, dependencies: [...seen] };
+		return { state, records, highestSeq: lastSeq, dependencies: [...seen], lineageSources };
 	} catch (error) {
 		throw new Error(`Cannot read Codex history at ${source.transcriptPath}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
 	}

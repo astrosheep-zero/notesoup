@@ -7,6 +7,7 @@ import { offlineClaudeHistoryFromJsonl } from "./claude.js";
 import { readCodexHistory } from "./codex.js";
 import { createCodexTranscriptReader } from "./codex-transcript.js";
 import { sessionIdentity, type HistoryCorpus, type HistorySession } from "./corpus.js";
+import { cachedSessionRepresentative, historySummaryCacheRoot } from "./summary-cache.js";
 
 export type LocalHistoryRoots = Partial<Record<"pi" | "claude" | "codex", string | null>>;
 export type LocalHistoryOptions = {
@@ -15,6 +16,8 @@ export type LocalHistoryOptions = {
 	roots?: LocalHistoryRoots;
 	home?: string;
 	env?: NodeJS.ProcessEnv;
+	/** Internal hermetic-test seam, not a tool parameter or host setting. */
+	summaryCacheRoot?: string;
 	/** Available only inside DSH; descriptors load through ctx.sessionQuery.readSession. */
 	dshSessions?: () => Promise<HistorySession[]>;
 };
@@ -72,7 +75,7 @@ function mayMatch(text: string, queries: readonly string[], codex: boolean): boo
 	});
 }
 
-async function localSessions(harness: "pi" | "claude" | "codex", root: string): Promise<HistorySession[]> {
+async function localSessions(harness: "pi" | "claude" | "codex", root: string, cacheRoot: string): Promise<HistorySession[]> {
 	const paths = await filesAt(root, harness === "codex" ? 3 : 1);
 	const sessions: HistorySession[] = [];
 	for (const path of paths) {
@@ -86,6 +89,21 @@ async function localSessions(harness: "pi" | "claude" | "codex", root: string): 
 		catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
 		sessions.push({
 			harness, id, modifiedAt,
+			async loadRepresentative() {
+				return cachedSessionRepresentative(this, path, cacheRoot, async (track) => {
+					if (harness === "codex") {
+						const readBytes = createCodexTranscriptReader();
+						const history = await readCodexHistory({ threadId: id, transcriptPath: path }, async (source, remaining) => {
+							await track(source);
+							return readBytes(source, remaining);
+						});
+						return { data: { projection: history.projection }, lineageSources: history.lineageSources };
+					}
+					const data = await this.load();
+					if (!data) throw new Error("Session returned no history");
+					return { data };
+				});
+			},
 			async load(queries) {
 				if (harness === "codex") {
 					const readBytes = createCodexTranscriptReader();
@@ -110,17 +128,19 @@ export function localHistoryCorpus(options: LocalHistoryOptions): HistoryCorpus 
 		currentHarness: options.current.harness,
 		async sessions(onlyHarness) {
 			const roots = rootsFor(options);
+			const env = options.env ?? process.env;
+			const cacheRoot = options.summaryCacheRoot ?? historySummaryCacheRoot(options.home ?? env.HOME ?? homedir(), env);
 			const discovered: HistorySession[] = [];
 			for (const harness of ["pi", "claude", "codex"] as const) {
 				if (onlyHarness !== undefined && onlyHarness !== harness) continue;
 				const root = roots[harness];
-				if (root != null) discovered.push(...await localSessions(harness, root));
+				if (root != null) discovered.push(...await localSessions(harness, root, cacheRoot));
 			}
 			if (options.dshSessions && (onlyHarness === undefined || onlyHarness === "dsh")) discovered.push(...await options.dshSessions());
 			discovered.sort((a, b) => b.modifiedAt - a.modifiedAt || sessionIdentity(a).localeCompare(sessionIdentity(b)));
 			const unique = new Map<string, HistorySession>();
 			for (const session of discovered) if (!unique.has(sessionIdentity(session))) unique.set(sessionIdentity(session), session);
-			const current = { ...options.current, modifiedAt: Date.now() };
+			const current = { harness: options.current.harness, id: options.current.id, load: options.current.load, modifiedAt: Date.now() };
 			if (onlyHarness === undefined || onlyHarness === current.harness) unique.set(sessionIdentity(current), current);
 			return [...unique.values()].sort((a, b) => b.modifiedAt - a.modifiedAt || sessionIdentity(a).localeCompare(sessionIdentity(b)));
 		},

@@ -197,14 +197,16 @@ export class CorpusCollector {
 		this.candidates.splice(low, 0, candidate);
 	}
 
+	/** Admit an already selected strict overview event without selecting it a second time. */
+	addRepresentative(session: string, event: HistoryEvent | undefined): boolean {
+		if (!event) return false;
+		this.admit({ session, event });
+		return true;
+	}
+
 	/** Returns whether this session contributes an overview representative. */
 	add(session: string, projection: HistoryProjection): boolean {
-		if (this.scoped.query === undefined) {
-			const event = sessionRepresentative(projection, this.scoped);
-			if (!event) return false;
-			this.admit({ session, event });
-			return true;
-		}
+		if (this.scoped.query === undefined) return this.addRepresentative(session, sessionRepresentative(projection, this.scoped));
 		for (const event of filteredItems(projection, this.scoped, false)) {
 			const document = eventDocument(event);
 			if ((event.role === "user" || event.role === "assistant") && document === "") continue;

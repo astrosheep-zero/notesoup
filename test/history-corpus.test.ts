@@ -58,7 +58,7 @@ async function fixture(t: TestContext) {
 	]);
 	const codexPath = await put(join(roots.codex, "2026/10/06", `rollout-2026-10-06T01-02-03-${CODEX}.jsonl.zst`), zstdCompressSync(Buffer.from(codexText)), 30);
 	const current = descriptor("pi", "current", projection("current"));
-	const corpus = localHistoryCorpus({ home, env: {}, current });
+	const corpus = localHistoryCorpus({ home, env: {}, summaryCacheRoot: join(home, "history-cache"), current });
 	const ctx: HistoryContext = { current: () => projection("current"), corpus };
 	return { home, roots, put, ctx, corpus, piPath, claudePath, codexPath, codexText };
 }
@@ -350,20 +350,20 @@ test("root overrides/env homes are hermetic, missing roots are empty, and foreig
 	const f = await fixture(t);
 	const roots: LocalHistoryRoots = { pi: f.roots.pi, claude: null, codex: null };
 	const current = { harness: "dsh" as const, id: "unreadable", load: async () => { throw new Error("current unavailable"); } };
-	const ctx: HistoryContext = { current: () => { throw new Error("must not read current"); }, corpus: localHistoryCorpus({ roots, env: {}, home: join(f.home, "absent"), current }) };
+	const ctx: HistoryContext = { current: () => { throw new Error("must not read current"); }, corpus: localHistoryCorpus({ roots, env: {}, summaryCacheRoot: join(f.home, "history-cache"), home: join(f.home, "absent"), current }) };
 	assert.equal(data(await historyRead.execute({ session: "pi:pi-one", seq: 1 }, ctx)).session, "pi:pi-one");
 	assert.equal(data(await historyList.execute({ session: "pi:*", query: "needle" }, ctx)).items.length, 2);
 	const env = { PI_CODING_AGENT_DIR: dirname(f.roots.pi), CLAUDE_CONFIG_DIR: dirname(f.roots.claude), CODEX_HOME: dirname(f.roots.codex) };
-	const configured = localHistoryCorpus({ current, home: join(f.home, "absent"), env });
+	const configured = localHistoryCorpus({ current, summaryCacheRoot: join(f.home, "history-cache"), home: join(f.home, "absent"), env });
 	assert.equal((await configured.sessions()).length, 4);
-	const explicit = localHistoryCorpus({ current, home: join(f.home, "absent"), env: { NOTESOUP_HISTORY_PI_ROOT: f.roots.pi, NOTESOUP_HISTORY_CLAUDE_ROOT: f.roots.claude, NOTESOUP_HISTORY_CODEX_ROOT: f.roots.codex } });
+	const explicit = localHistoryCorpus({ current, summaryCacheRoot: join(f.home, "history-cache"), home: join(f.home, "absent"), env: { NOTESOUP_HISTORY_PI_ROOT: f.roots.pi, NOTESOUP_HISTORY_CLAUDE_ROOT: f.roots.claude, NOTESOUP_HISTORY_CODEX_ROOT: f.roots.codex } });
 	assert.equal((await explicit.sessions()).length, 4);
 	refusal(await historyRead.execute({ session: "dsh:unreadable", seq: 1 }, ctx), "history_unavailable");
 });
 
 test("DSH service descriptors participate in resolution/search only when supplied; a live descriptor wins over disk", async (t) => {
 	const f = await fixture(t);
-	const corpus = localHistoryCorpus({ home: f.home, env: {}, current: descriptor("pi", "pi-one", projection("live needle")), dshSessions: async () => [descriptor("dsh", "dsh-one", projection("DSH needle", "system"))] });
+	const corpus = localHistoryCorpus({ home: f.home, env: {}, summaryCacheRoot: join(f.home, "history-cache"), current: descriptor("pi", "pi-one", projection("live needle")), dshSessions: async () => [descriptor("dsh", "dsh-one", projection("DSH needle", "system"))] });
 	const ctx: HistoryContext = { current: () => projection(), corpus };
 	assert.equal(data(await historyRead.execute({ session: "dsh:dsh", seq: 1 }, ctx)).session, "dsh:dsh-one");
 	assert.equal(data(await historyRead.execute({ session: "pi-one", seq: 1 }, ctx)).text, "live needle 1");
@@ -404,7 +404,7 @@ test("qualified lookup and current-harness matches do not inspect unrelated root
 	const notDirectory = join(f.home, "not-a-directory");
 	await writeFile(notDirectory, "unrelated root must not be traversed");
 	const current = descriptor("pi", "current");
-	const ctx: HistoryContext = { current: () => projection(), corpus: localHistoryCorpus({ current, roots: { pi: f.roots.pi, claude: notDirectory, codex: null }, env: {} }) };
+	const ctx: HistoryContext = { current: () => projection(), corpus: localHistoryCorpus({ current, summaryCacheRoot: join(f.home, "history-cache"), roots: { pi: f.roots.pi, claude: notDirectory, codex: null }, env: {} }) };
 	assert.equal(data(await historyRead.execute({ session: "pi-one", seq: 1 }, ctx)).session, "pi:pi-one");
 	assert.equal(data(await historyRead.execute({ session: "pi:pi-one", seq: 1 }, ctx)).session, "pi:pi-one");
 	assert.equal(data(await historyList.execute({ session: "pi:*", query: "needle" }, ctx)).items.length, 7);

@@ -4,7 +4,7 @@ import { HISTORY_PREVIEW_CHARS, MAX_READ_WINDOW_CHARS } from "./output.js";
 import { failure, fitsResult, resultSchema, readTextWindow, renderOutcome, renderTextWindow, success, TextWindowRequestSchema, TextWindowSchema, type Operation } from "./result.js";
 import { historyRoles, searchQuery } from "./schema.js";
 import { HistoryPageSchema, CorpusCollector, corpusSelection, selectPage, type HistoryPage } from "../history/query.js";
-import { currentHistory, loadHistorySession, matchesSession, parseSessionSelector, resolveSession, sessionIdentity, type HistoryContext } from "../history/corpus.js";
+import { currentHistory, loadHistoryRepresentative, loadHistorySession, matchesSession, parseSessionSelector, resolveSession, sessionIdentity, type HistoryContext } from "../history/corpus.js";
 import { allItems, eventDocument, nestedCallSummary, toolSummary, HistoryRoleSchema, NestedCallSummarySchema, ToolSummarySchema, type HistoryFoldedRow, type HistoryPageItem } from "../history/history.js";
 
 /** One read: identity, tool summary and a flat document slice. */
@@ -117,13 +117,15 @@ export const historyList: Operation<typeof historyListParameters, HistoryPage, [
 			const sessions = (await corpus.sessions(selector.data.harness)).filter((session) => matchesSession(session, selector.data));
 			const queries = Array.isArray(scoped.data.query) ? scoped.data.query : undefined;
 			if (!queries) sessions.sort((a, b) => (scoped.data.from === "oldest" ? a.modifiedAt - b.modifiedAt : b.modifiedAt - a.modifiedAt) || sessionIdentity(a).localeCompare(sessionIdentity(b)));
+			const representative = !queries && scoped.data.roles === undefined && scoped.data.since === undefined && scoped.data.until === undefined;
 			const collector = new CorpusCollector(scoped.data);
 			let qualifying = 0;
 			const notices: string[] = [];
 			for (const session of sessions) {
-				const result = await loadHistorySession(session, queries);
+				const result = representative ? await loadHistoryRepresentative(session) : await loadHistorySession(session, queries);
 				if (!result.ok || !result.data) continue;
-				if (!collector.add(sessionIdentity(session), result.data.projection)) continue;
+				const added = "projection" in result.data ? collector.add(sessionIdentity(session), result.data.projection) : collector.addRepresentative(sessionIdentity(session), result.data.event);
+				if (!added) continue;
 				qualifying++;
 				if (result.data.notice) notices.push(`session ${sessionIdentity(session)}: ${result.data.notice}`);
 				if (!queries && qualifying >= Math.min(500, Math.max(1, params.limit ?? 20))) break;
