@@ -118,7 +118,7 @@ test("all single-session recipes preserve the resolved identity, including folde
 		{ seq: 4, windowId: "w", role: "assistant", text: "last" },
 	] }], 4, new Set([1, 2, 3, 4]));
 	const ctx = context([descriptor("claude", "target-session", p)]);
-	const page = await historyList.execute({ session: "claude:target", limit: 1, after_seq: 1, before_seq: 5 }, ctx);
+	const page = await historyList.execute({ session: "claude:target", limit: 1, after_seq: 1, before_seq: 5, from: "newest" }, ctx);
 	assert.equal(data(page).has_older, true);
 	assert.match(historyList.render(page), /→ older: \{"session":"claude:target-session","before_seq":4\}/);
 	const first = await historyList.execute({ session: "target", from: "oldest", limit: 1 }, ctx);
@@ -129,6 +129,7 @@ test("all single-session recipes preserve the resolved identity, including folde
 	assert.ok(expand);
 	const recipe = JSON.parse(expand[1]!) as { session: string; after_seq: number; before_seq: number; roles: ["context"] };
 	assert.equal(recipe.session, "claude:target-session");
+	assert.equal("from" in recipe, false);
 	assert.deepEqual(data(await historyList.execute(recipe, ctx)).items.map((item) => "seq" in item ? item.seq : -1), [2]);
 	assert.match(historyList.render(foldPage), /session claude:target-session \| seq 1 \| user/);
 	const read = await historyRead.execute({ session: "target", seq: 3 }, ctx);

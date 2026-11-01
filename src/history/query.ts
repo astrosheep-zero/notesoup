@@ -225,7 +225,7 @@ export class CorpusCollector {
 function selectPrepared(prepared: PreparedSelection, scoped: HistorySelection, fits: (page: HistoryPage) => boolean, maxChars: number): Outcome<HistoryPage> {
 	const { candidates } = prepared;
 	// Grow a contiguous interval from the requested end; even a byte-limited newest page stays ascending.
-	const from = scoped.from ?? (scoped.after_seq !== undefined && scoped.before_seq === undefined ? "oldest" : "newest");
+	const from = scoped.from ?? (scoped.after_seq !== undefined ? "oldest" : "newest");
 	const newest = from === "newest";
 	let start = newest ? candidates.length : 0;
 	let end = start;

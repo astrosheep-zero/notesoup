@@ -230,18 +230,35 @@ test("history_list pages from the end `from` names and returns bounded ranges", 
 	for (let index = 7; index <= 10; index++) appendText(session, "user", `message-${index}`);
 	assert.deepEqual(seqs(await call(captured, "history_list", { after_seq: 2, limit: 3 }, ctx)), [3, 4, 5]);
 	assert.deepEqual(seqs(await call(captured, "history_list", { after_seq: 2, limit: 3, from: "newest" }, ctx)), [8, 9, 10]);
-	const range = page(await call(captured, "history_list", { after_seq: 2, before_seq: 10, limit: 3, from: "oldest" }, ctx));
-	assert.deepEqual(range.items.map((item) => item.seq), [3, 4, 5]);
-	assert.equal(range.has_older, false);
-	assert.equal(range.has_newer, true);
-	assert.match(rendered(await call(captured, "history_list", { after_seq: 2, before_seq: 10, limit: 3, from: "oldest" }, ctx)), /→ newer: \{"after_seq":5\}/, "the footer prints the exact call to page newer");
-	assert.deepEqual(seqs(await call(captured, "history_list", { after_seq: 2, before_seq: 10, limit: 3 }, ctx)), [7, 8, 9], "the same range with the default from starts from the newest end");
-	const rangeNext = page(await call(captured, "history_list", { after_seq: range.items.at(-1)!.seq, before_seq: 10, from: "oldest", limit: 3 }, ctx));
-	assert.deepEqual(rangeNext.items.map((item) => item.seq), [6, 7, 8]);
-	const rangeLast = page(await call(captured, "history_list", { after_seq: rangeNext.items.at(-1)!.seq, before_seq: 10, from: "oldest", limit: 3 }, ctx));
-	assert.deepEqual(rangeLast.items.map((item) => item.seq), [9]);
-	assert.equal(rangeLast.has_older, false);
-	assert.equal(rangeLast.has_newer, false);
+	assert.deepEqual(seqs(await call(captured, "history_list", { after_seq: 2, before_seq: 10, limit: 3 }, ctx)), [3, 4, 5]);
+	assert.deepEqual(seqs(await call(captured, "history_list", { after_seq: 2, before_seq: 10, limit: 3, from: "newest" }, ctx)), [7, 8, 9]);
+	assert.deepEqual(seqs(await call(captured, "history_list", { before_seq: 10, limit: 3, from: "oldest" }, ctx)), [1, 2, 3]);
+
+	let forward = { after_seq: 2, before_seq: 10, limit: 3 };
+	const forwardSeqs: number[] = [];
+	while (true) {
+		const result = await call(captured, "history_list", forward, ctx);
+		const current = page(result);
+		forwardSeqs.push(...seqs(result));
+		if (!current.has_newer) break;
+		const footer = /→ newer: (\{[^\n]+\})/.exec(rendered(result));
+		assert.ok(footer);
+		forward = { ...forward, ...JSON.parse(footer[1]!) };
+	}
+	assert.deepEqual(forwardSeqs, [3, 4, 5, 6, 7, 8, 9]);
+
+	let backward = { after_seq: 2, before_seq: 10, limit: 3, from: "newest" as const };
+	const backwardPages: number[][] = [];
+	while (true) {
+		const result = await call(captured, "history_list", backward, ctx);
+		const current = page(result);
+		backwardPages.unshift(seqs(result));
+		if (!current.has_older) break;
+		const footer = /→ older: (\{[^\n]+\})/.exec(rendered(result));
+		assert.ok(footer);
+		backward = { ...backward, ...JSON.parse(footer[1]!) };
+	}
+	assert.deepEqual(backwardPages.flat(), [3, 4, 5, 6, 7, 8, 9]);
 });
 
 test("a one-row page budget admits the newest candidate first", () => {
@@ -615,7 +632,7 @@ test("list renders paging and fold recipes across resets, and read renders a nei
 	toolResult(session, "t1", "bash", "done");
 	appendText(session, "user", "after tools");
 	const folded = await call(captured, "history_list", {}, ctx);
-	assert.match(rendered(folded), /→ expand: \{"after_seq":\d+,"before_seq":\d+,"from":"oldest","roles":\["tool","context"\]\}/, "a folded row prints its own expand recipe");
+	assert.match(rendered(folded), /→ expand: \{"after_seq":\d+,"before_seq":\d+,"roles":\["tool","context"\]\}/, "a folded row prints its own expand recipe");
 
 	appendText(session, "user", "needle read target");
 	const hits = page(await call(captured, "history_list", { query: "needle read target" }, ctx));
