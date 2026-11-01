@@ -6,6 +6,7 @@ import { piHistoryFromJsonl } from "./pi.js";
 import { offlineClaudeHistoryFromJsonl } from "./claude.js";
 import { readCodexHistory } from "./codex.js";
 import { createCodexTranscriptReader } from "./codex-transcript.js";
+import { createHistoryPrefilter, historyFileMayMatch, type HistoryPrefilter } from "./prefilter.js";
 import { sessionIdentity, type HistoryCorpus, type HistorySession } from "./corpus.js";
 import { cachedSessionRepresentative, historySummaryCacheRoot } from "./summary-cache.js";
 
@@ -46,36 +47,7 @@ async function filesAt(root: string, depth: number): Promise<string[]> {
 	return paths;
 }
 
-const PRESENTATION = `Codex unknown arguments not recorded output nested calls complete incomplete terminal ms image audio items null
-	copied subagent inference prefix omitted child-local history starts at native ordinal copied model context
-	does not prove original parent event addresses compaction boundary replacement_history is an inference checkpoint
-	not new conversation events opaque content omitted not recovered plaintext MCP completion without a recorded raw call
-	FunctionCallOutput display without raw output encrypted content unavailable world_state snapshot patch omitted from
-	the text projection not a newly spoken message native structured retained context not newly spoken dialogue`;
-
-function escapeRegExp(value: string): string {
-	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/** Only prove misses, not hits. Only \\uXXXX can encode a word character; other JSON escapes are control/quote/slash. */
-function mayMatch(text: string, queries: readonly string[], codex: boolean): boolean {
-	if (codex && text.includes('"history_base"')) return true;
-	const unescaped = text.includes("\\u")
-		? text.replace(/\\+u([0-9a-fA-F]{4})/g, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
-		: text;
-	return queries.some((query) => {
-		const tokens = query.match(/[\p{L}\p{N}_-]+/gu);
-		return tokens === null || tokens.every((token) => {
-			const parts = /^\d+ms$/iu.test(token) ? [token.slice(0, -2), "ms"] : [token];
-			return parts.every((part) => {
-				const literal = new RegExp(escapeRegExp(part), "iu");
-				return literal.test(unescaped) || (unescaped !== text && literal.test(text)) || literal.test(PRESENTATION);
-			});
-		});
-	});
-}
-
-async function localSessions(harness: "pi" | "claude" | "codex", root: string, cacheRoot: string): Promise<HistorySession[]> {
+async function localSessions(harness: "pi" | "claude" | "codex", root: string, cacheRoot: string, prefilters: WeakMap<readonly string[], HistoryPrefilter>): Promise<HistorySession[]> {
 	const paths = await filesAt(root, harness === "codex" ? 3 : 1);
 	const sessions: HistorySession[] = [];
 	for (const path of paths) {
@@ -105,13 +77,13 @@ async function localSessions(harness: "pi" | "claude" | "codex", root: string, c
 				});
 			},
 			async load(queries) {
-				if (harness === "codex") {
-					const readBytes = createCodexTranscriptReader();
-					if (queries?.length && !mayMatch((await readBytes(path)).toString("utf8"), queries, true)) return undefined;
-					return { projection: (await readCodexHistory({ threadId: id, transcriptPath: path }, readBytes)).projection };
+				if (queries?.length) {
+					let prefilter = prefilters.get(queries);
+					if (!prefilter) prefilters.set(queries, prefilter = createHistoryPrefilter(queries));
+					if (!await historyFileMayMatch(path, prefilter, harness === "codex")) return undefined;
 				}
+				if (harness === "codex") return { projection: (await readCodexHistory({ threadId: id, transcriptPath: path })).projection };
 				const text = await readFile(path, "utf8");
-				if (queries?.length && !mayMatch(text, queries, false)) return undefined;
 				if (harness === "pi") return { projection: piHistoryFromJsonl(text, id) };
 				const projection = offlineClaudeHistoryFromJsonl(text, id);
 				const missing = projection.missingAncestors;
@@ -131,10 +103,11 @@ export function localHistoryCorpus(options: LocalHistoryOptions): HistoryCorpus 
 			const env = options.env ?? process.env;
 			const cacheRoot = options.summaryCacheRoot ?? historySummaryCacheRoot(options.home ?? env.HOME ?? homedir(), env);
 			const discovered: HistorySession[] = [];
+			const prefilters = new WeakMap<readonly string[], HistoryPrefilter>();
 			for (const harness of ["pi", "claude", "codex"] as const) {
 				if (onlyHarness !== undefined && onlyHarness !== harness) continue;
 				const root = roots[harness];
-				if (root != null) discovered.push(...await localSessions(harness, root, cacheRoot));
+				if (root != null) discovered.push(...await localSessions(harness, root, cacheRoot, prefilters));
 			}
 			if (options.dshSessions && (onlyHarness === undefined || onlyHarness === "dsh")) discovered.push(...await options.dshSessions());
 			discovered.sort((a, b) => b.modifiedAt - a.modifiedAt || sessionIdentity(a).localeCompare(sessionIdentity(b)));

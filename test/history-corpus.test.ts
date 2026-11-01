@@ -501,6 +501,27 @@ test("wildcards skip corrupt and unreadable sessions, while single-session lists
 	}
 });
 
+test("escaped streaming misses never call whole-file reads, synchronous decompression, or strict JSON parsing", async (t) => {
+	const f = await fixture(t), read = fs.readFile, decompress = zlib.zstdDecompressSync, parse = JSON.parse;
+	for (const path of [f.piPath, f.claudePath]) await f.put(path, (await readFile(path, "utf8")).replace(/needle/iu, String.raw`\u006eeedle`));
+	const escapedCodex = f.codexText.replace("needle", String.raw`\u006eeedle`);
+	await f.put(f.codexPath, zstdCompressSync(Buffer.from(escapedCodex)));
+	const fullReads: string[] = [];
+	let decompressions = 0, parses = 0;
+	t.mock.method(fs, "readFile", (...args: Parameters<typeof fs.readFile>) => { fullReads.push(String(args[0])); return read(...args); });
+	t.mock.method(zlib, "zstdDecompressSync", (...args: Parameters<typeof decompress>) => { decompressions++; return decompress(...args); });
+	t.mock.method(JSON, "parse", (...args: Parameters<typeof parse>) => { parses++; return parse(...args); });
+	syncBuiltinESMExports();
+	t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+	for (const compressed of [true, false]) {
+		if (!compressed) { await rm(f.codexPath); await f.put(f.codexPath.replace(/\.zst$/, ""), escapedCodex); }
+		for (const session of (await f.corpus.sessions()).filter((session) => session.id !== "current")) assert.equal(await session.load(["absentword"]), undefined, session.harness);
+	}
+	assert.deepEqual(fullReads, []);
+	assert.equal(decompressions, 0);
+	assert.equal(parses, 0);
+});
+
 test("Codex local query handoff reads each full source once per load, compressed or plain", async (t) => {
 	const f = await fixture(t), read = fs.readFile, decompress = zlib.zstdDecompressSync;
 	const fullReads: string[] = [];
@@ -555,7 +576,7 @@ test("local query misses skip full decoding for Pi, Claude and compressed/uncomp
 	await assert.rejects(() => compressed.load());
 });
 
-test("raw filtering never loses escaped JSON, Unicode or OR-query matches", async (t) => {
+test("streaming filtering never loses escaped JSON, Unicode or OR-query matches", async (t) => {
 	const f = await fixture(t);
 	const content = 'NEEDLE 你好 😀 quote"slash\\ line\nbreak İ LONGſ CASEΣ';
 	const escapeText = (text: string) => text.replaceAll("NEEDLE", "\\u004e\\u0045\\u0045\\u0044\\u004c\\u0045")
@@ -576,7 +597,7 @@ test("raw filtering never loses escaped JSON, Unicode or OR-query matches", asyn
 	assert.deepEqual(data(await historyList.execute({ session: "*", query: "absentword" }, f.ctx)).items, []);
 });
 
-test("raw filtering preserves generated tool documents, compact arguments and nested JSON escapes", async (t) => {
+test("streaming filtering preserves generated tool documents, compact arguments and nested JSON escapes", async (t) => {
 	const f = await fixture(t);
 	await f.put(f.piPath, rows([
 		{ type: "session", id: "pi-one" },
@@ -600,7 +621,7 @@ test("raw filtering preserves generated tool documents, compact arguments and ne
 	}
 });
 
-test("Codex raw pre-filtering preserves query hits inherited through history_base", async (t) => {
+test("Codex streaming prefilter preserves query hits inherited through a split history_base", async (t) => {
 	const f = await fixture(t);
 	const child = "019a0000-0000-7000-8000-000000000002";
 	const parent = rows([
@@ -608,12 +629,49 @@ test("Codex raw pre-filtering preserves query hits inherited through history_bas
 		{ type: "response_item", ordinal: 1, timestamp: AT, payload: { type: "message", role: "user", content: [{ type: "input_text", text: "ancestralneedle" }] } },
 	]);
 	await f.put(f.codexPath, zstdCompressSync(Buffer.from(parent)));
-	await f.put(join(dirname(f.codexPath), `rollout-2026-10-06T01-02-03-${child}.jsonl`), rows([
+	const childText = rows([
 		{ type: "session_meta", ordinal: 2, timestamp: AT, payload: { id: child, cwd: "/workspace", cli_version: "0.160.1", history_mode: "paginated", history_base: { thread_id: CODEX, end_ordinal_exclusive: 2, end_byte_offset: Buffer.byteLength(parent) }, context_window: { window_id: WINDOW } } },
 		{ type: "response_item", ordinal: 3, timestamp: AT, payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "local only" }] } },
-	]));
+	]);
+	// Put the inheritance sentinel across the filesystem stream's 64KiB boundary.
+	await f.put(join(dirname(f.codexPath), `rollout-2026-10-06T01-02-03-${child}.jsonl`), " ".repeat(65535 - childText.indexOf('"history_base"')) + childText);
 	const page = data(await historyList.execute({ session: `codex:${child}*`, query: "ancestralneedle" }, f.ctx));
 	assert.deepEqual(page.items.map((item) => "seq" in item ? [item.session, item.seq] : null), [[`codex:${child}`, 2]]);
+});
+
+test("streaming search agrees with strict decoding across chunk and event-time boundaries", async (t) => {
+	const f = await fixture(t);
+	const content = "NEEDLE LONGſ CASEΣ K 𐐀 你好 😀";
+	const pad = (text: string) => " ".repeat(65535 - Buffer.byteLength(text.slice(0, text.indexOf("NEEDLE")))) + text;
+	await f.put(f.piPath, pad(rows([
+		{ type: "session", id: "pi-one" },
+		{ type: "message", id: "u", parentId: null, timestamp: AT, message: { role: "user", content } },
+		{ type: "message", id: "a", parentId: "u", message: { role: "assistant", content: "untimed needle" } },
+	])));
+	await f.put(f.claudePath, pad(rows([
+		{ type: "user", uuid: "u", parentUuid: null, sessionId: "claude-one", timestamp: "2026-10-06T01:02:04Z", message: { role: "user", content } },
+	])));
+	const codexText = pad(f.codexText.replace("Codex needle", content));
+	await f.put(f.codexPath, zstdCompressSync(Buffer.from(codexText)));
+	const plain = f.codexPath.replace(/\.zst$/, "");
+	for (const compressed of [true, false]) {
+		if (!compressed) { await rm(f.codexPath); await f.put(plain, codexText); }
+		const sessions = await f.corpus.sessions();
+		const strict: HistoryContext = { current: () => projection(), corpus: { currentHarness: "pi", sessions: async () => sessions.map((session) => ({ ...session, load: () => session.load() })) } };
+		for (const query of ["needle", "longs", "caseς", "k", "𐐨", "你好", "😀", "absentword", ["absentword", "needle"]]) {
+			for (const bounds of [{}, { since: AT, until: "2026-10-06T01:02:08Z" }, { since: "2026-10-06T01:02:08Z" }, { until: AT }]) {
+				const args = { session: "*", query, limit: 20, ...bounds };
+				assert.deepEqual(await historyList.execute(args, f.ctx), await historyList.execute(args, strict), JSON.stringify({ compressed, ...args }));
+			}
+		}
+	}
+});
+
+test("stream failures skip wildcard sessions but explicit selections still refuse", async (t) => {
+	const f = await fixture(t);
+	await f.put(f.codexPath, "not-zstd");
+	assert.deepEqual(data(await historyList.execute({ session: "codex:*", query: "absentword" }, f.ctx)).items, []);
+	refusal(await historyList.execute({ session: `codex:${CODEX}`, query: "absentword" }, f.ctx), "history_unavailable");
 });
 
 test("offline Claude attachments and retry branches are readable and searchable through session selectors", async (t) => {
