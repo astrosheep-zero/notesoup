@@ -15,7 +15,7 @@ history_read({ session: "claude:full-session-id", seq: 42 })
 
 Within the requested harness an exact ID wins over prefixes. Without a harness, resolution checks the current harness first (exact ID, then prefixes); only if it has no matches are the other harnesses checked. No match returns `unknown_session`. Multiple matches return `ambiguous_session` with up to five qualified candidates; specify a harness or a longer ID rather than guessing.
 
-Explicit targeting always returns the canonical `session: "<harness>:<full-id>"`, even when the target happens to be the current session. Headers become `session <harness>:<id> | seq <seq> | <role>`. `page_older`, `page_newer`, folded-row `expand`, and read `neighborhood` recipes carry that same canonical selector. Copy it into subsequent `history_read` calls, including reads continued with `next_offset_chars`.
+Explicit targeting always returns the canonical `session: "<harness>:<full-id>"`, even when the target happens to be the current session. Headers become `session <harness>:<id> | seq <seq> | <role>`. Paging footers, folded-row `expand`, and read `neighborhood` recipes carry that same canonical selector. Structured pages expose `has_older` and `has_newer`; use the first or last item’s seq as the next `before_seq` or `after_seq`, respectively (use `first_seq` or `last_seq` for folded rows), together with its session. The newer footer is `→ newer: {"session":"<harness>:<full-id>","after_seq":...}`. With only `after_seq`, omitted `from` defaults to `oldest`; with `before_seq`, both bounds, or neither, it defaults to `newest`. Explicit `from` takes precedence. Copy it into subsequent `history_read` calls, including reads continued with `next_offset_chars`.
 
 ## Browse or search across sessions
 
@@ -34,7 +34,7 @@ history_list({ session: "codex:*", query: "migration", roles: ["tool"], since: "
 - With a query, every role is searched, including tool arguments/output and context; `roles` can narrow this. There are no folded rows.
 - `since` is inclusive and `until` exclusive. Time-bounded searches exclude events with no usable timestamp.
 - Search hits are merged by event time, oldest first, with a deterministic session/seq tie-break; untimed events sort before timed events. For query searches, `limit` counts from the newest event end by default, or the oldest with `from: "oldest"`. The complete text and structured result still share the 32 KiB budget, so large previews can reduce the admitted page.
-- Each event carries its canonical `session`. `page_older` and `page_newer` are always null. Narrow by session pattern, query, roles or time rather than trying to page across per-session seqs.
+- Each event carries its canonical `session`. `has_older` and `has_newer` are always false. Narrow by session pattern, query, roles or time rather than trying to page across per-session seqs.
 
 ## Local discovery and limits
 

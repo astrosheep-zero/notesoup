@@ -50,21 +50,11 @@ function resolveTimeBounds(params: HistorySelection): Outcome<{ sinceMs?: number
 	return success({ ...(since.data === undefined ? {} : { sinceMs: since.data }), ...(until.data === undefined ? {} : { untilMs: until.data }) });
 }
 
-export const HistoryOlderSchema = Type.Object({
-	session: Type.Optional(Type.String()),
-	before_seq: Type.Integer({ minimum: 1 }),
-}, { additionalProperties: false });
-export const HistoryNewerSchema = Type.Object({
-	session: Type.Optional(Type.String()),
-	after_seq: Type.Integer({ minimum: 1 }),
-	from: Type.Literal("oldest"),
-}, { additionalProperties: false });
-
 export const HistoryPageSchema = Type.Object({
 	notice: Type.Optional(Type.String()),
 	items: Type.Array(Type.Union([HistoryPageItemSchema, HistoryFoldedRowSchema])),
-	page_older: Type.Union([HistoryOlderSchema, Type.Null()], { description: "Args to merge into `history_list` for older events." }),
-	page_newer: Type.Union([HistoryNewerSchema, Type.Null()], { description: "Args to merge into `history_list` for newer events." }),
+	has_older: Type.Boolean(),
+	has_newer: Type.Boolean(),
 }, { additionalProperties: false });
 
 /** One whole page payload, before it becomes an outcome. */
@@ -123,7 +113,6 @@ function prepareSelection(projection: HistoryProjection, params: HistorySelectio
 /** Assemble only the admitted interval. Edge folds belong only to a page reaching that edge. */
 function pageData(prepared: PreparedSelection, start: number, end: number, maxChars: number, preview?: HistoryPageItem): HistoryPage {
 	const { candidates, tail } = prepared;
-	const identity = prepared.session === undefined ? {} : { session: prepared.session };
 	const items: HistoryPage["items"] = [];
 	for (let index = start; index < end; index++) {
 		const candidate = candidates[index]!;
@@ -133,8 +122,8 @@ function pageData(prepared: PreparedSelection, start: number, end: number, maxCh
 	if (end === candidates.length && tail) items.push(tail);
 	return {
 		items,
-		page_older: !prepared.multi && start > 0 && start < end ? { ...identity, before_seq: candidates[start]!.event.seq } : null,
-		page_newer: !prepared.multi && end < candidates.length && start < end ? { ...identity, after_seq: candidates[end - 1]!.event.seq, from: "oldest" } : null,
+		has_older: !prepared.multi && start > 0 && start < end,
+		has_newer: !prepared.multi && end < candidates.length && start < end,
 	};
 }
 
@@ -191,7 +180,8 @@ export function selectCorpusPage(sessions: { session: string; projection: Histor
 function selectPrepared(prepared: PreparedSelection, scoped: HistorySelection, fits: (page: HistoryPage) => boolean, maxChars: number): Outcome<HistoryPage> {
 	const { candidates } = prepared;
 	// Grow a contiguous interval from the requested end; even a byte-limited newest page stays ascending.
-	const newest = scoped.from !== "oldest";
+	const from = scoped.from ?? (scoped.after_seq !== undefined && scoped.before_seq === undefined ? "oldest" : "newest");
+	const newest = from === "newest";
 	let start = newest ? candidates.length : 0;
 	let end = start;
 	const limit = Math.max(1, scoped.limit ?? 20);

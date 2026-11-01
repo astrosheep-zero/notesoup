@@ -73,7 +73,7 @@ test("session schemas are optional and non-empty, while the current projection k
 	const page = await historyList.execute({ limit: 1 }, p);
 	assert.ok(Check(historyList.outputSchema, page.ok ? page.data : page));
 	assert.equal("session" in data(page).items[0]!, false);
-	assert.deepEqual(data(page).page_older, { before_seq: 5 });
+	assert.equal(data(page).has_older, true);
 	assert.match(historyList.render(page), /^seq 5 \| user/);
 	assert.doesNotMatch(historyList.render(page), /session/);
 	const read = await historyRead.execute({ seq: 3 }, p);
@@ -118,9 +118,11 @@ test("all single-session recipes preserve the resolved identity, including folde
 	] }], 4, new Set([1, 2, 3, 4]));
 	const ctx = context([descriptor("claude", "target-session", p)]);
 	const page = await historyList.execute({ session: "claude:target", limit: 1, after_seq: 1, before_seq: 5 }, ctx);
-	assert.deepEqual(data(page).page_older, { session: "claude:target-session", before_seq: 4 });
+	assert.equal(data(page).has_older, true);
+	assert.match(historyList.render(page), /→ older: \{"session":"claude:target-session","before_seq":4\}/);
 	const first = await historyList.execute({ session: "target", from: "oldest", limit: 1 }, ctx);
-	assert.deepEqual(data(first).page_newer, { session: "claude:target-session", after_seq: 1, from: "oldest" });
+	assert.equal(data(first).has_newer, true);
+	assert.match(historyList.render(first), /→ newer: \{"session":"claude:target-session","after_seq":1\}/);
 	const foldPage = await historyList.execute({ session: "target", limit: 3 }, ctx);
 	const expand = /→ expand: (\{[^\n]+\})/.exec(historyList.render(foldPage));
 	assert.ok(expand);
@@ -181,8 +183,8 @@ test("wildcard query merges every role chronologically, limits from either end, 
 	assert.deepEqual(page.items.map((item) => "role" in item ? [item.session, item.seq, item.role] : null), [
 		["pi:pi-one", 1, "user"], ["claude:claude-one", 1, "user"], ["pi:pi-one", 3, "tool"], ["claude:claude-one", 2, "context"], [`codex:${CODEX}`, 2, "assistant"],
 	]);
-	assert.equal(page.page_older, null);
-	assert.equal(page.page_newer, null);
+	assert.equal(page.has_older, false);
+	assert.equal(page.has_newer, false);
 	const newest = data(await historyList.execute({ session: "*", query: "needle", limit: 2 }, ctx));
 	assert.deepEqual(newest.items, page.items.slice(-2));
 	const oldest = data(await historyList.execute({ session: "*", query: "needle", limit: 2, from: "oldest" }, ctx));
@@ -204,8 +206,8 @@ test("query-less wildcards browse recent sessions, normalize empty queries, and 
 		assert.deepEqual(page.items.map((item) => "seq" in item ? [item.session, item.seq, item.role] : null), [
 			["pi:pi-one", 1, "user"], ["claude:claude-one", 1, "user"], ["pi:current", 1, "user"], [`codex:${CODEX}`, 2, "assistant"],
 		]);
-		assert.equal(page.page_older, null);
-		assert.equal(page.page_newer, null);
+		assert.equal(page.has_older, false);
+		assert.equal(page.has_newer, false);
 		assert.ok(Check(historyList.outputSchema, page));
 	}
 	const harness = data(await historyList.execute({ session: "claude:*" }, ctx));
@@ -280,7 +282,7 @@ test("empty, filtered-out and unavailable sessions do not consume overview slots
 	const page = data(await historyList.execute({ session: "*", roles: ["user"], limit: 1 }, context(sessions)));
 	assert.deepEqual(page.items.map((item) => item.session), ["pi:topic"]);
 	assert.ok(loaded.includes("empty") && loaded.includes("filtered") && !loaded.includes("unneeded"));
-	assert.deepEqual(data(await historyList.execute({ session: "*" }, context([]))), { items: [], page_older: null, page_newer: null });
+	assert.deepEqual(data(await historyList.execute({ session: "*" }, context([]))), { items: [], has_older: false, has_newer: false });
 });
 
 test("wildcard queries reach lazy loaders and pre-filtered misses are not errors", async () => {
@@ -355,8 +357,8 @@ test("oversized cross-session reads/searches obey both wire budgets and retain c
 	assert.ok(Buffer.byteLength(JSON.stringify(page)) <= TOOL_OUTPUT_MAX_BYTES);
 	assert.ok(Buffer.byteLength(historyList.render(list)) <= TOOL_OUTPUT_MAX_BYTES);
 	assert.equal(page.items.length, 1);
-	assert.equal(page.page_older, null);
-	assert.equal(page.page_newer, null);
+	assert.equal(page.has_older, false);
+	assert.equal(page.has_newer, false);
 	const item = page.items[0]!;
 	assert.ok("seq" in item && item.truncated);
 	assert.equal(item.session, "codex:long-id");
@@ -369,8 +371,8 @@ test("oversized cross-session reads/searches obey both wire budgets and retain c
 	assert.ok(Buffer.byteLength(JSON.stringify(data(overview))) <= TOOL_OUTPUT_MAX_BYTES);
 	assert.ok(Buffer.byteLength(historyList.render(overview)) <= TOOL_OUTPUT_MAX_BYTES);
 	assert.equal(data(overview).items.length, 1);
-	assert.equal(data(overview).page_older, null);
-	assert.equal(data(overview).page_newer, null);
+	assert.equal(data(overview).has_older, false);
+	assert.equal(data(overview).has_newer, false);
 });
 
 test("qualified lookup and current-harness matches do not inspect unrelated roots", async (t) => {

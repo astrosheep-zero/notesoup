@@ -55,9 +55,13 @@ function renderPage(page: HistoryPage): string {
 	// An empty selection has no anchors either, so it would otherwise render as nothing at all.
 	if (page.items.length === 0) return `${page.notice ?? ""}No events match these filters.`;
 	const body = page.items.map((item) => ("folded" in item ? renderFoldedRow(item) : renderPageItem(item))).join("\n\n");
+	const first = page.items[0]!;
+	const last = page.items.at(-1)!;
+	const firstSeq = "folded" in first ? first.first_seq : first.seq;
+	const lastSeq = "folded" in last ? last.last_seq : last.seq;
 	const cursors = [
-		page.page_older === null ? "" : `→ older: ${JSON.stringify(page.page_older)}`,
-		page.page_newer === null ? "" : `→ newer: ${JSON.stringify(page.page_newer)}`,
+		page.has_older ? `→ older: ${JSON.stringify({ ...(first.session === undefined ? {} : { session: first.session }), before_seq: firstSeq })}` : "",
+		page.has_newer ? `→ newer: ${JSON.stringify({ ...(last.session === undefined ? {} : { session: last.session }), after_seq: lastSeq })}` : "",
 	].filter((line) => line !== "");
 	return (page.notice ?? "") + (cursors.length === 0 ? body : `${body}\n\n${cursors.join(" | ")}`);
 }
@@ -87,7 +91,7 @@ export const historyListParameters = Type.Object({
 	after_seq: Type.Optional(Type.Integer({ minimum: 1, description: "(optional) Only events with seq above this." })),
 	since: Type.Optional(Type.String({ minLength: 1, description: "(optional) ISO 8601 time; only events at or after it. UTC if no offset." })),
 	until: Type.Optional(Type.String({ minLength: 1, description: "(optional) ISO 8601 time; only events before it. UTC if no offset." })),
-	from: Type.Optional(Type.Union([Type.Literal("newest"), Type.Literal("oldest")], { description: "(optional, default newest) Which end `limit` counts from: newest or oldest. Results stay oldest first." })),
+	from: Type.Optional(Type.Union([Type.Literal("newest"), Type.Literal("oldest")], { description: "(optional) Which end `limit` counts from: newest or oldest (default oldest when only `after_seq` is set, else newest). Results stay oldest first." })),
 	limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500, description: "(optional, default 20) Max events per page; folded rows don't count." })),
 	max_chars_per_item: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_READ_WINDOW_CHARS, description: `(optional, default ${HISTORY_PREVIEW_CHARS}) Max preview chars per event.` })),
 }, { additionalProperties: false });
