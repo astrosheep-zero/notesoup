@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import fs, { mkdtemp, mkdir, readFile, realpath, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test, type TestContext } from "node:test";
-import { zstdCompressSync } from "node:zlib";
+import zlib, { zstdCompressSync } from "node:zlib";
 import { Check } from "typebox/value";
 import { localHistoryCorpus, type LocalHistoryRoots } from "../src/history/local.js";
 import { parseSessionSelector, type HistoryContext, type HistoryHarness, type HistorySession } from "../src/history/corpus.js";
@@ -444,6 +445,33 @@ test("wildcards skip corrupt and unreadable sessions, while single-session lists
 	for (const session of ["pi:broken", "claude:claude-one"]) {
 		assert.ok(refusal(await historyList.execute({ session, query: "absent" }, ctx), "history_unavailable").includes(session));
 		refusal(await historyRead.execute({ session, seq: 1 }, ctx), "history_unavailable");
+	}
+});
+
+test("Codex local query handoff reads each full source once per load, compressed or plain", async (t) => {
+	const f = await fixture(t), read = fs.readFile, decompress = zlib.zstdDecompressSync;
+	const fullReads: string[] = [];
+	let decompressions = 0;
+	t.mock.method(fs, "readFile", (...args: Parameters<typeof fs.readFile>) => { fullReads.push(String(args[0])); return read(...args); });
+	t.mock.method(zlib, "zstdDecompressSync", (...args: Parameters<typeof decompress>) => { decompressions++; return decompress(...args); });
+	syncBuiltinESMExports();
+	t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+	for (const compressed of [true, false]) {
+		const path = compressed ? f.codexPath : f.codexPath.replace(/\.zst$/, "");
+		const put = (text: string) => f.put(path, compressed ? zstdCompressSync(Buffer.from(text)) : text, 100);
+		await put(f.codexText);
+		const session = (await f.corpus.sessions("codex"))[0]!;
+		for (const queries of [undefined, [], ["NEEDLE"]]) {
+			fullReads.length = 0;
+			decompressions = 0;
+			assert.equal(allItems((await session.load(queries))!.projection)[0]?.text, "Codex needle");
+			assert.deepEqual(fullReads, [await realpath(path)]);
+			assert.equal(decompressions, compressed ? 1 : 0);
+		}
+		await put(f.codexText.replace("Codex needle", "updated needle"));
+		fullReads.length = 0;
+		assert.equal(allItems((await session.load(["NEEDLE"]))!.projection)[0]?.text, "updated needle");
+		assert.deepEqual(fullReads, [await realpath(path)]);
 	}
 });
 

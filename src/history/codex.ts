@@ -1,8 +1,8 @@
 /** Codex-owned decoding; selection, pairing, paging and budgets belong to shared history/tools. */
 import { projectHistory, type DecodedHistoryItem, type DecodedHistoryWindow, type HistoryProjection } from "./history.js";
-import { nativeObject as obj, nativeString as str, readCodexTranscript, type CodexRecord, type CodexTranscriptSource, type CodexTranscriptState, type NativeObject } from "./codex-transcript.js";
+import { nativeObject as obj, nativeString as str, readCodexTranscript, type CodexRecord, type CodexTranscriptReader, type CodexTranscriptSource, type CodexTranscriptState, type NativeObject } from "./codex-transcript.js";
 export type { CodexTranscriptSource } from "./codex-transcript.js";
-export type CodexHistoryState = CodexTranscriptState & { projection: HistoryProjection };
+export type CodexHistoryState = CodexTranscriptState & { projection: HistoryProjection; dependencies: string[] };
 
 const DISPLAY_COPIES = new Set(["user_message", "agent_message", "agent_reasoning", "agent_reasoning_raw_content", "context_compacted", "web_search_end", "image_generation_end"]);
 const ITEM_COPIES = new Set(["UserMessage", "AgentMessage", "Reasoning", "ContextCompaction", "WebSearch", "ImageGeneration", "HookPrompt"]);
@@ -104,8 +104,8 @@ function standaloneTool(record: CodexRecord, item: NativeObject): DecodedHistory
 	return { ...base, role: "tool", toolName: name, arguments: obj(item.arguments, "MCP arguments"), text: recorded.text ?? (item.error == null ? "" : JSON.stringify(item.error)), recordedStatus: item.status === "inProgress" ? "unfinished" : recorded.error ? "error" : "ok" };
 }
 
-export async function readCodexHistory(source: CodexTranscriptSource): Promise<CodexHistoryState> {
-	const { state, records, highestSeq } = await readCodexTranscript(source);
+export async function readCodexHistory(source: CodexTranscriptSource, readBytes?: CodexTranscriptReader): Promise<CodexHistoryState> {
+	const { state, records, highestSeq, dependencies } = await readCodexTranscript(source, readBytes);
 	const facts = new Map<string, ToolFact>(), callsSeen = new Set<string>(), responseIdsSeen = new Set<string>();
 	const windows = new Map<string, DecodedHistoryWindow>(), branchSeqs = new Set<number>();
 	const addWindow = (nativeId: string, createdAt?: string): DecodedHistoryWindow => {
@@ -189,5 +189,5 @@ export async function readCodexHistory(source: CodexTranscriptSource): Promise<C
 		}
 		if (item) addWindow(record.windowId!).items.push({ ...item, windowId: `codex:${source.threadId}:${record.windowId}` });
 	}
-	return { ...state, projection: projectHistory([...windows.values()], highestSeq, branchSeqs) };
+	return { ...state, projection: projectHistory([...windows.values()], highestSeq, branchSeqs), dependencies };
 }

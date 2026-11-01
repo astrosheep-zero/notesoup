@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile, appendFile, mkdir, readFile, rm, stat } from "node:fs/promises";
+import fs, { mkdtemp, writeFile, appendFile, mkdir, readFile, realpath, rm, stat, symlink, truncate } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { zstdCompressSync } from "node:zlib";
+import zlib, { zstdCompressSync } from "node:zlib";
 import { test, type TestContext } from "node:test";
 import { readCodexHistory } from "../plugins/codex/src/history.js";
 import { readCodexTranscriptState } from "../plugins/codex/src/transcript.js";
+import { createCodexTranscriptReader } from "../src/history/codex-transcript.js";
 import { allItems, eventDocument } from "../src/history/history.js";
 import { historyList, historyRead } from "../src/tools/history.js";
 
@@ -59,6 +61,88 @@ async function fixture(t: TestContext) {
 	await mkdir(day, { recursive: true });
 	return { home, day, path: join(day, nativeName(ROOT)) };
 }
+
+function countSourceReads(t: TestContext) {
+	const files = new Map<string, number>(), read = fs.readFile, decompress = zlib.zstdDecompressSync;
+	let decompressions = 0;
+	t.mock.method(fs, "readFile", (...args: Parameters<typeof fs.readFile>) => {
+		const path = String(args[0]);
+		files.set(path, (files.get(path) ?? 0) + 1);
+		return read(...args);
+	});
+	t.mock.method(zlib, "zstdDecompressSync", (...args: Parameters<typeof decompress>) => { decompressions++; return decompress(...args); });
+	syncBuiltinESMExports();
+	t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+	return { files, decompressions: () => decompressions };
+}
+
+test("request reader reuses the original compressed Buffer by canonical path and rechecks consumption limits", async (t) => {
+	const f = await fixture(t), path = f.path + ".zst", alias = join(f.home, "alias.jsonl.zst");
+	const text = jsonl([row("session_meta", meta(), 0), row("response_item", message("user", "needle ".repeat(1000)), 1)]);
+	const compressed = zstdCompressSync(Buffer.from(text));
+	await writeFile(path, compressed);
+	await symlink(path, alias);
+	const reads = countSourceReads(t), readBytes = createCodexTranscriptReader();
+	const [bytes, same] = await Promise.all([readBytes(path), readBytes(alias)]);
+	assert.equal(bytes, same);
+	assert.equal(bytes.toString("utf8"), text);
+	const result = await readCodexHistory({ transcriptPath: alias, threadId: ROOT }, readBytes);
+	assert.deepEqual(result.dependencies, [await realpath(path)]);
+	assert.equal(allItems(result.projection)[0]?.text, "needle ".repeat(1000));
+	await assert.rejects(readBytes(path, compressed.length - 1), /read size limit exceeded/);
+	await assert.rejects(readBytes(path, bytes.length - 1), /decoded size limit exceeded/);
+	assert.deepEqual([...reads.files.values()], [1]);
+	assert.equal(reads.decompressions(), 1);
+	// A later load must see appends; no byte cache survives in the default reader.
+	await writeFile(path, zstdCompressSync(Buffer.from(text + jsonl([row("response_item", message("assistant", "later"), 2)]))));
+	assert.equal(allItems((await readCodexHistory({ transcriptPath: path, threadId: ROOT })).projection).at(-1)?.text, "later");
+	assert.deepEqual([...reads.files.values()], [2]);
+	assert.equal(reads.decompressions(), 2);
+});
+
+test("cached source bytes still charge the aggregate decoded lineage budget", async (t) => {
+	const f = await fixture(t), path = join(f.day, nativeName(CHILD));
+	const ancestor = jsonl([row("session_meta", meta(), 0), row("response_item", message("user", "kept"), 1)]);
+	await writeFile(f.path, ancestor);
+	await writeFile(path, jsonl([row("session_meta", meta(CHILD, { history_base: { thread_id: ROOT, end_ordinal_exclusive: 2, end_byte_offset: Buffer.byteLength(ancestor) } }), 2)]));
+	// Sparse, uncommitted tails count against decoded resource limits, not event count.
+	for (const source of [path, f.path]) await truncate(source, 64 * 1024 * 1024 + 1);
+	const reads = countSourceReads(t), readBytes = createCodexTranscriptReader();
+	await readBytes(path);
+	await readBytes(f.path);
+	await assert.rejects(readCodexHistory({ transcriptPath: path, threadId: CHILD }, readBytes), /size limit exceeded/);
+	assert.deepEqual([...reads.files.values()], [1, 1]);
+});
+
+test("preloaded Buffers cannot bypass metadata, cutoff, cycle or containment checks", async (t) => {
+	const f = await fixture(t), path = join(f.day, nativeName(CHILD));
+	const ancestor = jsonl([row("session_meta", meta(), 0), row("response_item", message("user", "kept"), 1)]);
+	const base = { thread_id: ROOT, end_ordinal_exclusive: 2, end_byte_offset: Buffer.byteLength(ancestor) };
+	await writeFile(f.path, ancestor);
+	await writeFile(path, jsonl([row("session_meta", meta(CHILD, { history_base: { ...base, end_byte_offset: base.end_byte_offset - 1 } }), 2)]));
+	let readBytes = createCodexTranscriptReader();
+	await readBytes(path);
+	await assert.rejects(readCodexHistory({ transcriptPath: path, threadId: ROOT }, readBytes), /not requested threadId/);
+	await readBytes(f.path);
+	await assert.rejects(readCodexHistory({ transcriptPath: path, threadId: CHILD }, readBytes), /complete decoded JSONL boundary/);
+	await writeFile(path, jsonl([row("session_meta", meta(CHILD, { history_base: { ...base, thread_id: CHILD } }), 2)]));
+	readBytes = createCodexTranscriptReader();
+	await readBytes(path);
+	await assert.rejects(readCodexHistory({ transcriptPath: path, threadId: CHILD }, readBytes), /cycle or ancestry depth/);
+	// Native discovery ignores symlink files, but a symlinked native directory must
+	// still pass canonical containment before a cached ancestor can be consumed.
+	const outside = join(f.home, "outside"), archived = join(f.home, "archived_sessions");
+	await mkdir(outside);
+	const escaped = join(outside, nativeName(ROOT));
+	await writeFile(escaped, ancestor);
+	await rm(f.path);
+	await symlink(outside, archived);
+	await writeFile(path, jsonl([row("session_meta", meta(CHILD, { history_base: base }), 2)]));
+	readBytes = createCodexTranscriptReader();
+	await readBytes(escaped);
+	await readBytes(path);
+	await assert.rejects(readCodexHistory({ transcriptPath: path, threadId: CHILD }, readBytes), /escapes native storage roots/);
+});
 
 test("root: raw messages, top-level envelope metadata, native tool pairing and no display duplicates", async (t) => {
 	const f = await fixture(t);
@@ -134,7 +218,7 @@ test("two native checkpoints retain old raw history; replacement_history is not 
 	assert.match(historyList.render(earlier), /^seq 6 \| user\nmiddle text$/);
 	const old = await historyRead.execute({ seq: 2 }, second.projection);
 	assert.match(historyRead.render(old), /old raw text/);
-	const { projection: _projection, ...facts } = second;
+	const { projection: _projection, dependencies: _dependencies, ...facts } = second;
 	assert.deepEqual(await readCodexTranscriptState({ transcriptPath: f.path, threadId: ROOT }), facts);
 	assert.deepEqual(await readCodexHistory({ transcriptPath: f.path, threadId: ROOT }), second);
 });
@@ -192,7 +276,12 @@ test("fork + reverted physical lineage resolves only bounded ancestry, including
 		row("response_item", message("assistant", "new branch"), 6),
 	]));
 	await writeFile(join(f.day, nativeName(CHILD)), "THIS SIBLING MUST NEVER BE PARSED\n");
-	const result = await readCodexHistory({ transcriptPath: replacementPath, threadId: FORK });
+	const reads = countSourceReads(t), readBytes = createCodexTranscriptReader();
+	await readBytes(replacementPath); // The local prefilter's root read is handed to strict decode.
+	const result = await readCodexHistory({ transcriptPath: replacementPath, threadId: FORK }, readBytes);
+	assert.deepEqual(result.dependencies, await Promise.all([replacementPath, forkPath, join(archived, nativeName(ROOT) + ".zst")].map((path) => realpath(path))));
+	assert.deepEqual([...reads.files.values()], [1, 1, 1]);
+	assert.equal(reads.decompressions(), 1);
 	const text = allItems(result.projection).map(eventDocument).join("\n");
 	assert.match(text, /父前缀 🦈/);
 	assert.match(text, /fork-local kept/);

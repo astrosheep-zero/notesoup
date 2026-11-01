@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { piHistoryFromJsonl } from "./pi.js";
 import { offlineClaudeHistoryFromJsonl } from "./claude.js";
 import { readCodexHistory } from "./codex.js";
-import { readCodexTranscriptBytes } from "./codex-transcript.js";
+import { createCodexTranscriptReader } from "./codex-transcript.js";
 import { sessionIdentity, type HistoryCorpus, type HistorySession } from "./corpus.js";
 
 export type LocalHistoryRoots = Partial<Record<"pi" | "claude" | "codex", string | null>>;
@@ -87,10 +87,13 @@ async function localSessions(harness: "pi" | "claude" | "codex", root: string): 
 		sessions.push({
 			harness, id, modifiedAt,
 			async load(queries) {
-				if (harness === "codex" && !queries?.length) return { projection: (await readCodexHistory({ threadId: id, transcriptPath: path })).projection };
-				const text = harness === "codex" ? (await readCodexTranscriptBytes(path)).toString("utf8") : await readFile(path, "utf8");
-				if (queries?.length && !mayMatch(text, queries, harness === "codex")) return undefined;
-				if (harness === "codex") return { projection: (await readCodexHistory({ threadId: id, transcriptPath: path })).projection };
+				if (harness === "codex") {
+					const readBytes = createCodexTranscriptReader();
+					if (queries?.length && !mayMatch((await readBytes(path)).toString("utf8"), queries, true)) return undefined;
+					return { projection: (await readCodexHistory({ threadId: id, transcriptPath: path }, readBytes)).projection };
+				}
+				const text = await readFile(path, "utf8");
+				if (queries?.length && !mayMatch(text, queries, false)) return undefined;
 				if (harness === "pi") return { projection: piHistoryFromJsonl(text, id) };
 				const projection = offlineClaudeHistoryFromJsonl(text, id);
 				const missing = projection.missingAncestors;

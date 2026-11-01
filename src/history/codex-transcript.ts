@@ -41,7 +41,8 @@ const FILE_RE = new RegExp(`^rollout-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-(
 const RECORD_TYPES = new Set(["session_meta", "response_item", "compacted", "turn_context", "event_msg", "token_usage_record", "world_state", "retained_context", "security_risk_score", "inter_agent_communication", "inter_agent_communication_metadata", "realtime_item"]);
 const RESPONSE_TYPES = new Set(["message", "agent_message", "reasoning", "local_shell_call", "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "tool_search_call", "tool_search_output", "web_search_call", "image_generation_call", "compaction", "compaction_summary", "configuration_update", "context_compaction"]);
 // Explicit resource limits, not guessed sequence offsets or partial successful history.
-const MAX_BYTES = 128 * 1024 * 1024, MAX_SEGMENTS = 64, MAX_DIRECTORY_ENTRIES = 100_000;
+export const CODEX_TRANSCRIPT_MAX_BYTES = 128 * 1024 * 1024;
+const MAX_SEGMENTS = 64, MAX_DIRECTORY_ENTRIES = 100_000;
 export function nativeObject(value: unknown, field: string): NativeObject {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`Invalid Codex ${field}: expected an object`);
 	return value as NativeObject;
@@ -172,30 +173,47 @@ async function referencedPath(home: string, rolloutId: string): Promise<string> 
 	if (matches.length !== 1) throw new Error(`Unavailable Codex lineage: rollout ${rolloutId} has ${matches.length ? "ambiguous native files" : "no local source file"}`);
 	return matches[0]!;
 }
-/** Bounded decoded bytes, also used by the local corpus's pre-projection miss check. */
-export async function readCodexTranscriptBytes(path: string, remaining = MAX_BYTES): Promise<Buffer> {
-	const info = await stat(path);
-	if (!info.isFile() || info.size > remaining) throw new Error("Unavailable Codex transcript: read size limit exceeded or not a regular file");
-	const bytes = await readFile(path);
-	// 0.160.1 compression.rs uses zstd, NOT gzip. No decoded file is materialized.
-	if (path.endsWith(".jsonl.zst") && typeof zlib.zstdDecompressSync !== "function") throw new Error("Compressed Codex rollouts require Node >=22.15 (zstdDecompressSync)");
-	const decoded = path.endsWith(".jsonl.zst") ? zlib.zstdDecompressSync(bytes, { maxOutputLength: remaining }) : bytes;
-	if (decoded.length > remaining) throw new Error("Unavailable Codex transcript: decoded size limit exceeded");
-	return decoded;
+export type CodexTranscriptReader = (path: string, remaining?: number) => Promise<Buffer>;
+
+/** One load only: prefilter and lineage decoder share the original decoded Buffers. */
+export function createCodexTranscriptReader(): CodexTranscriptReader {
+	const cache = new Map<string, Promise<{ bytes: Buffer; storedSize: number }>>();
+	return async (path, remaining = CODEX_TRANSCRIPT_MAX_BYTES) => {
+		const canonical = await realpath(path);
+		let pending = cache.get(canonical);
+		if (!pending) {
+			pending = (async () => {
+				const info = await stat(canonical);
+				if (!info.isFile() || info.size > remaining) throw new Error("Unavailable Codex transcript: read size limit exceeded or not a regular file");
+				const stored = await readFile(canonical);
+				if (stored.length > remaining) throw new Error("Unavailable Codex transcript: read size limit exceeded");
+				// 0.160.1 compression.rs uses zstd, NOT gzip. No decoded file is materialized.
+				if (canonical.endsWith(".jsonl.zst") && typeof zlib.zstdDecompressSync !== "function") throw new Error("Compressed Codex rollouts require Node >=22.15 (zstdDecompressSync)");
+				const bytes = canonical.endsWith(".jsonl.zst") ? zlib.zstdDecompressSync(stored, { maxOutputLength: remaining }) : stored;
+				return { bytes, storedSize: Math.max(info.size, stored.length) };
+			})();
+			cache.set(canonical, pending);
+		}
+		const { bytes, storedSize } = await pending;
+		// Reuse never exempts a semantic consumption from its remaining lineage budget.
+		if (storedSize > remaining) throw new Error("Unavailable Codex transcript: read size limit exceeded");
+		if (bytes.length > remaining) throw new Error("Unavailable Codex transcript: decoded size limit exceeded");
+		return bytes;
+	};
 }
 
 /** Internal shared read: both boot facts and history use exactly this lineage and window owner. */
-export async function readCodexTranscript(source: CodexTranscriptSource): Promise<{ state: CodexTranscriptState; records: CodexRecord[]; highestSeq: number }> {
+export async function readCodexTranscript(source: CodexTranscriptSource, readBytes = createCodexTranscriptReader()): Promise<{ state: CodexTranscriptState; records: CodexRecord[]; highestSeq: number; dependencies: string[] }> {
 	if (!source || typeof source.transcriptPath !== "string" || !source.transcriptPath) throw new Error("Codex transcript_path is unavailable");
 	id(source.threadId, "requested threadId");
 	try {
 		let path = await realpath(source.transcriptPath), cutoff: Position | undefined, home: string | undefined;
-		let remaining = MAX_BYTES;
+		let remaining = CODEX_TRANSCRIPT_MAX_BYTES;
 		const segments: Segment[] = [], seen = new Set<string>();
 		while (true) {
 			if (segments.length >= MAX_SEGMENTS || seen.has(path)) throw new Error("Unavailable Codex lineage: cycle or ancestry depth limit exceeded");
 			seen.add(path);
-			const bytes = await readCodexTranscriptBytes(path, remaining);
+			const bytes = await readBytes(path, remaining);
 			remaining -= bytes.length;
 			const segment = segmentFromBytes(bytes, cutoff);
 			if (segments.length === 0 && segment.meta.id !== source.threadId) throw new Error(`Codex transcript belongs to thread ${String(segment.meta.id)}, not requested threadId ${source.threadId} (session_id is root-scoped)`);
@@ -265,7 +283,7 @@ export async function readCodexTranscript(source: CodexTranscriptSource): Promis
 		// Native latest model settings win over a frozen companion TurnContext after
 		// compaction (history/src/lib.rs latest_disabled_plugin_ids has same ownership).
 		if (settingsModel ?? contextModel) state.model = settingsModel ?? contextModel;
-		return { state, records, highestSeq: lastSeq };
+		return { state, records, highestSeq: lastSeq, dependencies: [...seen] };
 	} catch (error) {
 		throw new Error(`Cannot read Codex history at ${source.transcriptPath}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
 	}
