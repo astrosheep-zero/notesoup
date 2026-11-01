@@ -210,6 +210,10 @@ test("bundled Codex MCP reads another harness and wildcard results retain their 
 	assert.deepEqual(new Set(page.items.map((item) => item.session)), new Set([`codex:${ROOT}`, "pi:foreign-pi"]));
 	assert.equal(page.has_older, false);
 	assert.equal(page.has_newer, false);
+	const limited = await call(client, { name: "history_list", arguments: { session: "*", query: "needle", limit: 1 }, _meta: metaFor(ROOT, ROOT) });
+	assert.equal((limited.structuredContent as { has_older: boolean }).has_older, true);
+	assert.match(textOf(limited), /→ more older results: narrow with since\/until/);
+	assert.doesNotMatch(textOf(limited), /before_seq|after_seq/);
 	const invalid = await call(client, { name: "history_read", arguments: { session: "*", seq: 1 }, _meta: metaFor(ROOT, ROOT) });
 	assert.equal(errorCode(invalid), "invalid_session");
 });

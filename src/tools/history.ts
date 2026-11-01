@@ -3,7 +3,7 @@ import { Type, type Static } from "typebox";
 import { HISTORY_PREVIEW_CHARS, MAX_READ_WINDOW_CHARS } from "./output.js";
 import { failure, fitsResult, resultSchema, readTextWindow, renderOutcome, renderTextWindow, success, TextWindowRequestSchema, TextWindowSchema, type Operation } from "./result.js";
 import { historyRoles, searchQuery } from "./schema.js";
-import { HistoryPageSchema, CorpusCollector, corpusSelection, selectPage, type HistoryPage } from "../history/query.js";
+import { HistoryPageSchema, CorpusCollector, corpusSelection, isMultiPage, markMultiPage, selectPage, type HistoryPage } from "../history/query.js";
 import { currentHistory, loadHistoryRepresentative, loadHistorySession, matchesSession, parseSessionSelector, resolveSession, sessionIdentity, type HistoryContext } from "../history/corpus.js";
 import { allItems, eventDocument, nestedCallSummary, toolSummary, HistoryRoleSchema, NestedCallSummarySchema, ToolSummarySchema, type HistoryFoldedRow, type HistoryPageItem } from "../history/history.js";
 
@@ -55,6 +55,10 @@ function renderPage(page: HistoryPage): string {
 	// An empty selection has no anchors either, so it would otherwise render as nothing at all.
 	if (page.items.length === 0 && !page.folded_after) return `${page.notice ?? ""}No events match these filters.`;
 	const body = [...page.items.flatMap((item) => [...(item.folded_before ? [renderFoldedRow(item.folded_before)] : []), renderPageItem(item)]), ...(page.folded_after ? [renderFoldedRow(page.folded_after)] : [])].join("\n\n");
+	if (isMultiPage(page)) {
+		const directions = [page.has_older && "older", page.has_newer && "newer"].filter(Boolean).join("|");
+		return (page.notice ?? "") + body + (directions ? `\n\n→ more ${directions} results: narrow with since/until, query, roles or the session pattern` : "");
+	}
 	const first = page.items[0]!;
 	const last = page.items.at(-1)!;
 
@@ -119,18 +123,22 @@ export const historyList: Operation<typeof historyListParameters, HistoryPage, [
 			const collector = new CorpusCollector(scoped.data);
 			let qualifying = 0;
 			const notices: string[] = [];
-			for (const session of sessions) {
+			let unvisited = false;
+			for (const [index, session] of sessions.entries()) {
 				const result = representative ? await loadHistoryRepresentative(session) : await loadHistorySession(session, queries);
 				if (!result.ok || !result.data) continue;
 				const added = "projection" in result.data ? collector.add(sessionIdentity(session), result.data.projection) : collector.addRepresentative(sessionIdentity(session), result.data.event);
 				if (!added) continue;
 				qualifying++;
 				if (result.data.notice) notices.push(`session ${sessionIdentity(session)}: ${result.data.notice}`);
-				if (!queries && qualifying >= Math.min(500, Math.max(1, params.limit ?? 20))) break;
+				if (!queries && qualifying >= Math.min(500, Math.max(1, params.limit ?? 20))) {
+					unvisited = index + 1 < sessions.length;
+					break;
+				}
 			}
 			const notice = notices.length ? { notice: notices.join("") } : {};
-			const result = collector.page((page) => fits({ ...page, ...notice }), maxChars);
-			return result.ok ? success({ ...result.data, ...notice }) : result;
+			const result = collector.page((page) => fits(markMultiPage({ ...page, ...notice })), maxChars, unvisited);
+			return result.ok ? success(markMultiPage({ ...result.data, ...notice })) : result;
 		}
 		const target = await resolveSession(corpus, selector.data);
 		if (!target.ok) return target;

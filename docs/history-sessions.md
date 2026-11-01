@@ -34,7 +34,7 @@ history_list({ session: "codex:*", query: "migration", roles: ["tool"], since: "
 - With a query, every role is searched, including tool arguments/output and context; `roles` can narrow this. There are no folded rows.
 - `since` is inclusive and `until` exclusive. Time-bounded searches exclude events with no usable timestamp.
 - Search hits are merged by event time, oldest first, with a deterministic session/seq tie-break; untimed events sort before timed events. For query searches, `limit` counts from the newest event end by default, or the oldest with `from: "oldest"`. The complete text and structured result still share the 32 KiB budget, so large previews can reduce the admitted page.
-- Each event carries its canonical `session`. `has_older` and `has_newer` are always false. Narrow by session pattern, query, roles or time rather than trying to page across per-session seqs.
+- Each event carries its canonical `session`. `has_older` and `has_newer` indicate more matching results beyond the page; an overview with unvisited sessions may have more even if those sessions have no representative. Narrow by session pattern, query, roles or time rather than trying to page across per-session seqs.
 
 ## Local discovery and limits
 

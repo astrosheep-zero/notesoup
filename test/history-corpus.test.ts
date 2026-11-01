@@ -210,10 +210,20 @@ test("wildcard query merges every role chronologically, limits from either end, 
 	]);
 	assert.equal(page.has_older, false);
 	assert.equal(page.has_newer, false);
-	const newest = data(await historyList.execute({ session: "*", query: "needle", limit: 2 }, ctx));
+	const newestResult = await historyList.execute({ session: "*", query: "needle", limit: 2 }, ctx);
+	const newest = data(newestResult);
 	assert.deepEqual(newest.items, page.items.slice(-2));
-	const oldest = data(await historyList.execute({ session: "*", query: "needle", limit: 2, from: "oldest" }, ctx));
+	assert.equal(newest.has_older, true);
+	assert.equal(newest.has_newer, false);
+	assert.match(historyList.render(newestResult), /→ more older results: narrow with since\/until, query, roles or the session pattern/);
+	assert.doesNotMatch(historyList.render(newestResult), /before_seq|after_seq/);
+	const oldestResult = await historyList.execute({ session: "*", query: "needle", limit: 2, from: "oldest" }, ctx);
+	const oldest = data(oldestResult);
 	assert.deepEqual(oldest.items, page.items.slice(0, 2));
+	assert.equal(oldest.has_older, false);
+	assert.equal(oldest.has_newer, true);
+	assert.match(historyList.render(oldestResult), /→ more newer results:/);
+	assert.doesNotMatch(historyList.render(oldestResult), /before_seq|after_seq/);
 	const filtered = data(await historyList.execute({ session: "*", query: "needle", roles: ["tool", "context"], since: "2026-10-06T01:02:05", until: "2026-10-06T01:02:07Z" }, ctx));
 	assert.deepEqual(filtered.items.map((item) => item.role), ["tool"]);
 	const harness = data(await historyList.execute({ session: "claude:*", query: "needle" }, ctx));
@@ -278,16 +288,23 @@ test("session overviews order discovery by mtime, stop at the session limit, the
 	});
 	const ctx = context(sessions);
 	const recent = data(await historyList.execute({ session: "*" }, ctx));
+	assert.equal(recent.has_older, true);
+	assert.equal(recent.has_newer, false);
 	assert.deepEqual(loaded, Array.from({ length: 20 }, (_, index) => 24 - index));
 	assert.deepEqual(recent.items.map((item) => item.session), loaded.map((index) => `pi:s-${index}`));
 	loaded.length = 0;
 	const oldest = data(await historyList.execute({ session: "*", from: "oldest", limit: 2 }, ctx));
+	assert.equal(oldest.has_older, false);
+	assert.equal(oldest.has_newer, true);
 	assert.deepEqual(loaded, [0, 1]);
 	assert.deepEqual(oldest.items.map((item) => item.session), ["pi:s-1", "pi:s-0"]);
 	loaded.length = 0;
 	const pattern = data(await historyList.execute({ session: "pi:s-2*", limit: 2 }, ctx));
 	assert.deepEqual(loaded, [24, 23]);
 	assert.deepEqual(pattern.items.map((item) => item.session), ["pi:s-24", "pi:s-23"]);
+	const all = data(await historyList.execute({ session: "*", limit: 25 }, ctx));
+	assert.equal(all.has_older, false);
+	assert.equal(all.has_newer, false);
 });
 
 test("session representatives respect visibility, role/time filters, opening users and dialogue/any fallbacks", async () => {
@@ -405,7 +422,7 @@ test("oversized cross-session reads/searches obey both wire budgets and retain c
 	assert.ok(Buffer.byteLength(JSON.stringify(page)) <= TOOL_OUTPUT_MAX_BYTES);
 	assert.ok(Buffer.byteLength(historyList.render(list)) <= TOOL_OUTPUT_MAX_BYTES);
 	assert.equal(page.items.length, 1);
-	assert.equal(page.has_older, false);
+	assert.equal(page.has_older, true);
 	assert.equal(page.has_newer, false);
 	const item = page.items[0]!;
 	assert.ok("seq" in item && item.truncated);
@@ -421,6 +438,18 @@ test("oversized cross-session reads/searches obey both wire budgets and retain c
 	assert.equal(data(overview).items.length, 1);
 	assert.equal(data(overview).has_older, false);
 	assert.equal(data(overview).has_newer, false);
+});
+
+test("wildcard byte budgets report retained candidates beyond either end", async () => {
+	const ctx = context([descriptor("pi", "large", projection("needle " + "x".repeat(20_000)))]);
+	for (const from of ["newest", "oldest"] as const) {
+		const result = await historyList.execute({ session: "*", query: "needle", from, limit: 5, max_chars_per_item: 50_000 }, ctx);
+		const page = data(result);
+		assert.ok(page.items.length < 5);
+		assert.equal(page.has_older, from === "newest");
+		assert.equal(page.has_newer, from === "oldest");
+		assert.doesNotMatch(historyList.render(result), /before_seq|after_seq/);
+	}
 });
 
 test("qualified lookup and current-harness matches do not inspect unrelated roots", async (t) => {

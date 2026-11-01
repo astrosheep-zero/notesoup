@@ -7,7 +7,13 @@ import { InvalidQueryError, searchQueries } from "../tools/schema.js";
 import { eventDocument, filteredItems, visibleItem, HistoryFoldedRowSchema, HistoryPageItemSchema, MAX_FOLD_TOOL_NAMES, MAX_FOLD_TOOL_NAME_CHARS, type HistoryEvent, type HistoryFilter, type HistoryFoldedRow, type HistoryPageItem, type HistoryProjection } from "./history.js";
 
 type Candidate = { event: HistoryEvent; session?: string; matchOffset?: number; preview?: HistoryPageItem; before?: HistoryFoldedRow };
-type PreparedSelection = { candidates: Candidate[]; tail?: HistoryFoldedRow; session?: string; multi?: boolean };
+type PreparedSelection = { candidates: Candidate[]; tail?: HistoryFoldedRow; session?: string; multi?: boolean; discarded?: boolean; from?: HistoryOrder };
+const multiPages = new WeakSet<HistoryPage>();
+export function isMultiPage(page: HistoryPage): boolean { return multiPages.has(page); }
+export function markMultiPage(page: HistoryPage): HistoryPage {
+	multiPages.add(page);
+	return page;
+}
 
 /** Which end of one selection `limit` is taken from; page items always come back ascending. */
 export type HistoryOrder = "newest" | "oldest";
@@ -120,12 +126,13 @@ function pageData(prepared: PreparedSelection, start: number, end: number, maxCh
 		const item = preview ?? (candidate.preview ??= { ...visibleItem(candidate.event, maxChars, candidate.matchOffset), ...(candidate.session === undefined ? {} : { session: candidate.session }) });
 		items.push(candidate.before && (index > start || start === 0) ? { ...item, folded_before: candidate.before } : item);
 	}
-	return {
+	const page = {
 		items,
 		...(end === candidates.length && tail ? { folded_after: tail } : {}),
-		has_older: !prepared.multi && start > 0 && start < end,
-		has_newer: !prepared.multi && end < candidates.length && start < end,
+		has_older: (start > 0 && start < end) || (!!prepared.discarded && prepared.from !== "oldest"),
+		has_newer: (end < candidates.length && start < end) || (!!prepared.discarded && prepared.from === "oldest"),
 	};
+	return prepared.multi ? markMultiPage(page) : page;
 }
 
 /**
@@ -173,6 +180,7 @@ const compareCorpus = (a: Candidate, b: Candidate) => eventTime(a.event) - event
 export class CorpusCollector {
 	private readonly candidates: Candidate[] = [];
 	private readonly limit: number;
+	private discarded = false;
 	constructor(private readonly scoped: HistorySelection) {
 		this.limit = Math.min(500, Math.max(1, scoped.limit ?? 20));
 	}
@@ -186,6 +194,7 @@ export class CorpusCollector {
 			else high = mid;
 		}
 		if (this.candidates.length === this.limit) {
+			this.discarded = true;
 			if (this.scoped.from === "oldest") {
 				if (low === this.limit) return;
 				this.candidates.pop();
@@ -217,8 +226,8 @@ export class CorpusCollector {
 		return true;
 	}
 
-	page(fits: (page: HistoryPage) => boolean, maxChars: number): Outcome<HistoryPage> {
-		return selectPrepared({ candidates: this.candidates, multi: true }, this.scoped, fits, maxChars);
+	page(fits: (page: HistoryPage) => boolean, maxChars: number, unvisited = false): Outcome<HistoryPage> {
+		return selectPrepared({ candidates: this.candidates, multi: true, discarded: this.discarded || unvisited, from: this.scoped.from }, this.scoped, fits, maxChars);
 	}
 }
 
