@@ -130,7 +130,7 @@ test("all single-session recipes preserve the resolved identity, including folde
 	const recipe = JSON.parse(expand[1]!) as { session: string; after_seq: number; before_seq: number; roles: ["context"] };
 	assert.equal(recipe.session, "claude:target-session");
 	assert.equal("from" in recipe, false);
-	assert.deepEqual(data(await historyList.execute(recipe, ctx)).items.map((item) => "seq" in item ? item.seq : -1), [2]);
+	assert.deepEqual(data(await historyList.execute(recipe, ctx)).items.map((item) => item.seq), [2]);
 	assert.match(historyList.render(foldPage), /session claude:target-session \| seq 1 \| user/);
 	const read = await historyRead.execute({ session: "target", seq: 3 }, ctx);
 	assert.equal(data(read).session, "claude:target-session");
@@ -140,11 +140,34 @@ test("all single-session recipes preserve the resolved identity, including folde
 	assert.ok(Check(historyList.outputSchema, data(foldPage)));
 });
 
+test("recipes expand a fold at seq 1 and read its neighborhood from the start", async () => {
+	const p = projectHistory([{ windowId: "w", items: [
+		{ seq: 1, windowId: "w", role: "system", text: "context one" },
+		{ seq: 2, windowId: "w", role: "system", text: "context two" },
+		{ seq: 3, windowId: "w", role: "user", text: "hello" },
+	] }], 3, new Set([1, 2, 3]));
+	const ctx = context([descriptor("claude", "first-fold", p)]);
+	const folded = await historyList.execute({ session: "first-fold" }, ctx);
+	const expand = /→ expand: (\{[^\n]+\})/.exec(historyList.render(folded));
+	assert.ok(expand);
+	const recipe = JSON.parse(expand[1]!);
+	assert.equal(recipe.after_seq, 0);
+	assert.ok(Check(historyList.parameters, recipe));
+	assert.deepEqual(data(await historyList.execute(recipe, ctx)).items.map((item) => item.seq), [1, 2]);
+	const read = await historyRead.execute({ session: "first-fold", seq: 3 }, ctx);
+	const neighborhood = /neighborhood → `history_list`\((\{[^\n]+\})\)/.exec(historyRead.render(read));
+	assert.ok(neighborhood);
+	const nearby = JSON.parse(neighborhood[1]!);
+	assert.equal(nearby.after_seq, 0);
+	assert.ok(Check(historyList.parameters, nearby));
+	assert.ok(data(await historyList.execute(nearby, ctx)).items.length > 0);
+});
+
 test("wildcard refusals precede discovery, and read accepts no wildcard selector", async () => {
 	const ctx: HistoryContext = { current: () => { throw new Error("must not load current"); }, corpus: { currentHarness: "pi", sessions: async () => { throw new Error("must not discover"); } } };
 	for (const session of ["*", "pi:*", "pre*fix"]) {
 		for (const query of [undefined, "", [], ["", ""], "needle"]) {
-			for (const bounds of [{ before_seq: 10 }, { after_seq: 1 }, { before_seq: 10, after_seq: 1 }]) {
+			for (const bounds of [{ before_seq: 10 }, { after_seq: 0 }, { after_seq: 1 }, { before_seq: 10, after_seq: 1 }]) {
 				refusal(await historyList.execute({ session, query, ...bounds }, ctx), "invalid_bounds");
 			}
 		}

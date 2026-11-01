@@ -85,9 +85,10 @@ test("history_list exposes bounded paging, `from` and a literal query, while not
 	const listSchema = captured.tools.get("history_list")!.parameters as TSchema;
 	const properties = (listSchema as unknown as { properties: Record<string, { minimum?: number; anyOf?: Array<{ const?: string }>; items?: { anyOf?: Array<{ const?: string }> } }> }).properties;
 	assert.equal(properties.before_seq?.minimum, 1, "bounds are positive seqs");
-	assert.equal(properties.after_seq?.minimum, 1);
+	assert.equal(properties.after_seq?.minimum, 0);
 	assert.equal(Check(listSchema, { before_seq: 0 }), false, "before_seq:0 is refused by the schema, not answered with a silent empty page");
-	assert.equal(Check(listSchema, { after_seq: 0 }), false);
+	assert.equal(Check(listSchema, { after_seq: 0 }), true);
+	assert.equal(Check(listSchema, { after_seq: -1 }), false);
 	assert.deepEqual(properties.from?.anyOf?.map((item) => item.const), ["newest", "oldest"]);
 	assert.ok(properties.query);
 	assert.equal(properties.around, undefined);
@@ -228,6 +229,7 @@ test("history_list pages from the end `from` names and returns bounded ranges", 
 	assert.equal(older.has_newer, false);
 	assert.deepEqual(seqs(await call(captured, "history_list", { after_seq: 5, limit: 2, from: "oldest" }, ctx)), [6]);
 	for (let index = 7; index <= 10; index++) appendText(session, "user", `message-${index}`);
+	assert.deepEqual(seqs(await call(captured, "history_list", { after_seq: 0, limit: 3 }, ctx)), [1, 2, 3]);
 	assert.deepEqual(seqs(await call(captured, "history_list", { after_seq: 2, limit: 3 }, ctx)), [3, 4, 5]);
 	assert.deepEqual(seqs(await call(captured, "history_list", { after_seq: 2, limit: 3, from: "newest" }, ctx)), [8, 9, 10]);
 	assert.deepEqual(seqs(await call(captured, "history_list", { after_seq: 2, before_seq: 10, limit: 3 }, ctx)), [3, 4, 5]);

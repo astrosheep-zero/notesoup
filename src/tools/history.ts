@@ -67,8 +67,7 @@ function renderPage(page: HistoryPage): string {
 
 function renderRead(data: HistoryReadData): string {
 	const tool = toolHeader(data);
-	const afterSeq = data.seq - 10;
-	const neighborhood = `neighborhood → \`history_list\`(${JSON.stringify({ ...(data.session === undefined ? {} : { session: data.session }), ...(afterSeq >= 1 ? { after_seq: afterSeq } : {}), before_seq: data.seq + 10 })})`;
+	const neighborhood = `neighborhood → \`history_list\`(${JSON.stringify({ ...(data.session === undefined ? {} : { session: data.session }), after_seq: Math.max(0, data.seq - 10), before_seq: data.seq + 10 })})`;
 	return (data.notice ?? "") + [header(data), ...(tool ? [tool] : []), neighborhood, "", data.total_chars === 0 ? "No visible text recorded for this event." : renderTextWindow(data)].join("\n");
 }
 
@@ -87,7 +86,7 @@ export const historyListParameters = Type.Object({
 	query: Type.Optional(searchQuery("(optional) Text, or a list of texts (any match). Empty text/list means no search filter; empty entries are ignored. Searches every role, tool arguments and output included; returns only hits.")),
 	roles: historyRoles(),
 	before_seq: Type.Optional(Type.Integer({ minimum: 1, description: "(optional) Only events with seq below this." })),
-	after_seq: Type.Optional(Type.Integer({ minimum: 1, description: "(optional) Only events with seq above this." })),
+	after_seq: Type.Optional(Type.Integer({ minimum: 0, description: "(optional) Only events with seq above this; 0 means from the start." })),
 	since: Type.Optional(Type.String({ minLength: 1, description: "(optional) ISO 8601 time; only events at or after it. UTC if no offset." })),
 	until: Type.Optional(Type.String({ minLength: 1, description: "(optional) ISO 8601 time; only events before it. UTC if no offset." })),
 	from: Type.Optional(Type.Union([Type.Literal("newest"), Type.Literal("oldest")], { description: "(optional) Which end `limit` counts from: newest or oldest (default oldest when `after_seq` is set, else newest). Results stay oldest first." })),
