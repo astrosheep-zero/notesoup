@@ -52,7 +52,8 @@ function resolveTimeBounds(params: HistorySelection): Outcome<{ sinceMs?: number
 
 export const HistoryPageSchema = Type.Object({
 	notice: Type.Optional(Type.String()),
-	items: Type.Array(Type.Union([HistoryPageItemSchema, HistoryFoldedRowSchema])),
+	items: Type.Array(HistoryPageItemSchema),
+	folded_after: Type.Optional(HistoryFoldedRowSchema),
 	has_older: Type.Boolean(),
 	has_newer: Type.Boolean(),
 }, { additionalProperties: false });
@@ -87,7 +88,7 @@ function foldedRun(events: HistoryEvent[], session?: string): HistoryFoldedRow |
 	const entries = [...counts].filter(([name]) => name.length <= MAX_FOLD_TOOL_NAME_CHARS).slice(0, MAX_FOLD_TOOL_NAMES);
 	// fromEntries preserves __proto__ as an ordinary key without mutating the prototype.
 	const tools = Object.fromEntries(entries);
-	return { ...(session === undefined ? {} : { session }), folded: true, first_seq: events[0]!.seq, last_seq: events.at(-1)!.seq, count: events.length, tools };
+	return { ...(session === undefined ? {} : { session }), first_seq: events[0]!.seq, last_seq: events.at(-1)!.seq, count: events.length, tools };
 }
 
 /** Filter and order once. Conversation candidates own the folded gap immediately before them. */
@@ -116,12 +117,12 @@ function pageData(prepared: PreparedSelection, start: number, end: number, maxCh
 	const items: HistoryPage["items"] = [];
 	for (let index = start; index < end; index++) {
 		const candidate = candidates[index]!;
-		if (candidate.before && (index > start || start === 0)) items.push(candidate.before);
-		items.push(preview ?? (candidate.preview ??= { ...visibleItem(candidate.event, maxChars, candidate.matchOffset), ...(candidate.session === undefined ? {} : { session: candidate.session }) }));
+		const item = preview ?? (candidate.preview ??= { ...visibleItem(candidate.event, maxChars, candidate.matchOffset), ...(candidate.session === undefined ? {} : { session: candidate.session }) });
+		items.push(candidate.before && (index > start || start === 0) ? { ...item, folded_before: candidate.before } : item);
 	}
-	if (end === candidates.length && tail) items.push(tail);
 	return {
 		items,
+		...(end === candidates.length && tail ? { folded_after: tail } : {}),
 		has_older: !prepared.multi && start > 0 && start < end,
 		has_newer: !prepared.multi && end < candidates.length && start < end,
 	};

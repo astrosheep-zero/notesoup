@@ -191,7 +191,7 @@ test("wildcard query merges every role chronologically, limits from either end, 
 	const oldest = data(await historyList.execute({ session: "*", query: "needle", limit: 2, from: "oldest" }, ctx));
 	assert.deepEqual(oldest.items, page.items.slice(0, 2));
 	const filtered = data(await historyList.execute({ session: "*", query: "needle", roles: ["tool", "context"], since: "2026-10-06T01:02:05", until: "2026-10-06T01:02:07Z" }, ctx));
-	assert.deepEqual(filtered.items.map((item) => "role" in item ? item.role : "folded"), ["tool"]);
+	assert.deepEqual(filtered.items.map((item) => item.role), ["tool"]);
 	const harness = data(await historyList.execute({ session: "claude:*", query: "needle" }, ctx));
 	assert.ok(harness.items.every((item) => "session" in item && item.session === "claude:claude-one"));
 	assert.equal(data(await historyList.execute({ session: "pi:absent*", query: "needle" }, ctx)).items.length, 0);
@@ -275,7 +275,7 @@ test("session representatives respect visibility, role/time filters, opening use
 	];
 	const p = projectHistory([{ windowId: "w", items: messages.map(([role, text, seconds], index) => ({ seq: index + 1, windowId: "w", role, text, createdAt: at(seconds) })) }], 8, new Set([1, 2, 3, 4, 5, 6, 7, 8]));
 	const ctx = context([descriptor("claude", "topic", p)]);
-	const chosen = async (params: Parameters<typeof historyList.execute>[0]) => data(await historyList.execute({ session: "*", ...params }, ctx)).items.map((item) => "seq" in item ? item.seq : "folded");
+	const chosen = async (params: Parameters<typeof historyList.execute>[0]) => data(await historyList.execute({ session: "*", ...params }, ctx)).items.map((item) => item.seq);
 	assert.deepEqual(await chosen({}), [3]);
 	assert.deepEqual(await chosen({ roles: ["user"] }), [5]);
 	assert.deepEqual(await chosen({ roles: ["assistant"] }), [4]);

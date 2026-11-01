@@ -207,9 +207,20 @@ export function nestedCallSummary(event: HistoryEvent): { nested_calls?: Static<
 	return nested === undefined ? {} : { nested_calls: { call_count: nested.calls.length, complete: nested.complete } };
 }
 
+/** A run of tool/context events the conversation view replaces with counts. */
+export const HistoryFoldedRowSchema = Type.Object({
+	session: Type.Optional(Type.String()),
+	first_seq: Type.Integer({ minimum: 1 }),
+	last_seq: Type.Integer({ minimum: 1 }),
+	count: Type.Integer({ minimum: 1 }),
+	tools: Type.Record(Type.String(), Type.Integer({ minimum: 1 }), { description: "Count per tool name." }),
+}, { additionalProperties: false });
+export type HistoryFoldedRow = Static<typeof HistoryFoldedRowSchema>;
+
 /** Stable identity and a verbatim preview, starting at the search match when present. */
 export const HistoryPageItemSchema = Type.Object({
 	session: Type.Optional(Type.String()),
+	folded_before: Type.Optional(HistoryFoldedRowSchema),
 	seq: Type.Integer({ minimum: 1 }),
 	role: HistoryRoleSchema,
 	created_at: Type.Union([Type.String(), Type.Null()]),
@@ -219,17 +230,6 @@ export const HistoryPageItemSchema = Type.Object({
 	offset_chars: Type.Optional(Type.Integer({ minimum: 0, description: "Where the preview starts." })),
 }, { additionalProperties: false });
 export type HistoryPageItem = Static<typeof HistoryPageItemSchema>;
-
-/** A run of tool/context events the conversation view replaces with counts. */
-export const HistoryFoldedRowSchema = Type.Object({
-	session: Type.Optional(Type.String()),
-	folded: Type.Literal(true),
-	first_seq: Type.Integer({ minimum: 1 }),
-	last_seq: Type.Integer({ minimum: 1 }),
-	count: Type.Integer({ minimum: 1 }),
-	tools: Type.Record(Type.String(), Type.Integer({ minimum: 1 }), { description: "Count per tool name." }),
-}, { additionalProperties: false });
-export type HistoryFoldedRow = Static<typeof HistoryFoldedRowSchema>;
 
 /** Bound fold summaries; `count` stays exact even when some tool names do not fit. */
 export const MAX_FOLD_TOOL_NAMES = 20;

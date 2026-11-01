@@ -27,7 +27,7 @@ import { join } from "node:path";
 
 installExtensionTestHooks("notesoup-history-v2");
 
-type Page = { items: Array<Record<string, unknown>>; has_older: boolean; has_newer: boolean };
+type Page = HistoryPage;
 type Appendable = Parameters<SessionManager["appendMessage"]>[0];
 
 /** Append a message the way the host records one, without the harness's per-role sugar. */
@@ -251,7 +251,7 @@ test("a one-row page budget admits the newest candidate first", () => {
 	const keptSeqs = (fitsRows: number, from?: "newest" | "oldest"): number[] => {
 		const outcome = selectPage(projection, { limit: 3, ...(from === undefined ? {} : { from }) }, (candidate: HistoryPage) => candidate.items.length <= fitsRows, 200);
 		assert.equal(outcome.ok, true);
-		return outcome.ok ? outcome.data.items.map((item) => ("folded" in item ? item.first_seq : item.seq)) : [];
+		return outcome.ok ? outcome.data.items.map((item) => item.seq) : [];
 	};
 	assert.deepEqual(keptSeqs(1), [3], "a budget for one row admits the newest candidate, not the oldest");
 	assert.deepEqual(keptSeqs(2), [2, 3], "a truncated prefix is the newest rows, delivered in chronological order");
@@ -278,19 +278,25 @@ test("conversation paging prepares ordered folds once, including during first-ro
 	const full = selectPage(projection, { limit: 3 }, () => true, 1000);
 	assert.equal(full.ok, true);
 	if (!full.ok) return;
-	assert.deepEqual(full.data.items.map((item) => "folded" in item ? [item.first_seq, item.last_seq, item.count, item.tools] : item.seq), [
-		[1, 1, 1, {}], 2, [3, 5, 2, { read: 1 }], 6, [7, 7, 1, { bash: 1 }], 8, [9, 9, 1, {}],
+	assert.deepEqual(full.data.items.map((item) => [item.seq, item.folded_before]), [
+		[2, { first_seq: 1, last_seq: 1, count: 1, tools: {} }], [6, { first_seq: 3, last_seq: 5, count: 2, tools: { read: 1 } }], [8, { first_seq: 7, last_seq: 7, count: 1, tools: { bash: 1 } }],
 	]);
+	assert.deepEqual(full.data.folded_after, { first_seq: 9, last_seq: 9, count: 1, tools: {} });
 	assert.equal(traversals, 1, "growing the page never re-traverses the source windows");
+	const oldest = selectPage(projection, { limit: 1, from: "oldest" }, () => true, 1000);
+	assert.ok(oldest.ok);
+	if (oldest.ok) assert.deepEqual(oldest.data.items[0]!.folded_before, { first_seq: 1, last_seq: 1, count: 1, tools: {} });
 	traversals = 0;
 	let attempts = 0;
 	const trimmed = selectPage(projection, { limit: 3 }, (candidate) => {
 		attempts++;
-		return candidate.items.length <= 2 && candidate.items.every((item) => "folded" in item || item.content.length <= 10);
+		return candidate.items.length <= 2 && candidate.items.every((item) => item.content.length <= 10);
 	}, 1000);
 	assert.equal(trimmed.ok, true);
 	if (!trimmed.ok) return;
-	assert.deepEqual(trimmed.data.items.map((item) => "folded" in item ? item.first_seq : item.seq), [8, 9], "a short newest page keeps its tail fold, not the preceding gap");
+	assert.deepEqual(trimmed.data.items.map((item) => item.seq), [8], "a short newest page keeps its tail fold, not the preceding gap");
+	assert.equal(trimmed.data.items[0]!.folded_before, undefined);
+	assert.deepEqual(trimmed.data.folded_after, { first_seq: 9, last_seq: 9, count: 1, tools: {} });
 	assert.equal(trimmed.data.has_older, true);
 	assert.equal(trimmed.data.has_newer, false);
 	assert.ok(attempts > 3, "the first preview exercised repeated budget probes");
@@ -316,7 +322,7 @@ test("list shortening charges folded rows against both text and JSON budgets", a
 	assert.equal(row.seq, 2);
 	assert.equal(row.truncated, true);
 	assert.ok(row.content.length < withoutFold.content.length, "the fold consumes bytes but not the one-event limit");
-	assert.deepEqual(folded.data.items[1], { folded: true, first_seq: 3, last_seq: 3, count: 1, tools: { read: 1 } });
+	assert.deepEqual(folded.data.folded_after, { first_seq: 3, last_seq: 3, count: 1, tools: { read: 1 } });
 	assert.equal(folded.data.has_older, true);
 	assert.equal(folded.data.has_newer, false);
 	assert.ok(Buffer.byteLength(JSON.stringify(folded.data), "utf8") <= TOOL_OUTPUT_MAX_BYTES);
@@ -335,7 +341,7 @@ test("since and until select a half-open time range, compose with query and pagi
 	const selected = async (params: Parameters<typeof historyList.execute>[0]): Promise<number[]> => {
 		const outcome = await historyList.execute(params, projection);
 		assert.equal(outcome.ok, true, JSON.stringify(outcome));
-		return outcome.ok ? outcome.data.items.map((item) => ("folded" in item ? item.first_seq : item.seq)) : [];
+		return outcome.ok ? outcome.data.items.map((item) => item.seq) : [];
 	};
 
 	assert.deepEqual(await selected({ roles: ["user", "assistant"], from: "oldest", since: "2026-10-10T06:00:00Z" }), [2, 3, 4], "since keeps later events and drops one with no time");
@@ -366,10 +372,10 @@ test("time bounds also keep untimed events out of the folded conversation view",
 	const projection = projectHistory([{ windowId: "w1", items }], 3, new Set([1, 2, 3]));
 	const bounded = await historyList.execute({ since: "2026-10-10T00:00:00Z" }, projection);
 	assert.equal(bounded.ok, true);
-	if (bounded.ok) assert.deepEqual(bounded.data.items.map((item) => ("folded" in item ? `folded ${item.count}` : `seq ${item.seq}`)), ["seq 1", "seq 3"], "an untimed tool event is not folded into a bounded selection");
+	if (bounded.ok) assert.deepEqual(bounded.data.items.map((item) => `seq ${item.seq}`), ["seq 1", "seq 3"], "an untimed tool event is not folded into a bounded selection");
 	const unbounded = await historyList.execute({}, projection);
 	assert.equal(unbounded.ok, true);
-	if (unbounded.ok) assert.equal(unbounded.data.items.some((item) => "folded" in item), true, "without bounds the untimed run still folds");
+	if (unbounded.ok) assert.equal(unbounded.data.items.some((item) => item.folded_before !== undefined), true, "without bounds the untimed run still folds");
 });
 
 test("conversation view folds tools and injected messages, while explicit roles expand them", async () => {
@@ -394,12 +400,13 @@ test("conversation view folds tools and injected messages, while explicit roles 
 
 	const conversation = page(await call(captured, "history_list", {}, ctx));
 	const legacyItemKey = ["item", "id"].join("_");
-	assert.equal(conversation.items.some((item) => item.folded === true), true);
-	assert.equal(conversation.items.some((item) => item.role === "developer"), false);
+	assert.ok(conversation.folded_after);
+	assert.ok(conversation.items.every((item) => "seq" in item && !("folded" in item)));
+	assert.equal(conversation.items.some((item) => (item.role as string) === "developer"), false);
 	assert.equal(conversation.items.some((item) => item.role === "tool"), false);
 	assert.equal(conversation.items.some((item) => item.role === "assistant" && item.content === ""), false);
 	assert.equal(conversation.items.every((item) => legacyItemKey in item === false), true);
-	const folded = conversation.items.find((item) => item.folded === true)!;
+	const folded = conversation.folded_after!;
 	assert.equal(folded.count, 3, "two tool events and one injected context are folded, not the empty assistant message");
 	assert.deepEqual(folded.tools, { bash: 1, read: 1 });
 	assert.equal("custom_types" in folded, false);
@@ -407,7 +414,9 @@ test("conversation view folds tools and injected messages, while explicit roles 
 	const empty = page(await call(captured, "history_list", { roles: ["context"], before_seq: 2 }, ctx));
 	assert.deepEqual(empty.items, []);
 	const hiddenOnly = page(await call(captured, "history_list", { after_seq: 2, before_seq: 6 }, ctx));
-	assert.deepEqual(hiddenOnly.items, [{ folded: true, first_seq: 3, last_seq: 4, count: 2, tools: { bash: 1, read: 1 } }]);
+	assert.deepEqual(hiddenOnly.items, []);
+	assert.deepEqual(hiddenOnly.folded_after, { first_seq: 3, last_seq: 4, count: 2, tools: { bash: 1, read: 1 } });
+	assert.match(rendered(await call(captured, "history_list", { after_seq: 2, before_seq: 6 }, ctx)), /seqs 3-4 \| folded 2 events/);
 
 	const expanded = page(await call(captured, "history_list", { roles: ["tool"] }, ctx));
 	assert.deepEqual(expanded.items.map((item) => [item.seq, item.role, item.tool, item.tool_status]), [[3, "tool", "bash", "ok"], [4, "tool", "read", "ok"]]);
@@ -622,8 +631,8 @@ test("compaction summary becomes context and is folded in the default list", asy
 	session.appendCompaction("summary needle", session.getLeafId()!, 100);
 	appendText(session, "assistant", "after checkpoint");
 	const regular = page(await call(captured, "history_list", {}, ctx));
-	assert.deepEqual(regular.items.map((item) => item.folded ? "folded" : item.role), ["user", "folded", "assistant"]);
-	const folded = regular.items[1]!;
+	assert.deepEqual(regular.items.map((item) => item.role), ["user", "assistant"]);
+	const folded = regular.items[1]!.folded_before!;
 	assert.equal(folded.count, 1);
 	assert.deepEqual(folded.tools, {});
 	const contextItems = page(await call(captured, "history_list", { roles: ["context"] }, ctx));
@@ -793,5 +802,5 @@ test("historyDocument is one deterministic projection of the facts, with no UI h
 	if (!unknown.ok) assert.match(unknown.error.message, /\b13\b.*\b12\b/);
 	const listed = await historyList.execute({}, projection);
 	assert.equal(listed.ok, true);
-	if (listed.ok) assert.equal(listed.data.items.some((item) => "folded" in item && item.count === 1), true);
+	if (listed.ok) assert.equal(listed.data.items.some((item) => item.folded_before?.count === 1) || listed.data.folded_after?.count === 1, true);
 });
