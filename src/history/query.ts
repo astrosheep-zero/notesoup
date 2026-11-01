@@ -165,16 +165,58 @@ export function sessionRepresentative(projection: HistoryProjection, scoped: His
 		?? events.at(-1);
 }
 
-/** Merge hits or session representatives, never folds or per-session cursors. Timestamp ties use identity. */
-export function selectCorpusPage(sessions: { session: string; projection: HistoryProjection }[], scoped: HistorySelection, fits: (page: HistoryPage) => boolean, maxChars: number): Outcome<HistoryPage> {
-	const candidates = sessions.flatMap(({ session, projection }): Candidate[] => {
-		if (scoped.query !== undefined) return prepareSelection(projection, { ...scoped, session }).candidates;
-		const event = sessionRepresentative(projection, scoped);
-		return event === undefined ? [] : [{ session, event }];
-	});
-	const time = (event: HistoryEvent) => event.createdAt === undefined || Number.isNaN(Date.parse(event.createdAt)) ? -Infinity : Date.parse(event.createdAt);
-	candidates.sort((a, b) => (time(a.event) - time(b.event) || a.session!.localeCompare(b.session!) || a.event.seq - b.event.seq));
-	return selectPrepared({ candidates, multi: true }, scoped, fits, maxChars);
+const eventTime = (event: HistoryEvent) => event.createdAt === undefined || Number.isNaN(Date.parse(event.createdAt)) ? -Infinity : Date.parse(event.createdAt);
+const compareCorpus = (a: Candidate, b: Candidate) => eventTime(a.event) - eventTime(b.event) || a.session!.localeCompare(b.session!) || a.event.seq - b.event.seq;
+
+/** Keep only the requested end of the globally ordered selection while sessions are released. */
+export class CorpusCollector {
+	private readonly candidates: Candidate[] = [];
+	private readonly limit: number;
+	constructor(private readonly scoped: HistorySelection) {
+		this.limit = Math.min(500, Math.max(1, scoped.limit ?? 20));
+	}
+
+	private admit(candidate: Candidate): void {
+		// Upper bound preserves the stable ordering of equal candidates.
+		let low = 0, high = this.candidates.length;
+		while (low < high) {
+			const mid = (low + high) >>> 1;
+			if (compareCorpus(this.candidates[mid]!, candidate) <= 0) low = mid + 1;
+			else high = mid;
+		}
+		if (this.candidates.length === this.limit) {
+			if (this.scoped.from === "oldest") {
+				if (low === this.limit) return;
+				this.candidates.pop();
+			} else {
+				if (low === 0) return;
+				this.candidates.shift();
+				low--;
+			}
+		}
+		this.candidates.splice(low, 0, candidate);
+	}
+
+	/** Returns whether this session contributes an overview representative. */
+	add(session: string, projection: HistoryProjection): boolean {
+		if (this.scoped.query === undefined) {
+			const event = sessionRepresentative(projection, this.scoped);
+			if (!event) return false;
+			this.admit({ session, event });
+			return true;
+		}
+		for (const event of filteredItems(projection, this.scoped, false)) {
+			const document = eventDocument(event);
+			if ((event.role === "user" || event.role === "assistant") && document === "") continue;
+			const matchOffset = earliestMatchOffsetChars(document, this.scoped.query as string[]);
+			if (matchOffset >= 0) this.admit({ session, event, matchOffset });
+		}
+		return true;
+	}
+
+	page(fits: (page: HistoryPage) => boolean, maxChars: number): Outcome<HistoryPage> {
+		return selectPrepared({ candidates: this.candidates, multi: true }, this.scoped, fits, maxChars);
+	}
 }
 
 function selectPrepared(prepared: PreparedSelection, scoped: HistorySelection, fits: (page: HistoryPage) => boolean, maxChars: number): Outcome<HistoryPage> {

@@ -198,6 +198,29 @@ test("wildcard query merges every role chronologically, limits from either end, 
 	assert.match(historyList.render(result), /session pi:pi-one \| seq 1 \| user/);
 });
 
+test("bounded wildcard search scans every session and orders untimed and tied matches", async () => {
+	const seen: string[] = [];
+	const sessions = ["z", "a", "m"].map((id): HistorySession => ({
+		harness: "pi", id, modifiedAt: 0,
+		async load() {
+			seen.push(id);
+			const items: DecodedHistoryItem[] = Array.from({ length: 200 }, (_, index) => ({
+				seq: index + 1, windowId: "w", role: "user", text: `needle ${index}`,
+				...(index < 2 ? {} : { createdAt: AT }),
+			}));
+			return { projection: projectHistory([{ windowId: "w", items }], 200, new Set(items.map((item) => item.seq))) };
+		},
+	}));
+	const ctx = context(sessions);
+	const ids = (page: ReturnType<typeof data<import("../src/history/query.js").HistoryPage>>) => page.items.map((item) => "seq" in item ? [item.session, item.seq] : null);
+	assert.deepEqual(ids(data(await historyList.execute({ session: "*", query: "needle", from: "oldest", limit: 3 }, ctx))), [["pi:a", 1], ["pi:a", 2], ["pi:m", 1]]);
+	assert.deepEqual(seen, ["z", "a", "m"]);
+	seen.length = 0;
+	assert.deepEqual(ids(data(await historyList.execute({ session: "*", query: "needle", limit: 3 }, ctx))), [["pi:z", 198], ["pi:z", 199], ["pi:z", 200]]);
+	assert.deepEqual(seen, ["z", "a", "m"]);
+	assert.deepEqual(ids(data(await historyList.execute({ session: "*", query: "needle", from: "oldest", limit: 1, since: AT }, ctx))), [["pi:a", 3]]);
+});
+
 test("query-less wildcards browse recent sessions, normalize empty queries, and keep canonical IDs", async (t) => {
 	const { ctx } = await fixture(t);
 	for (const query of [undefined, "", [], ["", ""]]) {

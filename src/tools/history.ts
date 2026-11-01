@@ -3,7 +3,7 @@ import { Type, type Static } from "typebox";
 import { HISTORY_PREVIEW_CHARS, MAX_READ_WINDOW_CHARS } from "./output.js";
 import { failure, fitsResult, resultSchema, readTextWindow, renderOutcome, renderTextWindow, success, TextWindowRequestSchema, TextWindowSchema, type Operation } from "./result.js";
 import { historyRoles, searchQuery } from "./schema.js";
-import { HistoryPageSchema, corpusSelection, selectCorpusPage, selectPage, sessionRepresentative, type HistoryPage } from "../history/query.js";
+import { HistoryPageSchema, CorpusCollector, corpusSelection, selectPage, type HistoryPage } from "../history/query.js";
 import { currentHistory, loadHistorySession, matchesSession, parseSessionSelector, resolveSession, sessionIdentity, type HistoryContext } from "../history/corpus.js";
 import { allItems, eventDocument, nestedCallSummary, toolSummary, HistoryRoleSchema, NestedCallSummarySchema, ToolSummarySchema, type HistoryFoldedRow, type HistoryPageItem } from "../history/history.js";
 
@@ -117,18 +117,19 @@ export const historyList: Operation<typeof historyListParameters, HistoryPage, [
 			const sessions = (await corpus.sessions(selector.data.harness)).filter((session) => matchesSession(session, selector.data));
 			const queries = Array.isArray(scoped.data.query) ? scoped.data.query : undefined;
 			if (!queries) sessions.sort((a, b) => (scoped.data.from === "oldest" ? a.modifiedAt - b.modifiedAt : b.modifiedAt - a.modifiedAt) || sessionIdentity(a).localeCompare(sessionIdentity(b)));
-			const loaded = [];
+			const collector = new CorpusCollector(scoped.data);
+			let qualifying = 0;
 			const notices: string[] = [];
 			for (const session of sessions) {
 				const result = await loadHistorySession(session, queries);
 				if (!result.ok || !result.data) continue;
-				if (!queries && !sessionRepresentative(result.data.projection, scoped.data)) continue;
-				loaded.push({ session: sessionIdentity(session), projection: result.data.projection });
+				if (!collector.add(sessionIdentity(session), result.data.projection)) continue;
+				qualifying++;
 				if (result.data.notice) notices.push(`session ${sessionIdentity(session)}: ${result.data.notice}`);
-				if (!queries && loaded.length >= Math.max(1, params.limit ?? 20)) break;
+				if (!queries && qualifying >= Math.min(500, Math.max(1, params.limit ?? 20))) break;
 			}
 			const notice = notices.length ? { notice: notices.join("") } : {};
-			const result = selectCorpusPage(loaded, scoped.data, (page) => fits({ ...page, ...notice }), maxChars);
+			const result = collector.page((page) => fits({ ...page, ...notice }), maxChars);
 			return result.ok ? success({ ...result.data, ...notice }) : result;
 		}
 		const target = await resolveSession(corpus, selector.data);
