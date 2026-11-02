@@ -18,16 +18,14 @@ import {
 	type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import notesoup, { createNotesoup } from "../plugins/pi/extension.js";
-import { BOOT_TYPE, CARRIED_INPUT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, MANUAL_WIPE_TYPE, MARKER_TYPE, NEXT_WINDOW_PROMPT_TYPE, RESET_MARKER_TYPE, WARNING_TYPE } from "../plugins/pi/entries.js";
+import { BOOT_TYPE, CARRIED_INPUT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, MANUAL_WIPE_TYPE, MARKER_TYPE, RESET_MARKER_TYPE, WARNING_TYPE } from "../plugins/pi/entries.js";
 import { historyFromSession } from "../plugins/pi/history.js";
 import { MARKER_INTERVAL } from "../plugins/pi/marker.js";
 import { assertBootHistory } from "./helpers/extension.js";
 import { NOTES_PROTOCOL_OPEN_TAG, WINDOW_IDENTITY_OPEN_TAG } from "../src/boot/text.js";
 import { FORCED_CONTINUATIONS, GUIDANCE_OPEN_TAG, NORMAL_CONTINUATIONS, warningPrompt } from "../src/budget/text.js";
-import { commandWarningContent, promptBlock } from "../plugins/pi/text.js";
-import { registerResetLifecycle } from "../plugins/pi/reset/lifecycle.js";
-import { buildResetDrafts } from "../plugins/pi/reset/artifacts.js";
-import { currentWindowId } from "../plugins/pi/window.js";
+import { commandWarningContent } from "../plugins/pi/text.js";
+import { DREAM_NAMESPACE, HISTORY_NAMESPACE, NOTES_NAMESPACE } from "../plugins/pi/tool-result.js";
 
 type StreamScript = (request: number, context: AgentContext) => AssistantMessage | Promise<AssistantMessage>;
 type Hook = (pi: ExtensionAPI, getSession: () => AgentSession, requests: AgentContext[]) => void;
@@ -332,6 +330,46 @@ test("real AgentSession: turn-end markers reach tool continuations and allow one
 	}
 });
 
+test("real AgentSession: notesoup tool directory is a stable system section across requests and reset", async () => {
+	let fixture!: Fixture;
+	let directory: string | undefined;
+	const activeTools = ["empty_brain", "get_context_remaining", "notes_write"];
+	const namespaces = [NOTES_NAMESPACE, HISTORY_NAMESPACE, DREAM_NAMESPACE];
+	fixture = await openFixture({
+		compactionEnabled: false,
+		tools: activeTools,
+		hook: (pi) => pi.on("before_agent_start", (event) => {
+			event.systemPromptOptions.sections.host_context = "Host-owned context";
+		}),
+		script: (request, context) => {
+			const system = getCurrentSystemMessage(context.messages);
+			const section = system?.sections?.notesoup_tools;
+			assert.equal(typeof section, "string", "the directory reaches the model as a named system section");
+			for (const { name, description } of namespaces) assert.ok(section!.includes(`${name}: ${description}`));
+			assert.ok(system?.sections?.preamble?.includes("Use the tools as requested."), "the host prompt is preserved");
+			assert.ok(system?.sections?.host_context?.includes("Host-owned context"), "other sections are preserved");
+			assert.deepEqual(system?.toolsAdded?.map((tool) => tool.name).sort(), activeTools, "discovery does not activate tools");
+			if (directory === undefined) directory = section!;
+			else assert.equal(section, directory, "the directory is unchanged across requests and reset");
+			assert.equal(context.messages.filter((message) => message.role === "system" && message.sections?.notesoup_tools !== undefined).length, 1, "unchanged content adds no section delta");
+			return request === 2
+				? assistant(fixture, [{ type: "toolCall", id: "directory-reset", name: "empty_brain", arguments: {} }], "toolUse")
+				: assistant(fixture, [{ type: "text", text: "directory available" }]);
+		},
+	});
+	try {
+		await fixture.session.prompt("Read the directory.");
+		await fixture.session.waitForIdle();
+		await fixture.session.prompt("DIRECTORY_RESET_SENTINEL");
+		await fixture.session.waitForIdle();
+		assert.equal(fixture.requests.length, 3, "two prompts and one reset continuation");
+		assert.equal(resetMarkers(fixture).length, 1);
+		assertFreshRequest(fixture, 2, "DIRECTORY_RESET_SENTINEL");
+	} finally {
+		fixture.close();
+	}
+});
+
 test("real Pi codemode receives typed notes/history outcomes, including expected errors", async () => {
 	let fixture!: Fixture;
 	fixture = await openFixture({
@@ -557,6 +595,30 @@ test("real AgentSession: explicit tiny-session wipe ignores keepRecentTokens and
 	}
 });
 
+test("real AgentSession: a model-requested reset does not carry its original text-and-image prompt", async () => {
+	let fixture!: Fixture;
+	const input = "IMAGE_RESET_UNANSWERED: describe this image";
+	const image = { type: "image" as const, data: "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAn0lEQVRoge2SQQkAQRDD6qSOT20ErIh7hIFCBKSh4etpohuwAdUrsgv1LtEN2IDqFdmFepfoBmxA9YrsQr1LdAM2oHpFdqHeJboBG1C9IrtQ7xLdgA2oXpFdqHeJbsAGVK/ILtS7RDdgA6pXZBfqXaIbsAHVK7IL9S7RDdiA6hXZhXqX6AZsQPWK7EK9S3QDNqB6RXah3iW6ARtQveIfHlqMEYdT3J7gAAAAAElFTkSuQmCC", mimeType: "image/png" };
+	fixture = await openFixture({
+		compactionEnabled: false,
+		script: (request, context) => {
+			if (request === 1) return assistant(fixture, [{ type: "toolCall", id: "wipe-image-input", name: "empty_brain", arguments: {} }], "toolUse");
+			assert.equal(request, 2);
+			assert.equal(JSON.stringify(context.messages).includes(input) || JSON.stringify(context.messages).includes(image.data), false, "the model-requested reset does not replay the input it already received");
+			return assistant(fixture, [{ type: "text", text: "image prompt answered" }]);
+		},
+	});
+	try {
+		await fixture.session.prompt(input, { images: [image] });
+		await fixture.session.waitForIdle();
+		assert.equal(fixture.requests.length, 2);
+		const carried = fixture.sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === CARRIED_INPUT_TYPE);
+		assert.equal(carried.length, 0, "a model-requested reset owns its handoff through notes and last_word");
+	} finally {
+		fixture.close();
+	}
+});
+
 test("real AgentSession: manual command spans its tool batch and stops at settlement", async () => {
 	let fixture!: Fixture;
 	fixture = await openFixture({
@@ -612,7 +674,7 @@ test("real AgentSession: /empty text is close-out context and stops after reset"
 		script: (request, context) => {
 			if (request === 1) return assistant(fixture, [{ type: "text", text: "initial work" }]);
 			if (request === 2) {
-				assert.ok(text(context).includes(JSON.stringify(promptBlock(`/empty ${prompt}`)).slice(1, -1)));
+				assert.ok(text(context).includes(JSON.stringify(`/empty ${prompt}`).slice(1, -1)));
 				return assistant(fixture, [{ type: "toolCall", id: "prompt-wipe", name: "empty_brain", arguments: { last_word: "saved" } }], "toolUse");
 			}
 			throw new Error("command argument must not start fresh-window work");
@@ -662,7 +724,7 @@ test("real AgentSession: streaming clear prompt keeps the first request", async 
 			// The close-out embeds the human's command line verbatim, so the closing turn sees
 			// the command context. Only the accepted command appears.
 			if (request === 2) {
-				assert.ok(text(context).includes(JSON.stringify(promptBlock("/fresh-window FIRST_RESET_PROMPT")).slice(1, -1)), "the close-out carries the original command line");
+				assert.ok(text(context).includes(JSON.stringify("/fresh-window FIRST_RESET_PROMPT").slice(1, -1)), "the close-out carries the original command line as plain text");
 				assert.equal(text(context).includes("IGNORED_RESET_PROMPT"), false, "the refused repeat never enters the close-out");
 			}
 			assert.ok(request <= 2);
@@ -682,6 +744,28 @@ test("real AgentSession: streaming clear prompt keeps the first request", async 
 		assert.equal(resetMarkers(fixture).length, 1);
 		assert.ok(fixture.notices.some((notice) => notice.includes("Brain already being emptied")));
 	} finally { release(); fixture.close(); }
+});
+
+test("real AgentSession: hard-reserve reset carries the original text and image and continues", async () => {
+	let fixture!: Fixture;
+	const input = "HARD_RESERVE_IMAGE_INPUT";
+	const image = { type: "image" as const, data: "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAn0lEQVRoge2SQQkAQRDD6qSOT20ErIh7gIFCBKSh4et1LtEN2IDqFdmFepfoBmxA9YrsQr1LdAM2oHpFdqHeJboBG1C9IrtQ7xLdgA2oXpFdqHeJbsAGVK/ILtS7RDdgA6pXZBfqXaIbsAHVK7IL9S7RDdiA6hXZhXqX6AZsQPWK7EK9S3QDNqB6RXah3iW6ARtQveIfHlqMEYdT3J7gAAAAAElFTkSuQmCC", mimeType: "image/png" };
+	fixture = await openFixture({
+		defaultReserveTokens: 80_000,
+		script: (request, context) => {
+			if (request === 1) return assistant(fixture, [{ type: "text", text: "reserve reached" }], "stop", { usage: usage(80_000) });
+			assert.equal(request, 2);
+			assertUserContent(context, [{ type: "text", text: input }, image]);
+			return assistant(fixture, [{ type: "text", text: "carried image answered" }]);
+		},
+	});
+	try {
+		await fixture.session.prompt(input, { images: [image] });
+		await fixture.session.waitForIdle();
+		assert.equal(fixture.requests.length, 2);
+		assert.equal(resetMarkers(fixture).length, 1);
+		assert.equal(fixture.sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === CARRIED_INPUT_TYPE).length, 1);
+	} finally { fixture.close(); }
 });
 
 test("real AgentSession: manual hard-reserve reset stops clean and mixed-tool turns without fresh provider work", async () => {
@@ -861,90 +945,45 @@ test("real AgentSession: user abort, synthetic aborted response, and generic err
 	}
 });
 
-test("real AgentSession: input during prompted /empty is hidden-steered, carried with images, and answered after a safety reset", async () => {
+test("real AgentSession: input during prompted /empty is carried with images and answered after reset", async () => {
 	let fixture!: Fixture;
-	let started!: () => void;
-	let release!: () => void;
-	const ready = new Promise<void>((resolve) => { started = resolve; });
-	const gate = new Promise<void>((resolve) => { release = resolve; });
+	let closeoutStarted!: () => void;
+	let releaseCloseout!: () => void;
+	const closeoutReady = new Promise<void>((resolve) => { closeoutStarted = resolve; });
+	const closeoutGate = new Promise<void>((resolve) => { releaseCloseout = resolve; });
 	const input = "DEFERRED_HUMAN_INPUT\n  verbatim";
 	const image = { type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" };
 	fixture = await openFixture({
 		script: async (request, context) => {
 			if (request === 1) {
-				started(); await gate;
-				return assistant(fixture, [{ type: "text", text: "saving notes" }]);
+				closeoutStarted(); await closeoutGate;
+				assert.ok(text(context).includes(JSON.stringify(commandWarningContent("/empty CLOSE_OUT_CONTEXT")).slice(1, -1)));
+				assert.equal(text(context).includes(input), false, "the separate input is not sent to the closing model");
+				assert.equal(text(context).includes("next_window_prompt"), false, "no hidden steer reaches the provider");
+				return assistant(fixture, [{ type: "text", text: "close-out ready for reset" }], "stop", { usage: usage(80_000) });
 			}
-			if (request === 2) {
-				assertUserContent(context, [{ type: "text", text: promptBlock(input) }, image]);
-				return assistant(fixture, [{ type: "toolCall", id: "deferred-pressure", name: "notes_write", arguments: { address: "deferred.md", content: "saved" } }], "toolUse", { usage: usage(80_000) });
-			}
-			assert.equal(request, 3, "carried input continues despite command stop policy");
-			assertFreshRequest(fixture, 2, "saving notes");
+			assert.equal(request, 2, "the intercepted input resumes in the fresh window");
 			assertUserContent(context, [{ type: "text", text: input }, image]);
+			assert.equal(text(context).includes("CLOSE_OUT_CONTEXT"), false, "the fresh window excludes old-window close-out text");
+			assert.equal(text(context).includes("next_window_prompt"), false, "the fresh provider request contains no hidden steer");
 			return assistant(fixture, [{ type: "text", text: "deferred input answered" }]);
 		},
 	});
 	try {
-		const command = fixture.session.prompt("/empty CLOSE_OUT_CONTEXT");
-		await ready;
+		const closing = fixture.session.prompt("/empty CLOSE_OUT_CONTEXT");
+		await closeoutReady;
 		await fixture.session.prompt(input, { images: [image], streamingBehavior: "followUp" });
-		release();
-		await command;
-		await fixture.session.waitForIdle();
-		assert.equal(fixture.requests.length, 3);
-		assert.equal(resetMarkers(fixture).length, 1);
-		const branch = fixture.sessionManager.getBranch();
-		const steer = branch.find((entry) => entry.type === "custom_message" && entry.customType === NEXT_WINDOW_PROMPT_TYPE);
-		assert.ok(steer?.type === "custom_message");
-		assert.equal(steer.display, false);
-		assert.deepEqual(steer.content, [{ type: "text", text: promptBlock(input) }, image], "the bare block and original images reach the closing model");
-		assert.equal(branch.filter((entry) => entry.type === "custom_message" && entry.customType === CARRIED_INPUT_TYPE).length, 1);
-		assert.equal(fixture.streamSignals.at(-1), false, "the stop-pending safeguard cannot swallow carried input");
-	} finally { release(); fixture.close(); }
-});
-
-test("real AgentSession: a hidden steer queued during reset construction is not replayed beside carried input", async () => {
-	let fixture!: Fixture;
-	let started!: () => void;
-	let release!: () => void;
-	const building = new Promise<void>((resolve) => { started = resolve; });
-	const gate = new Promise<void>((resolve) => { release = resolve; });
-	const input = "LATE_BUILD_INPUT";
-	fixture = await openFixture({
-		tools: [],
-		extensionFactory: (pi) => {
-			const lifecycle = registerResetLifecycle(pi, {
-				isEnabled: () => true,
-				budget: { automaticResetEnabled: () => false, hardReserveDue: () => false, consumeTurnEnd: () => [], clear() {} },
-				async buildReset(ctx, isCurrent, lastWord, firstSeq, origin) {
-					started(); await gate;
-					return buildResetDrafts(ctx, undefined, isCurrent, lastWord, firstSeq, origin);
-				},
-			});
-			pi.on("before_agent_start", (_event, ctx) => { lifecycle.command(currentWindowId(ctx), false); });
-		},
-		script: (request, context) => {
-			if (request === 1) return assistant(fixture, [{ type: "text", text: "closing old window" }]);
-			assert.equal(request, 2);
-			assertUserContent(context, [{ type: "text", text: input }]);
-			assert.equal(text(context).includes("notesoup:next_window_prompt"), false, "the stale queued steer must not duplicate the carried input");
-			return assistant(fixture, [{ type: "text", text: "late input answered" }]);
-		},
-	});
-	try {
-		const closing = fixture.session.prompt("close out");
-		await building;
-		await fixture.session.prompt(input, { streamingBehavior: "steer" });
-		release();
+		releaseCloseout();
 		await closing;
 		await fixture.session.waitForIdle();
 		assert.equal(fixture.requests.length, 2);
-		assert.equal(text(fixture.requests[1]).includes("notesoup:next_window_prompt"), false);
 		const branch = fixture.sessionManager.getBranch();
-		const markerIndex = branch.findIndex((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE);
-		assert.ok(branch.slice(markerIndex + 1).some((entry) => entry.type === "custom_message" && entry.customType === NEXT_WINDOW_PROMPT_TYPE), "Pi really delivered the queued steer after committing the boundary");
-	} finally { release(); fixture.close(); }
+		assert.equal(branch.some((entry) => entry.type === "custom_message" && JSON.stringify(entry).includes("next-window-prompt")), false, "the branch contains no next-window steer");
+		assert.equal(resetMarkers(fixture).length, 1, "one reset marker commits at settlement");
+		const carried = branch.filter((entry) => entry.type === "custom_message" && entry.customType === CARRIED_INPUT_TYPE);
+		assert.equal(carried.length, 1);
+		assert.deepEqual(carried[0]?.type === "custom_message" ? carried[0].content : undefined, [{ type: "text", text: input }, image]);
+	} finally { releaseCloseout(); fixture.close(); }
 });
 
 test("real AgentSession: abort after handled input preserves originals without forcing a continuation", async () => {
@@ -964,7 +1003,6 @@ test("real AgentSession: abort after handled input preserves originals without f
 			}
 			assert.equal(request, 2);
 			assertUserContent(context, original);
-			assert.equal(text(context).includes("notesoup:next_window_prompt"), false);
 			return assistant(fixture, [{ type: "text", text: "resumed after abort" }]);
 		},
 	});
@@ -986,7 +1024,7 @@ test("real AgentSession: abort after handled input preserves originals without f
 	} finally { release(); fixture.close(); }
 });
 
-test("real AgentSession: a close-out error does not discard handled input", async () => {
+test("real AgentSession: a close-out error answers handled input without resetting", async () => {
 	let fixture!: Fixture;
 	let started!: () => void;
 	let release!: () => void;
@@ -1001,7 +1039,7 @@ test("real AgentSession: a close-out error does not discard handled input", asyn
 			}
 			assert.equal(request, 2);
 			assertUserContent(context, [{ type: "text", text: "ERROR_HANDLED_INPUT" }]);
-			assert.equal(text(context).includes("notesoup:next_window_prompt"), false);
+			assert.equal(text(context).includes("next_window_prompt"), false, "no hidden steer reaches the provider");
 			return assistant(fixture, [{ type: "text", text: "handled input answered without reset" }]);
 		},
 	});
@@ -1012,11 +1050,12 @@ test("real AgentSession: a close-out error does not discard handled input", asyn
 		release();
 		await closing;
 		await fixture.session.waitForIdle();
-		const originals = fixture.sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === CARRIED_INPUT_TYPE);
-		assert.equal(originals.length, 1);
 		assert.equal(fixture.requests.length, 2);
 		assertUserContent(fixture.requests[1], [{ type: "text", text: "ERROR_HANDLED_INPUT" }]);
-		assert.equal(resetMarkers(fixture).length, 0, "ordinary errors still do not force a reset");
+		const originals = fixture.sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === CARRIED_INPUT_TYPE);
+		assert.equal(originals.length, 1, "the failed close-out restores one visible copy");
+		assert.deepEqual(originals[0]?.type === "custom_message" ? originals[0].content : undefined, "ERROR_HANDLED_INPUT");
+		assert.equal(resetMarkers(fixture).length, 0, "ordinary errors do not force a reset");
 	} finally { release(); fixture.close(); }
 });
 
@@ -1170,7 +1209,7 @@ test("real AgentSession: two retain-none checkpoints survive session-file reopen
 		assert.equal(branch.filter((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE).length, 2);
 		assert.ok(JSON.stringify(branch).includes("PERSISTED_OLD_WINDOW_SENTINEL"), "raw history survives disk reopen");
 		const canonical = reopened.buildSessionProjection().messages;
-		assert.equal(JSON.stringify(canonical).includes("PERSISTED_OLD_WINDOW_SENTINEL"), false, "disk-loaded canonical context agrees with the fresh request");
+		assert.equal(JSON.stringify(canonical).includes("PERSISTED_OLD_WINDOW_SENTINEL"), false, "model-requested resets do not carry the original prompt");
 		assert.ok(canonical.some((message) => message.role === "compactionSummary"), "the accepted empty-summary wrapper survives reload");
 		const system = getCurrentSystemMessage(canonical);
 		assert.ok(JSON.stringify(system).includes("Use the tools as requested."), "the complete system prompt survives the checkpoint");
@@ -1361,7 +1400,7 @@ test("real AgentSession: overflow and recoverable length reset and retry once; r
 		assert.equal(repeated.sessionManager.getBranch().filter((entry) => entry.type === "compaction").length, 2);
 		assert.equal(repeated.requests.length, 3, "an automatic continuation still gets only one recovery request");
 		assertFreshRequest(repeated, 2, "REPEATED_OVERFLOW_SENTINEL");
-		assert.equal(repeated.sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === CARRIED_INPUT_TYPE).length, 0, "our own automatic continuation has no human input to carry");
+		assert.equal(repeated.sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === CARRIED_INPUT_TYPE).length, 0, "model-owned reset and its input-free continuation do not carry the original prompt");
 	} finally {
 		repeated.close();
 	}

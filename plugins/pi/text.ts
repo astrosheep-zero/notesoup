@@ -16,11 +16,6 @@ export function markerContent(seq: number): string {
 	return `<notesoup:marker seq="${seq}" />`;
 }
 
-/** The closing model sees deferred input as a bare next-window prompt block. */
-export function promptBlock(commandLine: string): string {
-	return `<notesoup:next_window_prompt>\n${commandLine}\n</notesoup:next_window_prompt>`;
-}
-
 /** Approved manual close-out notices; both variants live here. */
 export const COMMAND_NOTICE = {
 	prompted: "The human ran /empty. Save your notes now and call `empty_brain` immediately. Anything you say here will be erased afterward — put the handoff in your notes. The command below is context for your notes, not a task for the fresh window. Anything the human sends separately from now on should be handled after the reset.",
@@ -30,5 +25,5 @@ export const COMMAND_NOTICE = {
 /** Manual orders omit budget timing hints; deferred work sits outside the notice. */
 export function commandWarningContent(commandLine?: string): string {
 	const notice = commandLine ? COMMAND_NOTICE.prompted : COMMAND_NOTICE.bare;
-	return `${GUIDANCE_OPEN_TAG}\n${notice}\n${WARNING_BODY}\n${WARNING_CALL}\n${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}${commandLine ? `\n${promptBlock(commandLine)}` : ""}`;
+	return `${GUIDANCE_OPEN_TAG}\n${notice}\n${WARNING_BODY}\n${WARNING_CALL}\n${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}${commandLine ? `\n${commandLine}` : ""}`;
 }

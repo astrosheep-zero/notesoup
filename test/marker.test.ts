@@ -12,7 +12,7 @@ test.afterEach(env.afterEach);
 test.after(env.dispose);
 
 function beforeAgentStart(captured: ReturnType<typeof makeExtension>, ctx: ReturnType<typeof context>) {
-	return runHandlers(captured, "before_agent_start", { type: "before_agent_start" }, ctx);
+	return runHandlers(captured, "before_agent_start", { type: "before_agent_start", systemPromptOptions: { sections: {} } }, ctx);
 }
 
 test("marker stamps its own seq at run start once the interval is reached, never mid-turn", async () => {

@@ -6,5 +6,4 @@ export const RESET_MARKER_TYPE = "notesoup/reset-marker";
 export const CONTINUATION_TYPE = "notesoup/continuation";
 export const RESET_LAST_WORD_TYPE = "notesoup/reset-last-word";
 export const CARRIED_INPUT_TYPE = "notesoup/carried-input";
-export const NEXT_WINDOW_PROMPT_TYPE = "notesoup/next-window-prompt";
 export const MARKER_TYPE = "notesoup/marker";

@@ -215,6 +215,30 @@ test("public reset boundary drafts one marker, one boot, and one continuation af
 	assert.equal(branch.filter((entry) => entry.type === "custom_message" && entry.customType === BOOT_TYPE).length, 1);
 });
 
+test("hard-reserve reset carries original text and images and continues", async () => {
+	const sessionManager = Manager.inMemory("/private/tmp/notesoup-hard-reserve-carry-test");
+	const handlers = new Map<string, Handler[]>();
+	const api = { on(name: string, handler: Handler) { const list = handlers.get(name) ?? []; list.push(handler); handlers.set(name, list); } } as unknown as ExtensionAPI;
+	const ctx = { sessionManager, model: undefined, hasPendingMessages: () => false, ui: { notify() {} } } as unknown as ExtensionContext;
+	registerResetLifecycle(api, {
+		isEnabled: () => true,
+		budget: { automaticResetEnabled: () => true, hardReserveDue: () => true, consumeTurnEnd: () => [], clear() {} },
+		buildReset: () => [],
+	});
+	const original = [
+		{ type: "text" as const, text: "Describe this image" },
+		{ type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" },
+	];
+	for (const handler of handlers.get("message_end") ?? []) await handler({ type: "message_end", message: { role: "user", content: original, timestamp: Date.now() } }, ctx);
+	let result: unknown;
+	for (const handler of handlers.get("turn_end") ?? []) result = await handler(fakeBoundaryEvent([], { role: "assistant", content: [], stopReason: "stop", timestamp: Date.now() } as unknown as AgentMessage), ctx);
+	const boundary = resultEntries([result]);
+	const carried = boundary.entries.filter((entry) => entry.type === "custom_message" && entry.customType === CARRIED_INPUT_TYPE);
+	assert.equal(carried.length, 1);
+	assert.deepEqual(carried[0]?.type === "custom_message" ? carried[0].content : undefined, original);
+	assert.equal(boundary.continue, true);
+});
+
 test("manual /empty spans tool turns and commits the stop at settlement", async () => {
 	const h = harness();
 	await h.runCommand("empty");
@@ -298,7 +322,7 @@ test("manual /empty with a prompt shows the human's command line in the close-ou
 	], "the reset tail contains no command argument");
 });
 
-test("input arriving during reset construction survives even when the hidden steer is never delivered", async () => {
+test("input arriving during reset construction is carried without a hidden steer", async () => {
 	const sessionManager = Manager.inMemory("/private/tmp/notesoup-late-input-test");
 	const handlers = new Map<string, Handler>();
 	const steers: unknown[] = [];
@@ -330,14 +354,14 @@ test("input arriving during reset construction survives even when the hidden ste
 	const boundary = resultEntries([await pending]);
 	assert.equal(boundary.continue, true, "late input overrides the bare command's stop");
 	assert.deepEqual(boundary.entries.slice(-2).map((entry) => entry.type === "custom_message" ? entry.content : null), ["  first\ninput  ", "second"]);
-	assert.equal(steers.length, 2, "steers were queued but never delivered by this host");
+	assert.equal(steers.length, 0, "handled inputs are not steered to the closing model");
 	appendDrafts(sessionManager, boundary.entries);
 	const marker = sessionManager.getBranch().find((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE)!;
 	const windowId = (marker as { data: { windowId: string } }).data.windowId;
 	assert.equal(resetBoundaryCommitted(ctx, marker.id, windowId), true);
 	assert.deepEqual(inspectResetTail(ctx, marker.id, windowId), { boot: true, continuation: true }, "last word and trailing inputs form a complete ordered boundary");
 	await repairResetTail(api, ctx, marker as Parameters<typeof repairResetTail>[2]);
-	assert.equal(steers.length, 2, "repair never duplicates a complete boundary with carried inputs");
+	assert.equal(steers.length, 0, "reset repair does not send prompt steers");
 	sessionManager.appendCustomMessageEntry(BOOT_TYPE, "late boot", false, { windowId });
 	assert.equal(inspectResetTail(ctx, marker.id, windowId), undefined, "artifacts cannot restart after carried input");
 	assert.equal(resetBoundaryCommitted(ctx, marker.id, windowId), true, "later malformed work does not undo a committed prefix");
@@ -420,10 +444,28 @@ test("abort during reset construction restores handled input at settlement, once
 	await handlers.get("agent_settled")!({}, ctx);
 	const restored = sent.filter((item) => item.message.customType === CARRIED_INPUT_TYPE);
 	assert.deepEqual(restored, [{ message: { type: "custom_message", customType: CARRIED_INPUT_TYPE, content: "cancelled during construction", display: true }, options: { triggerTurn: false } }]);
-	// A later command in the same window must not revive the cancelled command's steer.
+});
+
+test("close-out error restores intercepted input and triggers its answer turn", async () => {
+	const sessionManager = Manager.inMemory("/private/tmp/notesoup-error-input-restore-test");
+	const handlers = new Map<string, Handler>();
+	const sent: Array<{ message: { customType: string; content: unknown; display: boolean }; options?: { triggerTurn?: boolean } }> = [];
+	const api = {
+		on(name: string, handler: Handler) { handlers.set(name, handler); },
+		sendMessage(message: typeof sent[number]["message"], options?: typeof sent[number]["options"]) { sent.push({ message, options }); },
+	} as unknown as ExtensionAPI;
+	const ctx = { sessionManager, hasPendingMessages: () => false, ui: { notify() {} } } as unknown as ExtensionContext;
+	const lifecycle = registerResetLifecycle(api, {
+		isEnabled: () => true,
+		budget: { automaticResetEnabled: () => false, hardReserveDue: () => false, consumeTurnEnd: () => [], clear() {} },
+		buildReset: () => [],
+	});
+	const windowId = `pcw:${sessionManager.getSessionId().slice(0, 8)}:root`;
 	lifecycle.command(windowId, false);
-	const stale = { role: "custom", ...sent[0]!.message };
-	assert.deepEqual(await handlers.get("context_with_system")!({ messages: [stale] }, ctx), { messages: [] });
+	assert.deepEqual(await handlers.get("input")!({ source: "rpc", text: "restore after error" }, ctx), { action: "handled" });
+	const error = { ...fakeBoundaryEvent(), outcome: "error", message: { role: "assistant", content: [], stopReason: "error", timestamp: Date.now() } };
+	await handlers.get("turn_end")!(error, ctx);
+	assert.deepEqual(sent, [{ message: { type: "custom_message", customType: CARRIED_INPUT_TYPE, content: "restore after error", display: true }, options: { triggerTurn: true } }]);
 });
 
 test("reset construction failure preserves incoming and budget drafts without continuation", async () => {

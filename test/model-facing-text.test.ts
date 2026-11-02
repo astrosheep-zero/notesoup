@@ -113,10 +113,9 @@ test("the countdown closes the second-tier notice only, in both hosts", () => {
 	assert.equal(CLAUDE_WARNING_PROMPT, pi, "Pi and Claude receive identical copy");
 	assert.equal(pi.split(COUNTDOWN_LINE).length - 1, 1, "the second tier carries the countdown exactly once");
 	const prompted = commandWarningContent("/empty keep going");
-	assert.ok(prompted.includes("<notesoup:next_window_prompt>\n/empty keep going\n</notesoup:next_window_prompt>"));
-	assert.ok(prompted.includes(`\n${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}\n<notesoup:next_window_prompt>`), "the prompt block follows the closed notice");
+	assert.equal(prompted, `${GUIDANCE_OPEN_TAG}\n${COMMAND_NOTICE.prompted}\n${WARNING_BODY}\n${WARNING_CALL}\n${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}\n/empty keep going`);
 	assert.equal(commandWarningContent(), `${GUIDANCE_OPEN_TAG}\n${COMMAND_NOTICE.bare}\n${WARNING_BODY}\n${WARNING_CALL}\n${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}`);
-	assert.equal(prompted, `${GUIDANCE_OPEN_TAG}\n${COMMAND_NOTICE.prompted}\n${WARNING_BODY}\n${WARNING_CALL}\n${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}\n<notesoup:next_window_prompt>\n/empty keep going\n</notesoup:next_window_prompt>`);
+	assert.ok(prompted.endsWith("\n/empty keep going"), "command text remains plain close-out context");
 	assert.equal(prompted.includes(PI_PRE_RESET_HINTS), false, "manual commands own reset timing");
 	assert.ok(CLAUDE_WARNING_PROMPT.endsWith(`\n${COUNTDOWN_LINE}\n${GUIDANCE_CLOSE_TAG}`));
 	assert.equal(prompted.includes(WARNING_TIMING), false, "manual requests replace the budget opening");

@@ -3,7 +3,7 @@ import { resetBoundaryCommitted } from "./reset/committed.js";
 import { getCurrentSystemMessage, Type } from "@earendil-works/pi-ai";
 import { VERSION, defineTool, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, type SettingsManager } from "@earendil-works/pi-coding-agent";
 import { registerBudget } from "./budget.js";
-import { output } from "./tool-result.js";
+import { DREAM_NAMESPACE, HISTORY_NAMESPACE, NOTES_NAMESPACE, output } from "./tool-result.js";
 import { emptyBrainRenderers } from "./render.js";
 import { currentReset, currentWindowId, isCheckpointBackedReset, isWindowBoot, isWindowMarker, markerResetOrigin, projectRootWindow, projectWindow, rootWindowId, type WindowMarker } from "./window.js";
 import { registerResetLifecycle } from "./reset/lifecycle.js";
@@ -24,6 +24,9 @@ function readPackageVersion(): string {
 }
 
 const buildLabel = `v${readPackageVersion()}`;
+const notesoupTools = [NOTES_NAMESPACE, HISTORY_NAMESPACE, DREAM_NAMESPACE]
+	.map(({ name, description }) => `${name}: ${description}`)
+	.join("\n") + "\nDiscover deferred tools through codemode or tool_search when available.";
 
 function branchHasWindowMarker(ctx: ExtensionContext, fromId?: string): boolean {
 	return ctx.sessionManager.getBranch(fromId).some((entry) => isWindowMarker(entry));
@@ -77,7 +80,8 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 			if (markerResetOrigin(marker) === "forced") ctx.ui.notify("🥣 Brain forcibly emptied: overflow", "warning");
 		}
 	};
-	pi.on("before_agent_start", (_event, ctx) => {
+	pi.on("before_agent_start", (event, ctx) => {
+		event.systemPromptOptions.sections.notesoup_tools = notesoupTools;
 		if (enabled) maybeSendMarker(pi, ctx);
 	});
 	pi.on("turn_start", (_event, ctx) => {

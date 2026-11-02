@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { getCurrentSystemMessage, isContextOverflow, isRecoverableLength } from "@earendil-works/pi-ai";
 import type { AgentBeforeSettleEvent, ExtensionAPI, ExtensionContext, SessionBoundaryDraft } from "@earendil-works/pi-coding-agent";
@@ -9,8 +8,6 @@ import { resetBoundaryCommitted } from "./committed.js";
 import type { ResetOrigin } from "../../../src/budget/text.js";
 import { errorMessage } from "../../../src/error-message.js";
 import { carriedInputDrafts, isCarriedInputEntry, type CarriedInput } from "./artifacts.js";
-import { NEXT_WINDOW_PROMPT_TYPE } from "../entries.js";
-import { promptBlock } from "../text.js";
 
 type BudgetOwner = {
 	automaticResetEnabled: (ctx: ExtensionContext) => boolean;
@@ -87,13 +84,14 @@ export type ResetControlEvent =
 	| { readonly type: "before_settle"; readonly facts: ResetBeforeSettleFacts };
 
 /** Construction intent, not final state: handled inputs can still arrive while notes load. Only `turn-end`
- * may latch a stop; overflow kinds spend recovery; only `overflow-recovery` carries passive run inputs. */
+ * may latch a stop; overflow kinds spend recovery; only hard-reserve and overflow carry passive run inputs. */
 export interface ResetBoundaryIntent {
 	readonly effect: "build-boundary";
 	readonly boundary: "turn-end" | "settle" | "command-overflow" | "overflow-recovery";
 	readonly windowId: string;
 	readonly continueAfterReset: boolean;
 	readonly origin: ResetOrigin;
+	readonly carryRunInputs?: boolean;
 	readonly tool?: { readonly lastWord?: string };
 }
 
@@ -106,16 +104,16 @@ function requestForWindow(request: ResetRequest, windowId: string): ResetRequest
 
 const spendsOverflow = (boundary: ResetBoundaryIntent["boundary"]) => boundary === "command-overflow" || boundary === "overflow-recovery";
 
-function boundaryIntent(request: ResetRequest, windowId: string, boundary: ResetBoundaryIntent["boundary"]): ResetBoundaryIntent {
+function boundaryIntent(request: ResetRequest, windowId: string, boundary: ResetBoundaryIntent["boundary"], carryRunInputs = false): ResetBoundaryIntent {
 	const tool = request.phase === "none" ? undefined : request.tool;
 	const continueAfterReset = request.phase === "pending" ? request.command?.continueAfterReset ?? true : true;
-	return { effect: "build-boundary", boundary, windowId, tool, continueAfterReset, origin: spendsOverflow(boundary) || !tool ? "forced" : "normal" };
+	return { effect: "build-boundary", boundary, windowId, tool, continueAfterReset, origin: spendsOverflow(boundary) || !tool ? "forced" : "normal", ...(carryRunInputs ? { carryRunInputs: true } : {}) };
 }
 
 /** Resolve once, after a successful current build. No delivery policy is left to the adapter. */
 export function finalizeResetBoundary(intent: ResetBoundaryIntent, request: ResetRequest, passiveInputs: readonly CarriedInput[] = []) {
 	const inputs = request.phase === "pending" && request.command ? request.command.inputs ?? []
-		: intent.boundary === "overflow-recovery" ? passiveInputs : [];
+		: intent.boundary === "overflow-recovery" || intent.carryRunInputs ? passiveInputs : [];
 	const resumeModel = intent.continueAfterReset || inputs.length > 0;
 	const state: ResetControlState = {
 		request: NO_REQUEST,
@@ -170,8 +168,9 @@ export function reduceResetControl(state: ResetControlState, event: ResetControl
 			}
 			// A direct tool request commits after the whole tool batch. The budget cutoff is
 			// a separate hard-reserve safety path; ordinary close-out waits for settlement.
-			if ((request.phase === "pending" && request.tool && !manual) || facts.hardReserveDue) {
-				return boundaryIntent(request, facts.windowId, "turn-end");
+			const toolReset = request.phase === "pending" && request.tool !== undefined;
+			if ((toolReset && !manual) || facts.hardReserveDue) {
+				return boundaryIntent(request, facts.windowId, "turn-end", !manual && !toolReset && facts.hardReserveDue);
 			}
 			return { state: { request, overflow: "idle" }, effect: "none" };
 		}
@@ -220,17 +219,16 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 	let lifecycleGeneration = 0;
 	let control = initialResetControl();
 	let runInputs: CarriedInput[] = [];
-	let commandId: string | undefined;
 
 	// Once input returns handled, Pi no longer owns its original content. If close-out
-	// fails/cancels, return that content to the transcript without starting another run.
-	const restoreCommandInputs = () => {
+	// fails/cancels, restore it; only an ordinary error starts a turn to answer it.
+	const restoreCommandInputs = (triggerTurn = false) => {
 		const request = control.request;
 		if (request.phase !== "pending" || !request.command?.inputs?.length) return;
 		const inputs = request.command.inputs;
 		control = { ...control, request: { ...request, command: { ...request.command, inputs: [] } } };
 		for (const draft of carriedInputDrafts(inputs)) {
-			pi.sendMessage(draft, { triggerTurn: false });
+			pi.sendMessage(draft, { triggerTurn });
 		}
 		runInputs.push(...inputs);
 	};
@@ -239,11 +237,9 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 		if (preserveInputs) restoreCommandInputs();
 		control = initialResetControl();
 		runInputs = [];
-		commandId = undefined;
 	};
 	const resetBoundaryResult = async (entries: SessionBoundaryDraft[], ctx: ExtensionContext, intent: ResetBoundaryIntent) => {
-		// Keep command state live while notes load: input arriving during this await must
-		// join this very boundary even if its steer cannot reach the closing model.
+		// Keep command state live while notes load so input arriving during this await joins this boundary.
 		const generation = lifecycleGeneration;
 		const outerGeneration = options.getLifecycleGeneration?.();
 		const sessionId = ctx.sessionManager.getSessionId();
@@ -281,10 +277,6 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 			? [{ type: "text", text: event.text }, ...event.images]
 			: event.text;
 		control = reduceResetControl(control, { type: "input", windowId: request.windowId, input: content }).state;
-		const steerContent: CarriedInput = event.images?.length
-			? [{ type: "text", text: promptBlock(event.text) }, ...event.images]
-			: promptBlock(event.text);
-		pi.sendMessage({ customType: NEXT_WINDOW_PROMPT_TYPE, content: steerContent, display: false, details: { windowId: request.windowId, commandId } }, { deliverAs: "steer" });
 		return { action: "handled" };
 	});
 
@@ -292,23 +284,13 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 	// safety reset is actually committed, cancel that empty follow-up before provider
 	// work. Real queued user input is allowed through and answered before settlement.
 	pi.on("context_with_system", (event, ctx) => {
-		const request = control.request;
-		// Steering can be queued during buildReset's await and arrive after the boundary.
-		// It is closing-model context only; originals already live in the carried entries.
-		const messages = event.messages.filter((message) => {
-			if (message.role !== "custom" || message.customType !== NEXT_WINDOW_PROMPT_TYPE) return true;
-			const details = message.details as { windowId?: unknown; commandId?: unknown } | undefined;
-			return request.phase === "pending" && request.command !== undefined &&
-				request.windowId === currentWindowId(ctx) && details?.windowId === request.windowId && commandId !== undefined && details?.commandId === commandId;
-		});
-		const filtered = messages.length === event.messages.length ? undefined : { messages };
 		const stop = control.stopAfterReset;
-		if (!sessionActive || !stop || ctx.hasPendingMessages()) return filtered;
+		if (!sessionActive || !stop || ctx.hasPendingMessages()) return undefined;
 		const marker = currentReset(ctx);
-		if (!marker || marker.data.windowId === stop.windowId || !resetBoundaryCommitted(ctx, marker.id, marker.data.windowId)) return filtered;
+		if (!marker || marker.data.windowId === stop.windowId || !resetBoundaryCommitted(ctx, marker.id, marker.data.windowId)) return undefined;
 		const branch = ctx.sessionManager.getBranch();
 		const markerIndex = branch.findIndex((entry) => entry.id === marker.id);
-		if (branch.slice(markerIndex + 1).some((entry) => (entry.type === "message" && entry.message.role === "user") || isCarriedInputEntry(entry))) return filtered;
+		if (branch.slice(markerIndex + 1).some((entry) => (entry.type === "message" && entry.message.role === "user") || isCarriedInputEntry(entry))) return undefined;
 		ctx.abort();
 		const system = getCurrentSystemMessage(event.messages);
 		return { messages: system ? [system] : [] };
@@ -334,8 +316,11 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 			},
 		});
 		if (decision.effect === "build-boundary") return await resetBoundaryResult(entries, ctx, decision);
-		if (aborted || (event.outcome === "error" && decision.state.request.phase === "none")) restoreCommandInputs();
+		if (aborted) restoreCommandInputs();
+		else if (event.outcome === "error" && decision.state.request.phase === "none") restoreCommandInputs(true);
 		control = decision.state;
+		if (!aborted && event.outcome === "completed" && event.message.role === "assistant" && event.message.stopReason === "stop" &&
+			event.context.pendingMessages.length === 0 && !ctx.hasPendingMessages()) runInputs = [];
 		if (!aborted && event.outcome !== "error" && options.isEnabled()) {
 			const marker = buildMarkerDraft(ctx, entries);
 			if (marker) entries.push(marker);
@@ -390,7 +375,6 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 		command(windowId: string, continueAfterReset: boolean, input?: CarriedInput) {
 			const decision = reduceResetControl(control, { type: "command", windowId, continueAfterReset, ...(input !== undefined ? { input } : {}) });
 			control = decision.state;
-			if (decision.effect === "close-out-armed") commandId = randomUUID();
 			return decision.effect;
 		},
 		request(windowId: string, lastWord?: string) {
