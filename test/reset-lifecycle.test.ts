@@ -185,6 +185,21 @@ function fakeBoundaryEvent(entries: SessionBoundaryDraft[] = [], message?: Agent
 	} as TurnEndEvent;
 }
 
+test("tool continuation defaults to true, preserves the first request, and yields to command policy", () => {
+	const windowId = "pcw:test:window";
+	for (const terminate of [undefined, false, true]) {
+		const requested = reduceResetControl(initialResetControl(), { type: "tool_request", windowId, terminate }).state;
+		const duplicate = reduceResetControl(requested, { type: "tool_request", windowId, terminate: !terminate }).state;
+		const intent = boundaryIntent(reduceResetControl(duplicate, { type: "turn_end", facts: turnEndFacts() }));
+		assert.equal(finalizeResetBoundary(intent, duplicate.request).resumeModel, !terminate);
+		const commanded = reduceResetControl(requested, { type: "command", windowId, continueAfterReset: false }).state;
+		const commandIntent = boundaryIntent(reduceResetControl(commanded, { type: "before_settle", facts: beforeSettleFacts() }));
+		assert.equal(finalizeResetBoundary(commandIntent, commanded.request).resumeModel, false);
+		const withInput = reduceResetControl(commanded, { type: "input", windowId, input: "new task" }).state;
+		assert.equal(finalizeResetBoundary(commandIntent, withInput.request).resumeModel, true);
+	}
+});
+
 test("public reset boundary drafts one marker, one boot, and one continuation after a tool batch", async () => {
 	const h = harness();
 	h.sessionManager.appendMessage({ role: "user", content: [{ type: "text", text: "before reset" }], timestamp: Date.now() });

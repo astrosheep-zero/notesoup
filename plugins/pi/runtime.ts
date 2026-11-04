@@ -211,7 +211,10 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 		name: "empty_brain",
 		label: "Empty Brain",
 		description: "Clear your in-context memory and start a fresh context window. Your session, notes, and history survive. Pass `last_word` to stick a tiny note on your forehead for after the wipe.",
-		parameters: Type.Object({ last_word: Type.Optional(Type.String({ description: `A tiny sticky note, at most ${LAST_WORD_ADVERTISED_CHARS} characters. After the wipe it is slapped on your forehead; longer notes are refused.` })) }, { additionalProperties: false }),
+		parameters: Type.Object({
+			last_word: Type.Optional(Type.String({ description: `A tiny sticky note, at most ${LAST_WORD_ADVERTISED_CHARS} characters. After the wipe it is slapped on your forehead; longer notes are refused.` })),
+			terminate: Type.Optional(Type.Boolean({ description: "Stop after the wipe. Default: false." })),
+		}, { additionalProperties: false }),
 		renderCall: emptyBrainRenderers.renderCall,
 		renderResult: emptyBrainRenderers.renderResult,
 		async execute(_id, params, _signal, _update, ctx) {
@@ -219,7 +222,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 			const lastWord = sanitizeLastWord(params.last_word);
 			const length = lastWord ? Array.from(lastWord).length : 0;
 			if (length > MAX_LAST_WORD_CHARS) return output({ error: `last_word is ${length} characters; the sticky note holds ${MAX_LAST_WORD_CHARS}. Shorten it and call again.` });
-			return output({ status: resets.request(currentWindowId(ctx), lastWord) }, undefined, true);
+			return output({ status: resets.request(currentWindowId(ctx), lastWord, params.terminate) }, undefined, true);
 		},
 	}));
 

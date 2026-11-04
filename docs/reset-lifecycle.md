@@ -8,7 +8,7 @@ Pi reset control lives in `plugins/pi/reset/lifecycle.ts`: the pure `reduceReset
 
 | Trigger | Behavior |
 | --- | --- |
-| `empty_brain` tool | Record the actual call and optional last word. Without command policy, reset after the whole tool batch at `turn_end` and continue. Under command policy, wait for settlement. |
+| `empty_brain` tool | Record the actual call and optional last word. Without command policy, reset after the whole tool batch at `turn_end` and continue unless `terminate: true` (default: false). Termination stops automatic continuation, not the session or new user input. Under command policy, wait for settlement. |
 | `/empty <text>` or `/fresh-window <text>` | Send a hidden close-out warning (trigger when idle, steer when busy), with the argument verbatim as context for notes, then reset and stop unless separate human input arrives during emptying. |
 | Bare `/empty` or `/fresh-window` | Close out, reset, and stop, unless more human input arrives while close-out is pending. |
 | Human input during command close-out | Intercept public `input` events except source `extension`, return `handled`, and keep the original text/images in command state for the reset boundary. Do not steer the input into the closing model; use `/empty <text>` for close-out context. |
@@ -46,7 +46,7 @@ Raw session history remains available. The retain-none checkpoint excludes old c
 | Request | Meaning |
 | --- | --- |
 | `none` | No command or tool request. |
-| `pending` | Current `windowId`, optional `tool: { lastWord? }`, and optional `command: { continueAfterReset, inputs? }`. Command inputs retain their original text/images. Separate human input during close-out is intercepted and carried, never steered. Duplicate commands retain the first policy/text; tool calls do not overwrite command policy. |
+| `pending` | Current `windowId`, optional `tool: { lastWord?, terminate? }`, and optional `command: { continueAfterReset, inputs? }`. Command inputs retain their original text/images. Separate human input during close-out is intercepted and carried, never steered. Duplicate commands retain the first policy/text; tool calls do not overwrite command policy. |
 
 `stopAfterReset` is separate from the request. It retains the safety boundary's intent after construction, while `request` becomes `none`. Settlement waits for queued work; if the window changed, it stops without a second wipe. If the window did not change, the boundary never committed, so settlement retries the retained intent with its stop policy and tool origin intact. A successful settle retry consumes the latch.
 

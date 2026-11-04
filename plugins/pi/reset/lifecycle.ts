@@ -38,7 +38,7 @@ export type ResetRequest =
 	| { readonly phase: "none" }
 	| { readonly phase: "pending"; readonly windowId: string;
 		readonly command?: { readonly continueAfterReset: boolean; readonly inputs?: readonly CarriedInput[] };
-		readonly tool?: { readonly lastWord?: string } };
+		readonly tool?: { readonly lastWord?: string; readonly terminate?: boolean } };
 export type ResetOverflowPhase = "idle" | "pending" | "pending-spent" | "spent";
 
 export interface ResetControlState {
@@ -79,7 +79,7 @@ export interface ResetBeforeSettleFacts {
 export type ResetControlEvent =
 	| { readonly type: "command"; readonly windowId: string; readonly continueAfterReset: boolean; readonly input?: CarriedInput }
 	| { readonly type: "input"; readonly windowId: string; readonly input: CarriedInput }
-	| { readonly type: "tool_request"; readonly windowId: string; readonly lastWord?: string }
+	| { readonly type: "tool_request"; readonly windowId: string; readonly lastWord?: string; readonly terminate?: boolean }
 	| { readonly type: "turn_end"; readonly facts: ResetTurnEndFacts }
 	| { readonly type: "before_settle"; readonly facts: ResetBeforeSettleFacts };
 
@@ -92,7 +92,7 @@ export interface ResetBoundaryIntent {
 	readonly continueAfterReset: boolean;
 	readonly origin: ResetOrigin;
 	readonly carryRunInputs?: boolean;
-	readonly tool?: { readonly lastWord?: string };
+	readonly tool?: { readonly lastWord?: string; readonly terminate?: boolean };
 }
 
 export type ResetControlResult = ResetBoundaryIntent |
@@ -106,7 +106,7 @@ const spendsOverflow = (boundary: ResetBoundaryIntent["boundary"]) => boundary =
 
 function boundaryIntent(request: ResetRequest, windowId: string, boundary: ResetBoundaryIntent["boundary"], carryRunInputs = false): ResetBoundaryIntent {
 	const tool = request.phase === "none" ? undefined : request.tool;
-	const continueAfterReset = request.phase === "pending" ? request.command?.continueAfterReset ?? true : true;
+	const continueAfterReset = request.phase === "pending" ? request.command?.continueAfterReset ?? !request.tool?.terminate : true;
 	return { effect: "build-boundary", boundary, windowId, tool, continueAfterReset, origin: spendsOverflow(boundary) || !tool ? "forced" : "normal", ...(carryRunInputs ? { carryRunInputs: true } : {}) };
 }
 
@@ -145,7 +145,10 @@ export function reduceResetControl(state: ResetControlState, event: ResetControl
 			// The call remains a real request even when command policy delays its commit.
 			const duplicate = request.tool !== undefined;
 			const lastWord = request.tool?.lastWord ?? event.lastWord;
-			const tool = duplicate && !request.command ? request.tool : (lastWord ? { lastWord } : {});
+			const tool = duplicate && !request.command ? request.tool : {
+				...(lastWord ? { lastWord } : {}),
+				...((duplicate ? request.tool?.terminate : event.terminate) ? { terminate: true } : {}),
+			};
 			return { state: { ...state, request: { ...request, tool } }, effect: duplicate ? "already-pending" : "close-out-armed" };
 		}
 		case "turn_end": {
@@ -377,8 +380,8 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 			control = decision.state;
 			return decision.effect;
 		},
-		request(windowId: string, lastWord?: string) {
-			const decision = reduceResetControl(control, { type: "tool_request", windowId, ...(lastWord ? { lastWord } : {}) });
+		request(windowId: string, lastWord?: string, terminate = false) {
+			const decision = reduceResetControl(control, { type: "tool_request", windowId, terminate, ...(lastWord ? { lastWord } : {}) });
 			control = decision.state;
 			return decision.effect === "already-pending" ? "rollover_already_pending" : "rollover_requested";
 		},

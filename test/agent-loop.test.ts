@@ -18,7 +18,7 @@ import {
 	type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import notesoup, { createNotesoup } from "../plugins/pi/extension.js";
-import { BOOT_TYPE, CARRIED_INPUT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, MANUAL_WIPE_TYPE, MARKER_TYPE, RESET_MARKER_TYPE, WARNING_TYPE } from "../plugins/pi/entries.js";
+import { BOOT_TYPE, CARRIED_INPUT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, MANUAL_WIPE_TYPE, MARKER_TYPE, RESET_LAST_WORD_TYPE, RESET_MARKER_TYPE, WARNING_TYPE } from "../plugins/pi/entries.js";
 import { historyFromSession } from "../plugins/pi/history.js";
 import { MARKER_INTERVAL } from "../plugins/pi/marker.js";
 import { assertBootHistory } from "./helpers/extension.js";
@@ -592,6 +592,35 @@ test("real AgentSession: explicit tiny-session wipe ignores keepRecentTokens and
 		assert.ok(JSON.stringify(fixture.sessionManager.getBranch()).includes("OLD_CONTEXT_SENTINEL"), "raw history remains readable");
 	} finally {
 		fixture.close();
+	}
+});
+
+test("real AgentSession: terminate wipes and stops, including a mixed tool batch, without closing the session", async () => {
+	for (const mixedBatch of [false, true]) {
+		let fixture!: Fixture;
+		fixture = await openFixture({
+			compactionEnabled: false,
+			script: (request) => request === 1
+				? assistant(fixture, [
+					{ type: "toolCall", id: "wipe-stop", name: "empty_brain", arguments: { terminate: true, last_word: "saved for later" } },
+					...(mixedBatch ? [{ type: "toolCall" as const, id: "remaining", name: "get_context_remaining", arguments: {} }] : []),
+				], "toolUse")
+				: assistant(fixture, [{ type: "text", text: "answering new input" }]),
+		});
+		try {
+			await fixture.session.prompt("TERMINATE_OLD_CONTEXT");
+			await fixture.session.waitForIdle();
+			assert.equal(fixture.requests.length, 1, "no automatic provider request after wiping");
+			assert.equal(resetMarkers(fixture).length, 1);
+			assert.ok(fixture.sessionManager.getBranch().some((entry) => entry.type === "custom_message" && entry.customType === RESET_LAST_WORD_TYPE));
+			await fixture.session.prompt("A new task");
+			await fixture.session.waitForIdle();
+			assert.equal(fixture.requests.length, 2, "new user input still runs");
+			assertFreshRequest(fixture, 1, "TERMINATE_OLD_CONTEXT");
+			assert.ok(text(fixture.requests[1]).includes("saved for later"));
+		} finally {
+			fixture.close();
+		}
 	}
 });
 
