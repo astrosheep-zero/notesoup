@@ -4,7 +4,7 @@ Pi reset control lives in `plugins/pi/reset/lifecycle.ts`: the pure `reduceReset
 
 ## Lifecycle at a glance
 
-**Carry input unless it already entered model context and the model requested `empty_brain`; that handoff belongs to the model. Every `/empty` or `/fresh-window` stops after resetting unless separate human input arrives during emptying.**
+**Never replay input already submitted to a model request. Resume from notes, the continuation and optional `last_word`; use history for earlier details. Every `/empty` or `/fresh-window` stops after resetting unless separate human input arrives during emptying.**
 
 | Trigger | Behavior |
 | --- | --- |
@@ -13,14 +13,14 @@ Pi reset control lives in `plugins/pi/reset/lifecycle.ts`: the pure `reduceReset
 | Bare `/empty` or `/fresh-window` | Close out, reset, and stop, unless more human input arrives while close-out is pending. |
 | Human input during command close-out | Intercept public `input` events except source `extension`, return `handled`, and keep the original text/images in command state for the reset boundary. Do not steer the input into the closing model; use `/empty <text>` for close-out context. |
 | Model-requested `empty_brain` reset | Do not carry the human input already present in model context; the model owns its handoff through notes/`last_word`. |
-| Passive provider overflow / recoverable length | With automatic reset enabled, force a retain-none reset and continue once, carrying the failed run's human inputs. A hard-reserve reset also carries the run's inputs and continues. |
+| Passive provider overflow / recoverable length | With automatic reset enabled, force a retain-none reset and continue once from notes, without replaying the failed request's input. |
 | Command close-out overflow | Force a reset even if automatic reset is disabled. Apply command policy: continue with separate carried input, otherwise stop. The recovery attempt is spent, so an oversized carried prompt cannot loop. |
 | Budget warning | Stage reminders when automatic reset is enabled. Warnings alone never authorize reset. |
-| Hard reserve | Independently reset at `turn_end` when automatic reset is enabled and carry the run's text/images, then continue. A command stop latch cancels empty tool follow-ups, but never real queued or carried human input. |
+| Hard reserve | Independently reset at `turn_end` when automatic reset is enabled and continue without replaying submitted text/images. A command stop latch cancels empty tool follow-ups, but never real queued or carried human input. |
 | Abort / ordinary error | Restore stashed originals as visible user-content custom messages before clearing command state. Explicit abort stays stopped; ordinary close-out errors trigger a turn for the restored input without forcing a reset. |
 | `/compact` while active | Cancel native compaction; manual attempts receive a `/fresh-window` notice. |
 
-The model-requested `empty_brain` call already has the human message in model context, so it does not carry that input into the new window; the model owns the handoff through notes/`last_word`. Hard-reserve and overflow-recovery resets carry the collected run inputs. A normal completed stop with no pending messages clears the collection so a later safety reset cannot replay it.
+The same input boundary applies to tool, hard-reserve and overflow resets, including failed or unanswered requests. Input already submitted stays in raw history. New input not yet submitted remains in Pi's native queue, or in command-close-out state when intercepted, and reaches the fresh window once.
 
 ## Boundary order and handoff
 
@@ -52,9 +52,9 @@ Raw session history remains available. The retain-none checkpoint excludes old c
 
 Overflow phases are `idle`, `pending`, `spent`, and `pending-spent`. `turn_end` arms enabled recovery; `agent_before_settle` waits for queued work and selects recovery intent. Only successful, current construction reaches finalization and spends the attempt. A successful queued turn supersedes the failure. Command overflow spends the same bounded attempt before continuing. Abort, final settlement, session start/tree/shutdown and `/notesoup off` clear transient state.
 
-The adapter collects actual user `message_end` content until settlement or a successful boundary. A successful model-requested `empty_brain` boundary does not carry those inputs because they already entered model context; hard-reserve and overflow-recovery boundaries do carry them. A normal completed stop with no pending messages clears the collection to prevent a later safety reset from replaying answered input.
+The adapter does not collect user `message_end` content for replay. Pi owns native queued steering and follow-up messages; only command-close-out input withheld from the closing model is carried by the reset adapter.
 
-Command state remains live during asynchronous notes acquisition so separately arriving input joins the reset boundary. Handled command-close-out input is not delivered to the closing model and is carried as original text/images. Command text is included as plain close-out context by `/empty <text>`. After construction passes the currentness guard, finalization selects command-owned originals, overflow-recovery inputs, or hard-reserve run inputs; tool-request resets do not carry the user message already present in model context. It resolves `resumeModel` and the next control state together. Separate human inputs are never sent as hidden steers. Construction captures session/window generations and rechecks identity, enabled state and abort status before returning drafts; stale work preserves incoming/budget entries but discards reset drafts. If close-out cannot commit, stashed originals are restored with public `sendMessage(..., { triggerTurn: false })` except on an ordinary turn-end error, which triggers a turn for the restored input; abort and other restore paths stay stopped.
+Command state remains live during asynchronous notes acquisition so separately arriving input joins the reset boundary. Handled command-close-out input is not delivered to the closing model and is carried as original text/images. Command text is included as plain close-out context by `/empty <text>`. After construction passes the currentness guard, finalization takes only command-owned input withheld from the closing model. It resolves `resumeModel` and the next control state together. Separate human inputs are never sent as hidden steers. Construction captures session/window generations and rechecks identity, enabled state and abort status before returning drafts; stale work preserves incoming/budget entries but discards reset drafts. If close-out cannot commit, stashed originals are restored with public `sendMessage(..., { triggerTurn: false })` except on an ordinary turn-end error, which triggers a turn for the restored input; abort and other restore paths stay stopped.
 
 After a manual safety reset, `context_with_system` checks the committed boundary before using public `ctx.abort()` to cancel an unavoidable empty tool follow-up with system-only context. Pending messages, ordinary user entries or carried inputs after the marker bypass cancellation. Later user prompts are not affected by the run-scoped stop latch.
 
@@ -70,4 +70,4 @@ Pi and Claude use the same budget warning: budget timing, the handoff checklist,
 
 ## Validation
 
-Scripted SDK tests run Pi's real agent loop without network calls: smaller-model overflow and prompt replay, command text, bare stop, intercepted text/images, hard-reserve handling, overflowing close-out and bounded retry. They also cover passive tool-loop steering/follow-ups and input-free automatic continuations. Focused tests check late input during asynchronous construction, absence of input steers, abort/error restoration, ordered carry artifacts, commit confirmation, safe repair, canonical projection and persisted history. External-provider behavior and every malformed persisted/filesystem case are not established by this suite.
+Scripted SDK tests run Pi's real agent loop without network calls: smaller-model overflow, no replay of submitted text/images after forced resets, command text, bare stop, intercepted text/images, hard-reserve handling, overflowing close-out and bounded recovery. They also cover queued steering/follow-ups arriving while forced reset boundaries await commit, and input-free automatic continuations. Focused tests check late input during asynchronous construction, absence of input steers, abort/error restoration, ordered carry artifacts, commit confirmation, safe repair, canonical projection and persisted history. External-provider behavior and every malformed persisted/filesystem case are not established by this suite.

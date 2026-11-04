@@ -230,30 +230,6 @@ test("public reset boundary drafts one marker, one boot, and one continuation af
 	assert.equal(branch.filter((entry) => entry.type === "custom_message" && entry.customType === BOOT_TYPE).length, 1);
 });
 
-test("hard-reserve reset carries original text and images and continues", async () => {
-	const sessionManager = Manager.inMemory("/private/tmp/notesoup-hard-reserve-carry-test");
-	const handlers = new Map<string, Handler[]>();
-	const api = { on(name: string, handler: Handler) { const list = handlers.get(name) ?? []; list.push(handler); handlers.set(name, list); } } as unknown as ExtensionAPI;
-	const ctx = { sessionManager, model: undefined, hasPendingMessages: () => false, ui: { notify() {} } } as unknown as ExtensionContext;
-	registerResetLifecycle(api, {
-		isEnabled: () => true,
-		budget: { automaticResetEnabled: () => true, hardReserveDue: () => true, consumeTurnEnd: () => [], clear() {} },
-		buildReset: () => [],
-	});
-	const original = [
-		{ type: "text" as const, text: "Describe this image" },
-		{ type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" },
-	];
-	for (const handler of handlers.get("message_end") ?? []) await handler({ type: "message_end", message: { role: "user", content: original, timestamp: Date.now() } }, ctx);
-	let result: unknown;
-	for (const handler of handlers.get("turn_end") ?? []) result = await handler(fakeBoundaryEvent([], { role: "assistant", content: [], stopReason: "stop", timestamp: Date.now() } as unknown as AgentMessage), ctx);
-	const boundary = resultEntries([result]);
-	const carried = boundary.entries.filter((entry) => entry.type === "custom_message" && entry.customType === CARRIED_INPUT_TYPE);
-	assert.equal(carried.length, 1);
-	assert.deepEqual(carried[0]?.type === "custom_message" ? carried[0].content : undefined, original);
-	assert.equal(boundary.continue, true);
-});
-
 test("manual /empty spans tool turns and commits the stop at settlement", async () => {
 	const h = harness();
 	await h.runCommand("empty");
@@ -388,8 +364,8 @@ test("input arriving during reset construction is carried without a hidden steer
 	assert.equal(resetBoundaryCommitted(ctx, partialMarker, "partial"), false);
 });
 
-test("overflow construction reads live run inputs and clear invalidates an unfinished build", async () => {
-	const sessionManager = Manager.inMemory("/private/tmp/notesoup-live-passive-input-test");
+test("clear invalidates an unfinished overflow reset without preventing the next build", async () => {
+	const sessionManager = Manager.inMemory("/private/tmp/notesoup-stale-overflow-test");
 	const handlers = new Map<string, Handler>();
 	const api = { on(name: string, handler: Handler) { handlers.set(name, handler); } } as unknown as ExtensionAPI;
 	const ctx = { sessionManager, model: undefined, hasPendingMessages: () => false, ui: { notify() {} } } as unknown as ExtensionContext;
@@ -401,34 +377,25 @@ test("overflow construction reads live run inputs and clear invalidates an unfin
 		buildReset: () => new Promise<SessionBoundaryDraft[]>((resolve) => { release = resolve; }),
 		onResetReady: () => { readyCount++; },
 	});
-	const user = (content: string) => handlers.get("message_end")!({ message: { role: "user", content } }, ctx);
 	const failed = { ...fakeBoundaryEvent(), outcome: "error", message: { role: "assistant", stopReason: "error", errorMessage: "Prompt too long: context exceeds maximum context length" } };
 	const recover = async () => {
 		await handlers.get("turn_end")!(failed, ctx);
 		return handlers.get("agent_before_settle")!({ ...failed, type: "agent_before_settle" }, ctx);
 	};
-	await user("starting input");
-	const building = recover();
-	await Promise.resolve();
-	await user("delivered during construction");
-	release([]);
-	const result = resultEntries([await building]);
-	assert.equal(result.continue, true);
-	assert.deepEqual(result.entries.map((entry) => entry.type === "custom_message" ? entry.content : null), ["starting input", "delivered during construction"]);
-	lifecycle.clear();
-	await user("old run");
 	const stale = recover();
 	await Promise.resolve();
 	lifecycle.clear();
-	await user("new run");
 	release([{ type: "custom_message", customType: BOOT_TYPE, content: "stale", display: false }]);
-	assert.equal(await stale, undefined, "clearing the run invalidates construction before it can consume new inputs");
-	assert.equal(readyCount, 1);
+	assert.equal(await stale, undefined, "clearing the lifecycle invalidates the unfinished reset");
+	assert.equal(readyCount, 0);
 	const current = recover();
 	await Promise.resolve();
-	release([]);
+	const drafts: SessionBoundaryDraft[] = [{ type: "custom_message", customType: BOOT_TYPE, content: "fresh", display: false }];
+	release(drafts);
 	const fresh = resultEntries([await current]);
-	assert.deepEqual(fresh.entries.map((entry) => entry.type === "custom_message" ? entry.content : null), ["new run"]);
+	assert.deepEqual(fresh.entries, drafts);
+	assert.equal(fresh.continue, true);
+	assert.equal(readyCount, 1);
 });
 
 test("abort during reset construction restores handled input at settlement, once", async () => {
@@ -786,13 +753,13 @@ test("reset-control: one safety intent finalizes stop or continuation from live 
 	const pending = reduceResetControl(initialResetControl(), { type: "command", windowId, continueAfterReset: false }).state;
 	const intent = boundaryIntent(reduceResetControl(pending, { type: "turn_end", facts: turnEndFacts({ hardReserveDue: true }) }));
 	assert.deepEqual(pending.request, { phase: "pending", windowId, command: { continueAfterReset: false } });
-	const stopped = finalizeResetBoundary(intent, pending.request, ["passive run input"]);
+	const stopped = finalizeResetBoundary(intent, pending.request);
 	assert.equal(stopped.resumeModel, false);
 	assert.deepEqual(stopped.inputs, [], "a command boundary never replays passive run input");
 	assert.deepEqual(stopped.state.stopAfterReset, intent);
 
 	const live = reduceResetControl(pending, { type: "input", windowId, input: "late original" }).state;
-	const continued = finalizeResetBoundary(intent, live.request, ["passive run input"]);
+	const continued = finalizeResetBoundary(intent, live.request);
 	assert.equal(continued.resumeModel, true);
 	assert.deepEqual(continued.inputs, ["late original"]);
 	assert.deepEqual(continued.state, initialResetControl(), "late originals prevent installing the stop latch");
@@ -822,7 +789,7 @@ test("reset-control: manual overflow keeps stop intent while queued work superse
 	const retryIntent = boundaryIntent(decision);
 	assert.equal(retryIntent.origin, "forced", "an overflowing close-out is forced even after a tool request");
 	assert.equal(retryIntent.tool?.lastWord, "saved");
-	const retry = finalizeResetBoundary(retryIntent, failed.request, ["passive input is not command-owned"]);
+	const retry = finalizeResetBoundary(retryIntent, failed.request);
 	assert.equal(retry.resumeModel, true, "manual input continues even when automatic reset is disabled");
 	assert.deepEqual(retry.inputs, ["answer after reset"]);
 	assert.equal(retry.state.overflow, "spent", "manual recovery spends the same bounded attempt");
@@ -844,9 +811,9 @@ test("reset-control: overflow recovery is armed at turn_end and spent exactly on
 	const intent = boundaryIntent(reduceResetControl(armed, { type: "before_settle", facts: beforeSettleFacts() }));
 	assert.equal(armed.overflow, "pending", "failed construction would leave recovery unspent");
 	assert.equal(intent.boundary, "overflow-recovery");
-	const recovered = finalizeResetBoundary(intent, armed.request, ["failed run's user input"]);
+	const recovered = finalizeResetBoundary(intent, armed.request);
 	assert.equal(recovered.resumeModel, true);
-	assert.deepEqual(recovered.inputs, ["failed run's user input"]);
+	assert.deepEqual(recovered.inputs, []);
 	assert.deepEqual(recovered.state, { request: { phase: "none" }, overflow: "spent" });
 
 	const repeated = reduceResetControl(recovered.state, { type: "before_settle", facts: beforeSettleFacts() });

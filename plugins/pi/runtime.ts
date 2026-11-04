@@ -89,7 +89,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 	});
 	pi.on("agent_settled", (_event, ctx) => {
 		notifyCommittedResets(ctx);
-		pendingResetNotices.clear();
+		if (!resets.hasPendingTrigger()) pendingResetNotices.clear();
 	});
 	const notifyIncompleteNotes: IncompleteNotesNotifier = (ctx, windowId, snapshot) => {
 		if (snapshot.unavailable.length === 0 || incompleteNotesNotified.has(windowId)) return;

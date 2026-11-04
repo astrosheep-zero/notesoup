@@ -1,8 +1,10 @@
 import { DEFAULT_BOOT_TOOL_NAMES } from "../../src/boot/text.js";
 import { remainingBudget, type ResolvedThresholds } from "../../src/budget/policy.js";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
-import { defineTool, type ExtensionAPI, type ExtensionContext, type SessionBoundaryDraft, type SettingsManager } from "@earendil-works/pi-coding-agent";
+import { convertToLlm, defineTool, type ExtensionAPI, type ExtensionContext, type SessionBoundaryDraft, type SettingsManager } from "@earendil-works/pi-coding-agent";
 import { GUIDANCE_TYPE, WARNING_TYPE } from "./entries.js";
+import { estimateContextTokens } from "./estimate.js";
 import { warningContent } from "./text.js";
 import { readThresholdSettings, type ThresholdSettingsResolution } from "./thresholds.js";
 import { currentWindowId, hasWindowMessage, windowUsage } from "./window.js";
@@ -40,8 +42,16 @@ export function registerBudget(
 	};
 	const thresholdsFor = (ctx: ExtensionContext): ResolvedThresholds => resolvePolicy(ctx).thresholds;
 	const automaticResetEnabled = (ctx: ExtensionContext): boolean => resolvePolicy(ctx).automatic;
-	const hardReserveDue = (ctx: ExtensionContext): boolean => {
+	const hardReserveDue = (ctx: ExtensionContext, preSendMessages?: AgentMessage[]): boolean => {
 		if (!automaticResetEnabled(ctx)) return false;
+		if (preSendMessages) {
+			const contextWindow = ctx.model?.contextWindow ?? ctx.getContextUsage()?.contextWindow;
+			if (!contextWindow || contextWindow <= 0) return false;
+			const { reserve } = thresholdsFor(ctx);
+			const estimate = estimateContextTokens(convertToLlm(preSendMessages));
+			if (estimate.lastUsageIndex !== null && contextWindow - estimate.usageTokens <= reserve) return false;
+			return contextWindow - estimate.tokens <= reserve;
+		}
 		const usage = windowUsage(ctx);
 		return usage !== undefined && usage.tokens !== null && usage.contextWindow - usage.tokens <= thresholdsFor(ctx).reserve;
 	};

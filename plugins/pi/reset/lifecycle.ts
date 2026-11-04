@@ -11,7 +11,7 @@ import { carriedInputDrafts, isCarriedInputEntry, type CarriedInput } from "./ar
 
 type BudgetOwner = {
 	automaticResetEnabled: (ctx: ExtensionContext) => boolean;
-	hardReserveDue: (ctx: ExtensionContext) => boolean;
+	hardReserveDue: (ctx: ExtensionContext, preSendMessages?: AgentMessage[]) => boolean;
 	consumeTurnEnd: (ctx: ExtensionContext, anchorEntryId: string) => SessionBoundaryDraft[];
 	clear: () => void;
 };
@@ -83,15 +83,14 @@ export type ResetControlEvent =
 	| { readonly type: "turn_end"; readonly facts: ResetTurnEndFacts }
 	| { readonly type: "before_settle"; readonly facts: ResetBeforeSettleFacts };
 
-/** Construction intent, not final state: handled inputs can still arrive while notes load. Only `turn-end`
- * may latch a stop; overflow kinds spend recovery; only hard-reserve and overflow carry passive run inputs. */
+/** Construction intent, not final state: handled inputs can still arrive while notes load.
+ * Only `turn-end` may latch a stop; overflow kinds spend recovery. */
 export interface ResetBoundaryIntent {
 	readonly effect: "build-boundary";
 	readonly boundary: "turn-end" | "settle" | "command-overflow" | "overflow-recovery";
 	readonly windowId: string;
 	readonly continueAfterReset: boolean;
 	readonly origin: ResetOrigin;
-	readonly carryRunInputs?: boolean;
 	readonly tool?: { readonly lastWord?: string; readonly terminate?: boolean };
 }
 
@@ -104,16 +103,15 @@ function requestForWindow(request: ResetRequest, windowId: string): ResetRequest
 
 const spendsOverflow = (boundary: ResetBoundaryIntent["boundary"]) => boundary === "command-overflow" || boundary === "overflow-recovery";
 
-function boundaryIntent(request: ResetRequest, windowId: string, boundary: ResetBoundaryIntent["boundary"], carryRunInputs = false): ResetBoundaryIntent {
+function boundaryIntent(request: ResetRequest, windowId: string, boundary: ResetBoundaryIntent["boundary"]): ResetBoundaryIntent {
 	const tool = request.phase === "none" ? undefined : request.tool;
 	const continueAfterReset = request.phase === "pending" ? request.command?.continueAfterReset ?? !request.tool?.terminate : true;
-	return { effect: "build-boundary", boundary, windowId, tool, continueAfterReset, origin: spendsOverflow(boundary) || !tool ? "forced" : "normal", ...(carryRunInputs ? { carryRunInputs: true } : {}) };
+	return { effect: "build-boundary", boundary, windowId, tool, continueAfterReset, origin: spendsOverflow(boundary) || !tool ? "forced" : "normal" };
 }
 
-/** Resolve once, after a successful current build. No delivery policy is left to the adapter. */
-export function finalizeResetBoundary(intent: ResetBoundaryIntent, request: ResetRequest, passiveInputs: readonly CarriedInput[] = []) {
-	const inputs = request.phase === "pending" && request.command ? request.command.inputs ?? []
-		: intent.boundary === "overflow-recovery" || intent.carryRunInputs ? passiveInputs : [];
+/** Resolve once, after a successful current build. Only inputs withheld from the closing model cross the reset. */
+export function finalizeResetBoundary(intent: ResetBoundaryIntent, request: ResetRequest) {
+	const inputs = request.phase === "pending" ? request.command?.inputs ?? [] : [];
 	const resumeModel = intent.continueAfterReset || inputs.length > 0;
 	const state: ResetControlState = {
 		request: NO_REQUEST,
@@ -173,7 +171,7 @@ export function reduceResetControl(state: ResetControlState, event: ResetControl
 			// a separate hard-reserve safety path; ordinary close-out waits for settlement.
 			const toolReset = request.phase === "pending" && request.tool !== undefined;
 			if ((toolReset && !manual) || facts.hardReserveDue) {
-				return boundaryIntent(request, facts.windowId, "turn-end", !manual && !toolReset && facts.hardReserveDue);
+				return boundaryIntent(request, facts.windowId, "turn-end");
 			}
 			return { state: { request, overflow: "idle" }, effect: "none" };
 		}
@@ -221,7 +219,8 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 	let sessionActive = true;
 	let lifecycleGeneration = 0;
 	let control = initialResetControl();
-	let runInputs: CarriedInput[] = [];
+	let preSendHardReserveWindowId: string | undefined;
+	let pendingPreSendTrigger: Extract<SessionBoundaryDraft, { type: "custom_message" }> | undefined;
 
 	// Once input returns handled, Pi no longer owns its original content. If close-out
 	// fails/cancels, restore it; only an ordinary error starts a turn to answer it.
@@ -233,15 +232,15 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 		for (const draft of carriedInputDrafts(inputs)) {
 			pi.sendMessage(draft, { triggerTurn });
 		}
-		runInputs.push(...inputs);
 	};
 	const clear = (preserveInputs = true) => {
 		lifecycleGeneration++;
+		preSendHardReserveWindowId = undefined;
+		pendingPreSendTrigger = undefined;
 		if (preserveInputs) restoreCommandInputs();
 		control = initialResetControl();
-		runInputs = [];
 	};
-	const resetBoundaryResult = async (entries: SessionBoundaryDraft[], ctx: ExtensionContext, intent: ResetBoundaryIntent) => {
+	const resetBoundaryResult = async (entries: SessionBoundaryDraft[], ctx: ExtensionContext, intent: ResetBoundaryIntent, preSendHardReserve = false) => {
 		// Keep command state live while notes load so input arriving during this await joins this boundary.
 		const generation = lifecycleGeneration;
 		const outerGeneration = options.getLifecycleGeneration?.();
@@ -249,7 +248,7 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 		const windowId = currentWindowId(ctx);
 		const isCurrent = () => sessionActive && lifecycleGeneration === generation &&
 			(outerGeneration === undefined || options.getLifecycleGeneration?.() === outerGeneration) && options.isEnabled() &&
-			ctx.signal?.aborted !== true && ctx.sessionManager.getSessionId() === sessionId && currentWindowId(ctx) === windowId;
+			(preSendHardReserve || ctx.signal?.aborted !== true) && ctx.sessionManager.getSessionId() === sessionId && currentWindowId(ctx) === windowId;
 		// The retain-none checkpoint belongs to the old window; capture its successor before notes await.
 		const firstSeq = nextHistorySeq(ctx, entries) + 1;
 		let resetDrafts: SessionBoundaryDraft[];
@@ -260,18 +259,20 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 			return entries.length > 0 ? { entries } : undefined;
 		}
 		if (!isCurrent()) return entries.length > 0 ? { entries } : undefined;
-		const finalized = finalizeResetBoundary(intent, control.request, runInputs);
+		const finalized = finalizeResetBoundary(intent, control.request);
 		control = finalized.state;
-		runInputs = [];
 		options.onResetReady?.(ctx, resetDrafts);
-		return { entries: [...entries, ...resetDrafts, ...carriedInputDrafts(finalized.inputs)], continue: finalized.resumeModel };
+		const allDrafts = [...resetDrafts, ...carriedInputDrafts(finalized.inputs)];
+		if (preSendHardReserve && finalized.resumeModel) {
+			const last = allDrafts.at(-1);
+			if (last?.type === "custom_message") {
+				pendingPreSendTrigger = last;
+				return { entries: [...entries, ...allDrafts.slice(0, -1)], continue: false };
+			}
+		}
+		return { entries: [...entries, ...allDrafts], continue: finalized.resumeModel };
 	};
 
-	// Pi may start multiple low-level loops while draining follow-ups/recovering.
-	// Keep the logical run's inputs until settlement or a successful boundary.
-	pi.on("message_end", (event) => {
-		if (event.message.role === "user") runInputs.push(event.message.content);
-	});
 	pi.on("input", (event, ctx) => {
 		if (event.source === "extension" || !sessionActive || !options.isEnabled()) return undefined;
 		const request = control.request;
@@ -287,13 +288,23 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 	// safety reset is actually committed, cancel that empty follow-up before provider
 	// work. Real queued user input is allowed through and answered before settlement.
 	pi.on("context_with_system", (event, ctx) => {
+		if (!sessionActive) return undefined;
 		const stop = control.stopAfterReset;
-		if (!sessionActive || !stop || ctx.hasPendingMessages()) return undefined;
-		const marker = currentReset(ctx);
-		if (!marker || marker.data.windowId === stop.windowId || !resetBoundaryCommitted(ctx, marker.id, marker.data.windowId)) return undefined;
-		const branch = ctx.sessionManager.getBranch();
-		const markerIndex = branch.findIndex((entry) => entry.id === marker.id);
-		if (branch.slice(markerIndex + 1).some((entry) => (entry.type === "message" && entry.message.role === "user") || isCarriedInputEntry(entry))) return undefined;
+		if (stop) {
+			if (ctx.hasPendingMessages()) return undefined;
+			const marker = currentReset(ctx);
+			if (!marker || marker.data.windowId === stop.windowId || !resetBoundaryCommitted(ctx, marker.id, marker.data.windowId)) return undefined;
+			const branch = ctx.sessionManager.getBranch();
+			const markerIndex = branch.findIndex((entry) => entry.id === marker.id);
+			if (branch.slice(markerIndex + 1).some((entry) => (entry.type === "message" && entry.message.role === "user") || isCarriedInputEntry(entry))) return undefined;
+			ctx.abort();
+			const system = getCurrentSystemMessage(event.messages);
+			return { messages: system ? [system] : [] };
+		}
+		if (!options.isEnabled() || ctx.signal?.aborted) return undefined;
+		if (control.request.phase === "pending" && control.request.command !== undefined) return undefined;
+		if (!options.budget.hardReserveDue(ctx, event.messages)) return undefined;
+		preSendHardReserveWindowId = currentWindowId(ctx);
 		ctx.abort();
 		const system = getCurrentSystemMessage(event.messages);
 		return { messages: system ? [system] : [] };
@@ -301,29 +312,30 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 
 	pi.on("turn_end", async (event, ctx) => {
 		if (!sessionActive) return undefined;
-		const aborted = isAbort(event.message, event.outcome, ctx);
+		const windowId = currentWindowId(ctx);
+		const preSendHardReserve = preSendHardReserveWindowId !== undefined && preSendHardReserveWindowId === windowId;
+		preSendHardReserveWindowId = undefined;
+		const aborted = preSendHardReserve ? false : isAbort(event.message, event.outcome, ctx);
 		const stagedBudgetEntries = options.budget.consumeTurnEnd(ctx, event.messageEntryId);
 		const budgetEntries = options.isEnabled() && !aborted && event.outcome !== "error" ? stagedBudgetEntries : [];
 		const entries = [...(event.entries ?? []), ...budgetEntries];
 		const decision = reduceResetControl(control, {
 			type: "turn_end",
 			facts: {
-				windowId: currentWindowId(ctx),
+				windowId,
 				aborted,
 				overflow: aborted ? false : isOverflowLike(event.message, ctx),
 				failed: event.outcome === "error",
 				enabled: options.isEnabled(),
 				get queued() { return event.context.pendingMessages.length > 0 || ctx.hasPendingMessages(); },
 				get automaticResetEnabled() { return options.budget.automaticResetEnabled(ctx); },
-				get hardReserveDue() { return options.budget.hardReserveDue(ctx); },
+				get hardReserveDue() { return preSendHardReserve || options.budget.hardReserveDue(ctx); },
 			},
 		});
-		if (decision.effect === "build-boundary") return await resetBoundaryResult(entries, ctx, decision);
+		if (decision.effect === "build-boundary") return await resetBoundaryResult(entries, ctx, decision, preSendHardReserve);
 		if (aborted) restoreCommandInputs();
 		else if (event.outcome === "error" && decision.state.request.phase === "none") restoreCommandInputs(true);
 		control = decision.state;
-		if (!aborted && event.outcome === "completed" && event.message.role === "assistant" && event.message.stopReason === "stop" &&
-			event.context.pendingMessages.length === 0 && !ctx.hasPendingMessages()) runInputs = [];
 		if (!aborted && event.outcome !== "error" && options.isEnabled()) {
 			const marker = buildMarkerDraft(ctx, entries);
 			if (marker) entries.push(marker);
@@ -365,10 +377,14 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 	});
 
 	pi.on("agent_end", (_event, ctx) => {
-		if (ctx.signal?.aborted) clear();
+		if (ctx.signal?.aborted && !pendingPreSendTrigger) clear();
 	});
 	pi.on("agent_settled", () => {
+		const trigger = pendingPreSendTrigger;
 		clear();
+		if (trigger) {
+			pi.sendMessage(trigger, { triggerTurn: true });
+		}
 	});
 	pi.on("session_start", () => { clear(false); sessionActive = true; });
 	pi.on("session_tree", () => { clear(false); });
@@ -385,6 +401,7 @@ export function registerResetLifecycle(pi: ExtensionAPI, options: ResetOptions) 
 			control = decision.state;
 			return decision.effect === "already-pending" ? "rollover_already_pending" : "rollover_requested";
 		},
+		hasPendingTrigger: () => pendingPreSendTrigger !== undefined,
 		clear,
 	};
 }

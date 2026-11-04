@@ -16,6 +16,7 @@ import {
 	type ExtensionAPI,
 	type ExtensionFactory,
 	type ExtensionUIContext,
+	type SessionBoundaryDraft,
 } from "@earendil-works/pi-coding-agent";
 import notesoup, { createNotesoup } from "../plugins/pi/extension.js";
 import { BOOT_TYPE, CARRIED_INPUT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, MANUAL_WIPE_TYPE, MARKER_TYPE, RESET_LAST_WORD_TYPE, RESET_MARKER_TYPE, WARNING_TYPE } from "../plugins/pi/entries.js";
@@ -775,17 +776,23 @@ test("real AgentSession: streaming clear prompt keeps the first request", async 
 	} finally { release(); fixture.close(); }
 });
 
-test("real AgentSession: hard-reserve reset carries the original text and image and continues", async () => {
+test("real AgentSession: hard-reserve reset continues without replaying its original text or image, including pre-send oversized input", async () => {
 	let fixture!: Fixture;
 	const input = "HARD_RESERVE_IMAGE_INPUT";
-	const image = { type: "image" as const, data: "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAn0lEQVRoge2SQQkAQRDD6qSOT20ErIh7gIFCBKSh4et1LtEN2IDqFdmFepfoBmxA9YrsQr1LdAM2oHpFdqHeJboBG1C9IrtQ7xLdgA2oXpFdqHeJbsAGVK/ILtS7RDdgA6pXZBfqXaIbsAHVK7IL9S7RDdiA6hXZhXqX6AZsQPWK7EK9S3QDNqB6RXah3iW6ARtQveIfHlqMEYdT3J7gAAAAAElFTkSuQmCC", mimeType: "image/png" };
+	const oversized = `PRE_SEND_OVERSIZED_${"x".repeat(100_000)}`;
+	const image = { type: "image" as const, data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC", mimeType: "image/png" };
 	fixture = await openFixture({
 		defaultReserveTokens: 80_000,
 		script: (request, context) => {
 			if (request === 1) return assistant(fixture, [{ type: "text", text: "reserve reached" }], "stop", { usage: usage(80_000) });
-			assert.equal(request, 2);
-			assertUserContent(context, [{ type: "text", text: input }, image]);
-			return assistant(fixture, [{ type: "text", text: "carried image answered" }]);
+			if (request === 2) {
+				assertFreshRequest(fixture, 1, input);
+				assert.equal(context.messages.some((message) => message.role === "user" && Array.isArray(message.content) && message.content.some((block) => block.type === "image")), false);
+				return assistant(fixture, [{ type: "text", text: "continued from notes" }]);
+			}
+			assert.equal(request, 3, "pre-send oversized input never reaches the provider before resetting");
+			assertFreshRequest(fixture, 2, "PRE_SEND_OVERSIZED_");
+			return assistant(fixture, [{ type: "text", text: "continued after pre-send reset" }]);
 		},
 	});
 	try {
@@ -793,7 +800,17 @@ test("real AgentSession: hard-reserve reset carries the original text and image 
 		await fixture.session.waitForIdle();
 		assert.equal(fixture.requests.length, 2);
 		assert.equal(resetMarkers(fixture).length, 1);
-		assert.equal(fixture.sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === CARRIED_INPUT_TYPE).length, 1);
+		await fixture.session.prompt(oversized);
+		await fixture.session.waitForIdle();
+		assert.equal(fixture.requests.length, 3);
+		assert.equal(resetMarkers(fixture).length, 2);
+		const branch = fixture.sessionManager.getBranch();
+		assert.equal(branch.filter((entry) => entry.type === "custom_message" && entry.customType === CARRIED_INPUT_TYPE).length, 0);
+		const original = branch.find((entry) => entry.type === "message" && entry.message.role === "user" && JSON.stringify(entry.message.content).includes(input));
+		assert.ok(original?.type === "message" && original.message.role === "user", "the original input remains in raw history");
+		assert.ok(Array.isArray(original.message.content) && original.message.content.some((block) => block.type === "image"), "the original image remains in raw history");
+		const oversizedEntry = branch.find((entry) => entry.type === "message" && entry.message.role === "user" && JSON.stringify(entry.message.content).includes("PRE_SEND_OVERSIZED_"));
+		assert.ok(oversizedEntry?.type === "message" && oversizedEntry.message.role === "user", "the pre-send oversized input remains in raw history");
 	} finally { fixture.close(); }
 });
 
@@ -1290,6 +1307,49 @@ test("real AgentSession: steering and follow-up are delivered exactly once in th
 	}
 });
 
+test("real AgentSession: new input queued while a forced reset commits is delivered once in the fresh window", async () => {
+	for (const boundaryEvent of ["turn_end", "agent_before_settle"] as const) {
+		let fixture!: Fixture;
+		let release!: () => void;
+		let started!: () => void;
+		const gate = new Promise<void>((resolve) => { release = resolve; });
+		const ready = new Promise<void>((resolve) => { started = resolve; });
+		fixture = await openFixture({
+			hook: (pi) => {
+				const holdBoundary = async (event: { entries?: readonly SessionBoundaryDraft[] }) => {
+					if (!event.entries?.some((entry) => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE)) return;
+					started();
+					await gate;
+				};
+				if (boundaryEvent === "turn_end") pi.on("turn_end", holdBoundary);
+				else pi.on("agent_before_settle", holdBoundary);
+			},
+			script: (request) => {
+				if (request === 1) return boundaryEvent === "turn_end"
+					? assistant(fixture, [{ type: "text", text: "reserve reached" }], "stop", { usage: usage(80_000) })
+					: assistant(fixture, [], "error", { errorMessage: "Prompt too long: context exceeds maximum context length" });
+				return assistant(fixture, [{ type: "text", text: "new input handled" }]);
+			},
+		});
+		try {
+			const running = fixture.session.prompt("ALREADY_SUBMITTED_BEFORE_RESET");
+			await ready;
+			await fixture.session.prompt("NEW_STEERING_INPUT", { streamingBehavior: "steer" });
+			await fixture.session.prompt("NEW_FOLLOWUP_INPUT", { streamingBehavior: "followUp" });
+			release();
+			await running;
+			await fixture.session.waitForIdle();
+			assert.equal(resetMarkers(fixture).length, 1);
+			for (let i = 1; i < fixture.requests.length; i++) assertFreshRequest(fixture, i, "ALREADY_SUBMITTED_BEFORE_RESET");
+			for (const input of ["NEW_STEERING_INPUT", "NEW_FOLLOWUP_INPUT"]) {
+				assert.equal(text(fixture.requests.at(-1)).split(input).length - 1, 1, "new input reaches the fresh provider context once");
+				assert.equal(fixture.sessionManager.getBranch().filter((entry) => entry.type === "message" && entry.message.role === "user" && JSON.stringify(entry.message.content).includes(input)).length, 1);
+			}
+			assert.equal(fixture.sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === CARRIED_INPUT_TYPE).length, 0, "native queued input needs no replay copy");
+		} finally { release(); fixture.close(); }
+	}
+});
+
 test("real AgentSession: hidden or missing reset boots refuse to move the boundary", async () => {
 	let fixture!: Fixture;
 	fixture = await openFixture({
@@ -1384,7 +1444,7 @@ test("real AgentSession: the complete system message and a changed tool loadout 
 	}
 });
 
-test("real AgentSession: overflow and recoverable length reset and retry once; repeated failure is bounded", async () => {
+test("real AgentSession: overflow and recoverable length continue once without replay; repeated failure is bounded", async () => {
 	for (const failure of ["overflow", "length"] as const) {
 		let fixture!: Fixture;
 		fixture = await openFixture({
@@ -1398,9 +1458,9 @@ test("real AgentSession: overflow and recoverable length reset and retry once; r
 					if (request === 2) return assistant(fixture, [{ type: "text", text: "tool loop checkpoint" }]);
 					if (request === 3) return assistant(fixture, [], "error", { errorMessage: "Prompt too long: context exceeds maximum context length" });
 					assert.equal(request, 4);
-					assertUserContent(context, [{ type: "text", text: "PASSIVE_STEERED_INPUT" }]);
-					assertUserContent(context, [{ type: "text", text: "PASSIVE_FOLLOWUP_INPUT" }]);
-				} else if (request === 1) return assistant(fixture, [{ type: "text", text: "truncated" }], "length", { usage: usage(99_000, 1) });
+					assert.equal(text(context).includes("PASSIVE_STEERED_INPUT"), false);
+					assert.equal(text(context).includes("PASSIVE_FOLLOWUP_INPUT"), false);
+				} else if (request === 1) return assistant(fixture, [], "length", { usage: { ...usage(4, 1), cacheWrite: 487_818, totalTokens: 487_823 } });
 				return assistant(fixture, [{ type: "text", text: "recovered" }]);
 			},
 		});
@@ -1410,7 +1470,9 @@ test("real AgentSession: overflow and recoverable length reset and retry once; r
 			assert.equal(resetMarkers(fixture).length, 1, `${failure} performs one reset`);
 			assert.equal(fixture.sessionManager.getBranch().filter((entry) => entry.type === "compaction").length, 1, `${failure} commits one native reset checkpoint`);
 			assert.equal(fixture.requests.length, failure === "overflow" ? 4 : 2, `${failure} resumes once after queued work drains`);
-			assertUserContent(fixture.requests.at(-1), [{ type: "text", text: `RECOVER_${failure}_SENTINEL` }]);
+			assertFreshRequest(fixture, fixture.requests.length - 1, `RECOVER_${failure}_SENTINEL`);
+			assert.equal(fixture.sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === CARRIED_INPUT_TYPE).length, 0);
+			assert.ok(fixture.sessionManager.getBranch().some((entry) => entry.type === "message" && JSON.stringify(entry.message).includes(`RECOVER_${failure}_SENTINEL`)), "submitted input stays available in raw history");
 		} finally {
 			fixture.close();
 		}
@@ -1435,7 +1497,7 @@ test("real AgentSession: overflow and recoverable length reset and retry once; r
 	}
 });
 
-test("real AgentSession: a smaller-model overflow carries the failed run's human input and stays on that model", async () => {
+test("real AgentSession: a smaller-model overflow continues on that model without replaying submitted input", async () => {
 	let fixture!: Fixture;
 	fixture = await openFixture({
 		contextWindow: 200_000,
@@ -1443,7 +1505,7 @@ test("real AgentSession: a smaller-model overflow carries the failed run's human
 			if (request === 1) return assistant(fixture, [{ type: "text", text: "LARGE_MODEL_HISTORY" }], "stop", { usage: usage(150_000) });
 			if (request === 2) return assistant(fixture, [], "error", { errorMessage: "Prompt too long: context exceeds maximum context length" });
 			assert.equal(request, 3);
-			assertUserContent(context, [{ type: "text", text: "CONTINUE_AFTER_MODEL_SWITCH" }]);
+			assert.equal(text(context).includes("CONTINUE_AFTER_MODEL_SWITCH"), false);
 			return assistant(fixture, [{ type: "text", text: "continued on smaller model" }]);
 		},
 	});
@@ -1460,6 +1522,7 @@ test("real AgentSession: a smaller-model overflow carries the failed run's human
 		assert.equal(fixture.requests.length, 3, "one failed small-model request and one recovery request");
 		assert.equal(fixture.session.model?.id, smaller.id, "recovery stays on the selected model");
 		assertFreshRequest(fixture, 2, "LARGE_MODEL_HISTORY");
+		assertFreshRequest(fixture, 2, "CONTINUE_AFTER_MODEL_SWITCH");
 		assert.ok(FORCED_CONTINUATIONS.some((line) => text(fixture.requests[2]!).includes(line)), "recovery uses the forced continuation");
 		assert.ok(fixture.sessionManager.getBranch().some((entry) => entry.type === "message" && JSON.stringify(entry.message).includes("CONTINUE_AFTER_MODEL_SWITCH")), "the latest user request survives in raw history");
 	} finally {
