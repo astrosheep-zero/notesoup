@@ -1523,7 +1523,7 @@ test("real AgentSession: a smaller-model overflow continues on that model withou
 		assert.equal(fixture.session.model?.id, smaller.id, "recovery stays on the selected model");
 		assertFreshRequest(fixture, 2, "LARGE_MODEL_HISTORY");
 		assertFreshRequest(fixture, 2, "CONTINUE_AFTER_MODEL_SWITCH");
-		assert.ok(FORCED_CONTINUATIONS.some((line) => text(fixture.requests[2]!).includes(line)), "recovery uses the forced continuation");
+		assert.ok(FORCED_CONTINUATIONS.some((line) => text(fixture.requests[2]!).includes(JSON.stringify(line).slice(1, -1))), "recovery uses the forced continuation");
 		assert.ok(fixture.sessionManager.getBranch().some((entry) => entry.type === "message" && JSON.stringify(entry.message).includes("CONTINUE_AFTER_MODEL_SWITCH")), "the latest user request survives in raw history");
 	} finally {
 		fixture.close();
