@@ -184,7 +184,7 @@ test("notes_list is most-recently-updated first across merged scopes", async () 
 	// A same-path pair in two scopes keeps both rows; equal timestamps tie-break by scope name.
 	put("human", "a.md", base + 10);
 	assert.deepEqual((await files({})).filter((file) => file.address.endsWith("a.md")).map((file) => file.address), ["@human/a.md", "a.md"], "equal timestamps tie-break by full address");
-	assert.deepEqual((await files({ glob: "*.md" })).map((file) => file.address), ["a.md", "b.md"], "a bare glob narrows to the session notebook");
+	assert.deepEqual((await files({ glob: "*.md" })).map((file) => file.address), ["@human/e.md", "@human/a.md", "a.md", "b.md", "@project/c.md"], "a slashless glob matches filenames across notebooks");
 });
 
 test("notes are real files that persist across sessions and round-trip Unicode", async () => {

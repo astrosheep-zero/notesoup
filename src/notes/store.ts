@@ -29,7 +29,7 @@ export type EditOperation = { oldText: string; newText: string };
 export type WriteOptions = { origin?: Origin };
 export type EditOptions = { origin?: Origin; crumpled?: boolean; replaceAll?: boolean; renameTo?: string };
 /** Omitted/null/empty glob or bare @default selects current notebooks; explicit globs match full addresses.
- * Only the current session also matches its bare-path alias (e.g. *.md or deep/**).
+ * A pattern without `@` or `/` matches filenames at any depth; relative paths with `/` match the current session.
  */
 export type NotesQuery = { glob?: string | null; crumpled?: boolean };
 /** A read exposes metadata and the pure body; the serialized frontmatter is never part of the body. */
@@ -165,9 +165,10 @@ async function namespacesForPattern(pattern: string | undefined, identity: Notes
 	return namespaces;
 }
 
-/** Relative pattern heads resolve to canonical names, so they match canonical addresses. */
+/** Relative pattern heads resolve to canonical names; slashless bare patterns match filenames at any depth. */
 function normalizePattern(pattern: string | undefined, identity: NotesIdentity): string | undefined {
 	if (!pattern) return pattern;
+	if (!pattern.startsWith("@") && !pattern.includes("/")) return `**/${pattern}`;
 	if (pattern.startsWith("@project/")) return `@projects/${identity.projectKey}/${pattern.slice("@project/".length)}`;
 	if (pattern.startsWith("@self/")) return `@agents/${identity.agent}/${pattern.slice("@self/".length)}`;
 	if (pattern.startsWith("@model/")) return `@models/${identity.model}/${pattern.slice("@model/".length)}`;

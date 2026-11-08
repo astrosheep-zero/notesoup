@@ -40,7 +40,9 @@ test("default spellings stay local while explicit ** lists and searches each not
 	}
 	const rows = await notes.list({ glob: "**" });
 	assert.deepEqual(addresses(rows), all);
+	assert.deepEqual(addresses(await notes.list({ glob: "*" })), all);
 	assert.deepEqual(addresses(await notes.search(["needle"], { glob: "**" })), all);
+	assert.deepEqual(addresses(await notes.search(["needle"], { glob: "*" })), all);
 	assert.equal(new Set(rows.map(row => row.address)).size, rows.length);
 	for (const row of rows) assert.equal((await notes.read(row.address))?.body.startsWith("needle"), true, "every result is a real readable address");
 	assert.deepEqual(await notes.list({ glob: "@default/**" }), [], "@default is a bare selector, not an address prefix");
@@ -50,14 +52,16 @@ test("default spellings stay local while explicit ** lists and searches each not
 	assert.deepEqual(addresses(await notes.list({ glob: `@projects/${identity.projectKey}/**` })), [`@projects/${identity.projectKey}/shared.md`], "explicit current project stays a named read-only address");
 });
 
-test("explicit patterns use canonical addresses, with bare-path matching only for the current session", async (t) => {
+test("slashless patterns match filenames at any depth while slash-qualified bare paths match the current session", async (t) => {
 	const { notes, identity, foreignIdentity, foreign, all } = await populate(t);
 	await notes.write("deep/nested.md", "needle nested");
 	await foreign.write("deep/nested.md", "needle elsewhere");
 	await foreign.write("only-foreign.md", "needle foreign only");
-	assert.deepEqual(addresses(await notes.list({ glob: "*.md" })), ["shared.md"]);
+	const everyNote = [...all, "deep/nested.md", `@sessions/${foreignIdentity.sessionId}/deep/nested.md`, `@sessions/${foreignIdentity.sessionId}/only-foreign.md`].sort();
+	assert.deepEqual(addresses(await notes.list({ glob: "*.md" })), everyNote);
+	assert.deepEqual(addresses(await notes.list({ glob: "nested.md" })), [`@sessions/${foreignIdentity.sessionId}/deep/nested.md`, "deep/nested.md"]);
 	assert.deepEqual(addresses(await notes.list({ glob: "deep/**" })), ["deep/nested.md"]);
-	assert.deepEqual(await notes.search(["needle"], { glob: "only-foreign.md" }), [], "foreign sessions get no implicit basename alias");
+	assert.deepEqual(addresses(await notes.search(["needle"], { glob: "only-foreign.md" })), [`@sessions/${foreignIdentity.sessionId}/only-foreign.md`]);
 	assert.deepEqual(addresses(await notes.list({ glob: "**/shared.md" })), all);
 	assert.deepEqual(addresses(await notes.list({ glob: "@*/**/shared.md" })), all, "a wildcard head is not mistaken for an unknown reserved head");
 	assert.deepEqual(addresses(await notes.list({ glob: `@sessions/${identity.sessionId}/**` })), [
