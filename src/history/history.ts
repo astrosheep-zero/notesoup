@@ -274,10 +274,9 @@ export function inSelection(event: HistoryEvent, params: HistoryFilter): boolean
 	return !Number.isNaN(at) && (params.sinceMs === undefined || at >= params.sinceMs) && (params.untilMs === undefined || at < params.untilMs);
 }
 
-/** Without roles or query a call shows the conversation; either one shows the requested events. */
-export function filteredItems(projection: HistoryProjection, params: HistoryFilter, conversation: boolean): HistoryEvent[] {
-	let items = allItems(projection).filter((item) => inSelection(item, params));
-	if (params.roles) items = items.filter((item) => params.roles!.includes(item.role));
-	if (!params.roles && conversation) items = items.filter((item) => (item.role === "user" || item.role === "assistant") && eventDocument(item) !== "");
-	return items.sort((a, b) => a.seq - b.seq);
+/** Ordered events inside the requested seq/time range and optional roles, before folding. */
+export function filteredItems(projection: HistoryProjection, params: HistoryFilter): HistoryEvent[] {
+	return allItems(projection)
+		.filter((item) => inSelection(item, params) && (!params.roles || params.roles.includes(item.role)))
+		.sort((a, b) => a.seq - b.seq);
 }

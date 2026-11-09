@@ -1,5 +1,6 @@
 import type { NotesNamespace, NotesSnapshot } from "./snapshot.js";
-import { WINDOW_IDENTITY_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG, MAPS_BLOCK, CHEATSHEET_BOOT_MAX_CHARS, MAP_BOOT_MAX_CHARS, NAMELESS_AGENT, SHELF_FRESH_LIMIT, renderProtocolBlock, type BootToolNames } from "./text.js";
+import { effectiveNotePolicy, MAX_PINNED_NOTES, noteBudgetWarnings, pinnedPageOrder } from "../notes/policy.js";
+import { WINDOW_IDENTITY_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG, MAPS_BLOCK, NAMELESS_AGENT, SHELF_FRESH_LIMIT, renderProtocolBlock, type BootToolNames } from "./text.js";
 
 function relativeTime(timestamp: number, now: number): string {
 	const seconds = Math.trunc((timestamp - now) / 1000);
@@ -49,12 +50,11 @@ function notesIndex(snapshot: NotesSnapshot, tools: BootToolNames, agentName: st
 			continue;
 		}
 		const rows = (snapshot.namespaces.get(namespace.scope) ?? []).filter((row) => row.meta.crumpledAt === undefined);
-		const pinned = ["CHEATSHEET.md", "MAP.md"].flatMap((path) => {
-			const row = rows.find((row) => row.path === path);
-			return row?.body ? [row] : [];
-		});
+		const pins = rows.filter(row => effectiveNotePolicy(row.meta, row.path).pinned)
+			.sort((a, b) => pinnedPageOrder(a.path) - pinnedPageOrder(b.path) || a.path.localeCompare(b.path));
+		const pinned = pins.slice(0, MAX_PINNED_NOTES);
 		const fresh = rows
-			.filter((row) => row.path !== "MAP.md" && row.path !== "CHEATSHEET.md")
+			.filter(row => !effectiveNotePolicy(row.meta, row.path).pinned)
 			.slice(0, SHELF_FRESH_LIMIT)
 			.map((row) => {
 				const locator = `${row.address} · ${relativeTime(row.meta.updatedAt, snapshot.openedAt)}`;
@@ -62,7 +62,11 @@ function notesIndex(snapshot: NotesSnapshot, tools: BootToolNames, agentName: st
 				return title === undefined ? `  ${locator}` : `  ${title}\n  ${locator}`;
 			});
 		if (pinned.length === 0 && fresh.length === 0) continue;
-		const parts = pinned.map((row) => `${row.address}\n\n${indent(pinnedBodyForBoot(row.address, row.body, row.path === "MAP.md" ? MAP_BOOT_MAX_CHARS : CHEATSHEET_BOOT_MAX_CHARS))}`);
+		const parts = pinned.map(row => {
+			const warnings = noteBudgetWarnings(row.body, effectiveNotePolicy(row.meta, row.path));
+			return `${row.address}\n\n${indent([...warnings, row.body].join("\n"))}`;
+		});
+		if (pins.length > MAX_PINNED_NOTES) parts.push(indent(`Warning: only ${MAX_PINNED_NOTES} pinned notes per notebook are injected; omitted pins: ${pins.slice(MAX_PINNED_NOTES).map(row => row.address).join(", ")}. Unpin some notes or read the omitted pages with ${tools.notes}.`));
 		if (fresh.length > 0) parts.push(`recent\n\n${fresh.join("\n\n")}`);
 		shelves.push(section(namespace.label, parts.join("\n\n")));
 	}
@@ -70,13 +74,6 @@ function notesIndex(snapshot: NotesSnapshot, tools: BootToolNames, agentName: st
 	return shelves.length > 0
 		? ["YOUR NOTES\n──────────", ...shelves].join("\n\n\n")
 		: "YOUR NOTES\n──────────\n\nNone yet. A blank slate is a fine place to start — just don't finish there.";
-}
-
-/** Each pinned page is bounded; the cut names where the rest lives. */
-function pinnedBodyForBoot(address: string, body: string, maxChars: number): string {
-	const chars = Array.from(body);
-	if (chars.length <= maxChars) return body;
-	return `${chars.slice(0, maxChars).join("")}\n[truncated at ${maxChars} chars; slim this page down, full body at \`${address}\`]`;
 }
 
 export type BootWindowTree = {
@@ -97,11 +94,8 @@ export type BootRenderData = {
 	readonly tools: BootToolNames;
 };
 
-/**
- * Render a static, once-per-window boot block from explicit data. This function does not read
- * notes or call runtime UI APIs; acquisition belongs to loadNotesSnapshot and its caller.
- */
-export function renderBootBlock(data: BootRenderData): string {
+/** Render the window identity without reading notes or consulting the host. */
+function renderIdentity(data: BootRenderData): string {
 	// Root, the window before this one, and this one: the block is rewritten every window, so an
 	// unbounded list would repeat the whole history once per window for no new information.
 	const shown = new Set([0, data.tree.windows.length - 2, data.tree.windows.length - 1]);
@@ -117,6 +111,15 @@ export function renderBootBlock(data: BootRenderData): string {
 			return `${window.isCurrent ? "└─" : "├─"} ${name}${range}${window.isCurrent ? "    ← you are here" : ""}`;
 		}),
 	];
-	const identity = `${WINDOW_IDENTITY_OPEN_TAG}\n${lines.join("\n")}\n${WINDOW_IDENTITY_CLOSE_TAG}`;
-	return [identity, renderProtocolBlock(data.tools, data.agentName), MAPS_BLOCK, notesIndex(data.notes, data.tools, data.agentName, data.modelName)].join("\n\n");
+	return `${WINDOW_IDENTITY_OPEN_TAG}\n${lines.join("\n")}\n${WINDOW_IDENTITY_CLOSE_TAG}`;
+}
+
+/** Window data only: identity and the closed notes snapshot, never protocol teaching. */
+export function renderBootContext(data: BootRenderData): string {
+	return [renderIdentity(data), notesIndex(data.notes, data.tools, data.agentName, data.modelName)].join("\n\n");
+}
+
+/** Full boot for hosts that keep protocol teaching alongside their window data. */
+export function renderBootBlock(data: BootRenderData): string {
+	return [renderIdentity(data), renderProtocolBlock(data.tools, data.agentName), MAPS_BLOCK, notesIndex(data.notes, data.tools, data.agentName, data.modelName)].join("\n\n");
 }

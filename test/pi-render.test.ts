@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { notesRead, notesToolContext, notesUpdate, notesWrite } from "../src/index.js";
 import { initTheme, type AgentToolResult, type Theme } from "@earendil-works/pi-coding-agent";
 import { Box, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { emptyBrainRenderers, notesReadRenderers, notesUpdateRenderers, notesWriteRenderers } from "../plugins/pi/render.js";
-import { success, wireResult, type Outcome } from "../src/tools/result.js";
+import { success, type Outcome } from "../src/result.js";
+import { wireResult } from "../src/tools/result.js";
 
 /** Flat theme for content assertions; strikethrough marks its text so crumple stays visible. */
 const flatTheme = {
@@ -128,6 +133,29 @@ test("empty_brain keeps the divider and handoff within very narrow widths", () =
 		const component = emptyBrainRenderers.renderResult(jsonResult({ status: "rollover_requested" }), { expanded: false }, flatTheme, { args: { last_word: lastWord } });
 		for (const width of [0, 1, 2, 5, 12, 19, 20, 21]) {
 			assert.ok(component.render(width).every((line) => visibleWidth(line) <= width), `output must fit width ${width}, last_word=${lastWord}`);
+		}
+	}
+});
+
+test("real policy receipts keep policy and budget warnings visible in collapsed and expanded Pi views", async t => {
+	const home = mkdtempSync(join(tmpdir(), "policy-render-"));
+	t.after(() => rmSync(home, { recursive: true, force: true }));
+	const context = notesToolContext({ home, sessionId: "render", projectKey: "render", agent: "root", model: "test" }, home);
+	const writeArgs = { address: "custom", content: "😀".repeat(2049), pinned: true, readonly: false };
+	const written = toolResult(await notesWrite.execute(writeArgs, context));
+	const updateArgs = { address: "custom", readonly: true, edits: [{ oldText: "😀".repeat(2049), newText: "😀".repeat(2050) }] };
+	const updated = toolResult(await notesUpdate.execute(updateArgs, context));
+	const read = toolResult(await notesRead.execute({ address: "custom", max_chars: 10 }, context));
+	for (const expanded of [false, true]) {
+		const views = [
+			{ component: notesWriteRenderers.renderResult(written, { expanded }, flatTheme, { args: writeArgs }), locked: false, count: 2049 },
+			{ component: notesUpdateRenderers.renderResult(updated, { expanded }, flatTheme, { args: updateArgs }), locked: true, count: 2050 },
+			{ component: notesReadRenderers.renderResult(read, { expanded }, flatTheme), locked: true, count: 2050 },
+		];
+		for (const { component, locked, count } of views) {
+			const text = lines(component, 48).replace(/\s+/g, " ");
+			assert.ok(text.includes(`pinned true | budget 2048 | readonly ${locked}`));
+			assert.ok(text.includes(`Warning: note body is ${count} Unicode code points, over budget 2048`), `warning must not be clipped or hidden when expanded=${expanded}`);
 		}
 	}
 });

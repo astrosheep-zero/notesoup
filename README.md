@@ -29,7 +29,7 @@ pi -e npm:notesoup
 ## What you get
 
 - **Durable context windows.** `/fresh-window` (alias `/empty`) clears and stops, with any command text available for close-out notes. Separate human input received during emptying continues in the fresh window. The model can also request a window itself with `empty_brain`, and a budget close-out fires automatically before the window runs out. Abort and ordinary errors never count as completion; the raw conversation stays in the session, just out of the next context.
-- **A boot block at every window head.** Static once-per-window content (cache-stable) with the window identity, the recent-notes index, and a short protocol teaching the model how to recover: notes for its own bookkeeping, history tools for everything before the reset.
+- **A boot block at every window head.** Pi keeps the window identity and notes snapshot in a hidden user-role boot; its fixed recovery protocol and pinned-page teaching live in a named system section. Every note body, including `@human` pins, stays user-role data. Claude, Codex and dsh keep their existing combined boot injection.
 - **`get_context_remaining`** — how much room the brain has left before the hard-reserve wipe, including the warning runway.
 - **Seven history/notes tools**, flattened from the original Codex actions:
 
@@ -50,6 +50,20 @@ pi -e npm:notesoup
 - **Migration (0.40.0)**: parameters renamed: `order` → `from`, `before`/`after` → `before_seq`/`after_seq`, `limit_chars` → `max_chars`, `wastebasket` → `crumpled`, `pattern` → `glob` (the standalone library's options included), and `notes_update`'s `change_kind` value `file` → `moved`. Old names are refused.
 
 - **Runtime toggle** — `/notesoup off` stops new automatic resets; `/notesoup on` re-enables them; bare `/notesoup` reports the state.
+
+## Per-note policy
+
+Notes have optional `pinned`, `budget`, and `readonly` frontmatter fields, also settable through `notes_write` and `notes_update`:
+
+```json
+{ "address": "@project/decisions.md", "pinned": true, "budget": 3000, "readonly": false }
+```
+
+- **Pinned** notes are injected **in full** at boot. Root `CHEATSHEET.md` and `MAP.md` default to pinned; every other page defaults to unpinned. Explicit `pinned: false` overrides even a default page. Each notebook allows **five live pins**, including its existing default pages; crumpled notes do not count. A sixth pin, restore or move that exceeds the cap refuses without changing either note. Manually over-cap notebooks get a boot warning naming the omitted pins, with default pages shown first.
+- **Budget** defaults to **2048 Unicode code points for every page**, including CHEATSHEET and MAP. Any positive safe integer is allowed. Over-budget writes and updates succeed with a visible warning; pinned bodies are never truncated to their budget. This advisory budget is separate from the existing hard serialized-file byte limit. Tool results/read metadata/list/search expose effective policy and budget warnings.
+- **Readonly** defaults to false. `readonly: true` is a **soft lock**, not security: mutations refuse until explicitly unlocked with `readonly: false`, either by itself or in the same call as the requested changes. A write can create and lock a note together. Reads still record access metadata; direct filesystem edits can bypass the lock.
+
+Absent fields stay absent on disk. On move/rename, implicit pin defaults follow the new root path; explicit true/false values travel with the note. The original origin, other metadata, and unknown frontmatter are preserved. See the [library API](docs/notes-library.md#per-note-policy) for details.
 
 ## Configuration
 

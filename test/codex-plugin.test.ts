@@ -13,6 +13,7 @@ import type { TSchema } from "typebox";
 import { runHook } from "../plugins/codex/src/hooks.js";
 import { writeBinding } from "../plugins/codex/src/identity.js";
 import { isolateHistoryRoots, writePiTranscript } from "./helpers/history-corpus.js";
+import { MAPS_BLOCK, NOTES_PROTOCOL_OPEN_TAG } from "../src/boot/text.js";
 
 /* Producer-shaped synthetic fixtures, not captured/private transcripts.
  * Frozen official rust-v0.160.1, d27764b82f7118f674371e6d6e76271d9d606edb.
@@ -364,6 +365,7 @@ test("a root boot carries the native window, native reset names, and is deduped 
 	const first = await runHook("SessionStart", startPayload(f), env);
 	const boot = bootOf(first);
 	assert.match(boot, /YOUR NOTES/);
+	assert.ok(boot.includes(NOTES_PROTOCOL_OPEN_TAG) && boot.includes(MAPS_BLOCK), "Codex keeps teaching in its native boot hook");
 	assert.match(boot, new RegExp(`Agent name: anonymous \\(brain: gpt-5-4\\)`));
 	assert.match(boot, new RegExp(`codex:${ROOT}`));
 	assert.match(boot, new RegExp(`<notesoup:codex_window>\\nthread: ${ROOT}\\nwindow: ${W0}`));

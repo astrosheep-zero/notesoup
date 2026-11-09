@@ -1,7 +1,7 @@
 import { DEFAULT_BOOT_TOOL_NAMES } from "../../src/boot/text.js";
 import { remainingBudget, type ResolvedThresholds } from "../../src/budget/policy.js";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { convertToLlm, defineTool, type ExtensionAPI, type ExtensionContext, type SessionBoundaryDraft, type SettingsManager } from "@earendil-works/pi-coding-agent";
 import { GUIDANCE_TYPE, WARNING_TYPE } from "./entries.js";
 import { estimateContextTokens } from "./estimate.js";

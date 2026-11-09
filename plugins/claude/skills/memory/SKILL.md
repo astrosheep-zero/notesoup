@@ -32,7 +32,7 @@ Any other `@` prefix is refused. A path is relative and `/`-separated, with no e
 
 `@` addresses are not file paths: never pass them to file tools like `read`, `write`, `edit`, or `bash`. That creates a stray directory instead of a note.
 
-`CHEATSHEET.md` and `MAP.md` at the root of each `@` notebook are separate pages you wake up with; absent pages are skipped. Keep standing reminders in `CHEATSHEET.md`, to five lines. `MAP.md` holds only the note index: each durable note's address and gist, for lookup. Update it whenever you add, move or crumple a durable note. Do not create empty pages.
+`CHEATSHEET.md` and `MAP.md` at each notebook's root are separate default-pinned pages you wake up with; absent or crumpled pages are skipped. Set `pinned`, `budget`, and `readonly` through `notes_write`/`notes_update` or frontmatter. Explicit `pinned:false` unpins even a default page. Each notebook allows five live pins; every page defaults to a 2048-code-point advisory budget, adjustable per note. Overflow warns but saves, and pinned bodies load whole. `readonly:true` is a soft lock, not security; explicitly set `readonly:false` to unlock, alone or alongside your changes. Keep standing reminders in `CHEATSHEET.md`, to five lines. `MAP.md` holds only the note index: each durable note's address and gist, for lookup. Update it whenever you add, move or crumple a durable note. Do not create empty pages.
 
 Keep notes focused on what is true now; if a piece of past context still matters (such as why an approach was ruled out), keep only a brief summary rather than a blow-by-blow log. Crumple notes that are no longer true; a stale note is worse than none.
 

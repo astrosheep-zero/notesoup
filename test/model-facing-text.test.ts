@@ -1,10 +1,11 @@
+import { DEFAULT_NOTE_BUDGET } from "../src/notes/policy.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { renderBootBlock } from "../src/boot/render.js";
 import { loadNotesSnapshot } from "../src/boot/snapshot.js";
-import { DEFAULT_BOOT_TOOL_NAMES, MAPS_BLOCK, CHEATSHEET_BOOT_MAX_CHARS, MAP_BOOT_MAX_CHARS, NOTES_PROTOCOL_CLOSE_TAG, NOTES_PROTOCOL_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG, renderProtocolBlock } from "../src/boot/text.js";
+import { DEFAULT_BOOT_TOOL_NAMES, MAPS_BLOCK, NOTES_PROTOCOL_CLOSE_TAG, NOTES_PROTOCOL_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG, renderProtocolBlock } from "../src/boot/text.js";
 import { CLAUDE_WARNING_PROMPT } from "../plugins/claude/src/text.js";
 import { COMMAND_NOTICE, PI_PRE_RESET_HINTS, commandWarningContent, warningContent } from "../plugins/pi/text.js";
 import { COUNTDOWN_LINE, FORCED_CONTINUATIONS, GUIDANCE_CLOSE_TAG, GUIDANCE_OPEN_TAG, NORMAL_CONTINUATIONS, WARNING_BODY, WARNING_CALL, WARNING_TIMING, selectContinuation, tokenBudgetGuidance } from "../src/budget/text.js";
@@ -30,7 +31,7 @@ const GOLDEN_WARNING = `Stop the task. Write down what git and history can't giv
 - what failed, and why
 - which skills, seqs, notes, or files to reopen
 - anything else worth noting
-Then leave the shelf current: replace what's stale, a whole note or a section inside one, and crumple the dead ones. Update and trim CHEATSHEET.md and MAP.md; every new window loads them. The next window gets whatever you leave, dead notes and dead sections alike.
+Then leave the shelf current: replace what's stale, a whole note or a section inside one, and crumple the dead ones. Update and trim pinned pages (CHEATSHEET.md and MAP.md by default); every new window loads the pins. The next window gets whatever you leave, dead notes and dead sections alike.
 Don't call anything that might return a large output. One big read can spend the rest of the reserve before your notes are saved.`;
 
 const GOLDEN_COUNTDOWN = "Brain emptied in 3… 2…";
@@ -56,9 +57,15 @@ const GOLDEN_FORCED_CONTINUATIONS = [
 ];
 
 const GOLDEN_MAPS = `<notesoup:maps>
-Every notebook's root can hold two pages that never wait on a shelf: \`CHEATSHEET.md\` and \`MAP.md\`.
-Both get jammed straight into your brain the moment you wake up. No asking, no skipping. Whoever
-wakes up next reads them, and next is you. So keep them short, and keep them true.
+Every notebook's root has two default pins: \`CHEATSHEET.md\` and \`MAP.md\`.
+Pinned pages get jammed straight into your brain the moment you wake up. Whoever wakes up next
+reads them, and next is you. So keep them short, and keep them true.
+
+Set \`pinned\`, \`budget\`, and \`readonly\` with the note tools or frontmatter. Each notebook allows five
+live pins, including the defaults; \`pinned:false\` unpins even a default page. Every page's budget
+starts at 2048 Unicode code points; set a positive integer to change it. Going over warns but saves,
+and pinned bodies arrive whole, not cut short. \`readonly:true\` is a soft lock, not security;
+explicitly set \`readonly:false\` to unlock, on its own or with your changes.
 
 - **\`CHEATSHEET.md\`** holds what you'll want next time — a rule, a warning, a grudge, a name,
   a phone number you'll regret losing. Nobody grades it. Keep it to five lines, or it grows fat
@@ -167,7 +174,7 @@ test("a rendered boot carries the new tags, its own MAP section, and no pre-rena
 	assert.equal(rendered.includes("MAP — "), false, "the old MAP heading is gone");
 });
 
-test("cheatsheets and maps are independently pinned, bounded, and excluded from recent pages", async () => {
+test("cheatsheets and maps are independently pinned, whole, and excluded from recent pages", async () => {
 	const rows = new Map<Scope, NoteRow[]>([
 		["session", [note("session", "CHEATSHEET.md", "CHEATSHEET.md", "SESSION_RULE")]],
 		["project", [
@@ -177,8 +184,8 @@ test("cheatsheets and maps are independently pinned, bounded, and excluded from 
 		]],
 		["human", [note("human", "MAP.md", "@human/MAP.md", "HUMAN_INDEX")]],
 		["agent", [
-			note("agent", "CHEATSHEET.md", "@self/CHEATSHEET.md", "🐑".repeat(CHEATSHEET_BOOT_MAX_CHARS + 1)),
-			note("agent", "MAP.md", "@self/MAP.md", "M".repeat(MAP_BOOT_MAX_CHARS + 1)),
+			note("agent", "CHEATSHEET.md", "@self/CHEATSHEET.md", "🐑".repeat(DEFAULT_NOTE_BUDGET + 1)),
+			note("agent", "MAP.md", "@self/MAP.md", "M".repeat(DEFAULT_NOTE_BUDGET + 1)),
 		]],
 		["model", [{
 			...note("model", "CHEATSHEET.md", "@model/CHEATSHEET.md", "CRUMPLED_RULE"),
@@ -189,18 +196,15 @@ test("cheatsheets and maps are independently pinned, bounded, and excluded from 
 	assert.ok(rendered.includes("CHEATSHEET.md\n\n  SESSION_RULE"));
 	assert.ok(rendered.includes("@project/CHEATSHEET.md\n\n  PROJECT_RULE\n\n@project/MAP.md\n\n  PROJECT_INDEX"));
 	assert.ok(rendered.includes("@human/MAP.md\n\n  HUMAN_INDEX"));
-	assert.ok(rendered.includes("@self/CHEATSHEET.md\n\n  🐑"));
-	assert.ok(rendered.includes("@self/MAP.md\n\n  M"));
+	assert.ok(rendered.includes("@self/CHEATSHEET.md\n\n  Warning:"));
+	assert.ok(rendered.includes("@self/MAP.md\n\n  Warning:"));
 	assert.equal(/^(?:map|cheatsheet)$/m.test(rendered), false, "pinned headings never suggest lowercase aliases");
 	assert.ok(rendered.includes("@project/n2.md ·"));
 	assert.equal(rendered.includes("TITLE_3"), false);
 	assert.equal(/(?:MAP|CHEATSHEET)\.md ·/.test(rendered), false);
-	assert.ok(rendered.includes("🐑".repeat(CHEATSHEET_BOOT_MAX_CHARS)));
-	assert.equal(rendered.includes("🐑".repeat(CHEATSHEET_BOOT_MAX_CHARS + 1)), false);
-	assert.ok(rendered.includes(`[truncated at ${CHEATSHEET_BOOT_MAX_CHARS} chars; slim this page down, full body at \`@self/CHEATSHEET.md\`]`));
-	assert.ok(rendered.includes("M".repeat(MAP_BOOT_MAX_CHARS)));
-	assert.equal(rendered.includes("M".repeat(MAP_BOOT_MAX_CHARS + 1)), false);
-	assert.ok(rendered.includes(`[truncated at ${MAP_BOOT_MAX_CHARS} chars; slim this page down, full body at \`@self/MAP.md\`]`));
+	assert.ok(rendered.includes("🐑".repeat(DEFAULT_NOTE_BUDGET + 1)), "the astral body is injected whole");
+	assert.ok(rendered.includes("M".repeat(DEFAULT_NOTE_BUDGET + 1)), "the MAP body is injected whole too");
+	assert.equal((rendered.match(/Warning: note body is 2049 Unicode code points, over budget 2048/g) ?? []).length, 2);
 	assert.equal(rendered.includes("CRUMPLED_RULE"), false);
 	assert.equal(rendered.includes("@model —"), false);
 });

@@ -1,16 +1,15 @@
 import { DEFAULT_BOOT_TOOL_NAMES } from "../../src/boot/text.js";
-import { PI_PRE_RESET_HINTS } from "./text.js";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { agentSlug, modelSlug, notesIdentityFromPi } from "./notes/adapter.js";
 import { loadNotesSnapshot, unavailableNotesSnapshot, type NotesSnapshot } from "../../src/boot/snapshot.js";
 import { isFilesystemError } from "../../src/notes/index.js";
 import { BOOT_TYPE } from "./entries.js";
-import { renderBootBlock } from "../../src/boot/render.js";
+import { renderBootContext } from "../../src/boot/render.js";
 import { historyFromSession, nextHistorySeq } from "./history.js";
 
 export type IncompleteNotesNotifier = (ctx: ExtensionContext, windowId: string, snapshot: NotesSnapshot) => void;
 
-/** The boot custom message: identity, notes snapshot, and static protocol; never reset prose. */
+/** The hidden user boot: window identity and notes snapshot; teaching belongs to system sections. */
 export type BootMessage = {
 	readonly customType: string;
 	readonly content: string;
@@ -65,7 +64,7 @@ export async function buildBootMessage(
 	if (isCurrent()) notifyIncompleteNotes?.(ctx, windowId, notes);
 	return {
 		customType: BOOT_TYPE,
-		content: renderBootBlock({ agentName, modelName, tree, notes, tools: { ...DEFAULT_BOOT_TOOL_NAMES, preResetHints: PI_PRE_RESET_HINTS } }),
+		content: renderBootContext({ agentName, modelName, tree, notes, tools: DEFAULT_BOOT_TOOL_NAMES }),
 		display: false,
 		details: { windowId },
 	};

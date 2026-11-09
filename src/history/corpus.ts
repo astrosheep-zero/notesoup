@@ -1,5 +1,5 @@
 /** A read-only history corpus: identity/discovery is separate from loading a projection. */
-import { failure, success, type Outcome } from "../tools/result.js";
+import { failure, success, type Outcome } from "../result.js";
 import type { HistoryEvent, HistoryProjection } from "./history.js";
 import { sessionRepresentative } from "./query.js";
 

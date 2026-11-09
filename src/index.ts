@@ -13,11 +13,13 @@
  */
 
 // Notes: the standalone filesystem library, addressed by an explicit identity.
-export { createNotesStore, noteIdentity, projectKey, slugify, NoteError } from "./notes/index.js";
+export { createNotesStore, effectiveNotePolicy, noteIdentity, projectKey, slugify, NoteError } from "./notes/index.js";
 export type {
 	NoteEditResult,
 	NoteMatch,
 	NoteMeta,
+	NotePolicy,
+	NotePolicyFields,
 	NoteReadResult,
 	NoteRenameResult,
 	NoteRow,
@@ -46,7 +48,8 @@ export { historyList, historyRead } from "./tools/history.js";
 export { projectHistory } from "./history/history.js";
 export type { HistoryProjection } from "./history/history.js";
 export type { HistoryContext, HistoryCorpus, HistoryHarness, HistorySession, HistorySessionData } from "./history/corpus.js";
-export type { Operation, OperationError, Outcome, Renderer, TextWindow } from "./tools/result.js";
+export type { OperationError, Outcome } from "./result.js";
+export type { Operation, Renderer, TextWindow } from "./tools/result.js";
 
 // Budget: pure thresholds and the approved reset prose.
 export { deriveThresholds, remainingBudget } from "./budget/policy.js";

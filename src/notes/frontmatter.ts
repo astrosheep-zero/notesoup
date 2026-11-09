@@ -1,4 +1,5 @@
 import type { Scope } from "./paths.js";
+import { validateNotePolicy, type NotePolicyFields } from "./policy.js";
 
 export type Origin = "user" | "self" | "external";
 
@@ -7,7 +8,7 @@ export type Origin = "user" | "self" | "external";
  * sleep-shift keys survive this layer untouched when present. `[key: string]: unknown` carries
  * any frontmatter key this layer does not know, preserved verbatim across rewrites.
  */
-export type NoteMeta = {
+export type NoteMeta = NotePolicyFields & {
 	scope: Scope;
 	origin: Origin;
 	/** Present only while the note is in the wastebasket; serialized as an ISO timestamp. */
@@ -29,7 +30,7 @@ const SCOPES: readonly Scope[] = ["session", "project", "human", "agent", "model
 const ORIGINS: readonly Origin[] = ["user", "self", "external"];
 const TIMESTAMP_KEYS = ["createdAt", "updatedAt", "lastAccessed"] as const;
 /** Emission order, exactly the Design's key list. */
-const KNOWN_KEYS = ["origin", "crumpledAt", "createdAt", "updatedAt", "lastAccessed", "accessCount", "sourceWindow", "supersedes", "recurrenceCount", "recurrenceWindows"] as const;
+const KNOWN_KEYS = ["pinned", "budget", "readonly", "origin", "crumpledAt", "createdAt", "updatedAt", "lastAccessed", "accessCount", "sourceWindow", "supersedes", "recurrenceCount", "recurrenceWindows"] as const;
 
 const pad2 = (value: number) => String(value).padStart(2, "0");
 
@@ -122,6 +123,7 @@ function parseFrontmatter(raw: string): { fields: Record<string, unknown>; body:
  */
 export function parseNote(raw: string, now = Date.now()): { meta: NoteMeta; body: string } {
 	const { fields, body } = parseFrontmatter(raw);
+	validateNotePolicy(fields);
 	const meta = { ...fields } as Record<string, unknown>;
 	// scope is a legacy on-disk field: store callers derive it from the file's notebook and
 	// overwrite it after parsing, so an absent or outdated value just falls back.

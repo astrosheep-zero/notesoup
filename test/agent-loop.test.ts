@@ -3,10 +3,11 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createAssistantMessageEventStream, getCurrentSystemMessage, type AssistantMessage } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, getCurrentSystemMessage, getSystemMessageText, type AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentContext } from "@earendil-works/pi-agent-core";
 import {
 	createAgentSession,
+	convertToLlm,
 	createCodemodeExtension,
 	DefaultResourceLoader,
 	ModelRuntime,
@@ -23,9 +24,13 @@ import { BOOT_TYPE, CARRIED_INPUT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, MANUAL
 import { historyFromSession } from "../plugins/pi/history.js";
 import { MARKER_INTERVAL } from "../plugins/pi/marker.js";
 import { assertBootHistory } from "./helpers/extension.js";
-import { NOTES_PROTOCOL_OPEN_TAG, WINDOW_IDENTITY_OPEN_TAG } from "../src/boot/text.js";
+import { DEFAULT_BOOT_TOOL_NAMES, MAPS_BLOCK, NOTES_PROTOCOL_OPEN_TAG, WINDOW_IDENTITY_OPEN_TAG, renderProtocolBlock } from "../src/boot/text.js";
+import { createNotesStore } from "../src/notes/index.js";
+import { agentSlug } from "../plugins/pi/notes/adapter.js";
+import { registerBudget } from "../plugins/pi/budget.js";
+import { estimateContextTokens } from "../plugins/pi/estimate.js";
 import { FORCED_CONTINUATIONS, GUIDANCE_OPEN_TAG, NORMAL_CONTINUATIONS, warningPrompt } from "../src/budget/text.js";
-import { commandWarningContent } from "../plugins/pi/text.js";
+import { commandWarningContent, PI_PRE_RESET_HINTS } from "../plugins/pi/text.js";
 import { DREAM_NAMESPACE, HISTORY_NAMESPACE, NOTES_NAMESPACE } from "../plugins/pi/tool-result.js";
 
 type StreamScript = (request: number, context: AgentContext) => AssistantMessage | Promise<AssistantMessage>;
@@ -331,12 +336,17 @@ test("real AgentSession: turn-end markers reach tool continuations and allow one
 	}
 });
 
-test("real AgentSession: notesoup tool directory is a stable system section across requests and reset", async () => {
+test("real AgentSession: protocol and tool directory stay in system while window snapshots remain user data across reset", async (t) => {
 	let fixture!: Fixture;
 	let directory: string | undefined;
+	const notesRoot = mkdtempSync(join(tmpdir(), "notesoup-system-split-"));
+	t.after(() => rmSync(notesRoot, { recursive: true, force: true }));
+	const notes = createNotesStore({ home: notesRoot, sessionId: "seed", projectKey: "seed", agent: "anonymous", model: "default" });
+	await notes.write("@human/CHEATSHEET.md", "HUMAN_PIN_BEFORE_RESET");
 	const activeTools = ["empty_brain", "get_context_remaining", "notes_write"];
 	const namespaces = [NOTES_NAMESPACE, HISTORY_NAMESPACE, DREAM_NAMESPACE];
 	fixture = await openFixture({
+		notesRoot,
 		compactionEnabled: false,
 		tools: activeTools,
 		hook: (pi) => pi.on("before_agent_start", (event) => {
@@ -345,6 +355,26 @@ test("real AgentSession: notesoup tool directory is a stable system section acro
 		script: (request, context) => {
 			const system = getCurrentSystemMessage(context.messages);
 			const section = system?.sections?.notesoup_tools;
+			assert.equal(system?.sections?.notesoup_protocol, `<notesoup_protocol>\n${renderProtocolBlock({ ...DEFAULT_BOOT_TOOL_NAMES, preResetHints: PI_PRE_RESET_HINTS }, agentSlug())}\n\n${MAPS_BLOCK}\n</notesoup_protocol>`, "only existing fixed teaching enters the named system section");
+			assert.equal(getSystemMessageText(system!).includes("HUMAN_PIN_"), false, "even @human pins never become system instructions");
+			const boots = context.messages.filter((message) => message.role === "user" && JSON.stringify(message.content).includes(WINDOW_IDENTITY_OPEN_TAG));
+			assert.equal(boots.length, 1, "one user boot reaches the provider");
+			const boot = JSON.stringify(boots[0]);
+			assert.ok(boot.includes("YOUR NOTES") && boot.includes(request === 3 ? "HUMAN_PIN_AFTER_RESET" : "HUMAN_PIN_BEFORE_RESET"), "the notes snapshot changes only at reset");
+			assert.equal(boot.includes(NOTES_PROTOCOL_OPEN_TAG), false);
+			assert.equal(boot.includes("<notesoup:maps>"), false);
+			assert.equal(context.messages.filter((message) => message.role === "system" && message.sections?.notesoup_protocol !== undefined).length, 1, "unchanged teaching adds no duplicate delta");
+			if (request === 1) {
+				// Place the reserve between the same request with and without the teaching section.
+				const withoutProtocol = context.messages.map((message) => message.role === "system" ? { ...message, sections: { ...message.sections, notesoup_protocol: null } } : message);
+				const withTokens = estimateContextTokens(convertToLlm(context.messages)).tokens;
+				const withoutTokens = estimateContextTokens(convertToLlm(withoutProtocol)).tokens;
+				assert.ok(withTokens > withoutTokens);
+				const probe = registerBudget({ on() {}, registerTool() {} } as unknown as ExtensionAPI, () => true, SettingsManager.inMemory({ compaction: { enabled: true, reserveTokens: fixture.model.contextWindow - Math.floor((withTokens + withoutTokens) / 2) } }));
+				const ctx = { model: fixture.model, getContextUsage: () => undefined } as unknown as Parameters<typeof probe.hardReserveDue>[0];
+				assert.equal(probe.hardReserveDue(ctx, context.messages), true, "pre-send accounting includes the real system protocol");
+				assert.equal(probe.hardReserveDue(ctx, withoutProtocol), false);
+			}
 			assert.equal(typeof section, "string", "the directory reaches the model as a named system section");
 			for (const { name, description } of namespaces) assert.ok(section!.includes(`${name}: ${description}`));
 			assert.ok(system?.sections?.preamble?.includes("Use the tools as requested."), "the host prompt is preserved");
@@ -361,6 +391,7 @@ test("real AgentSession: notesoup tool directory is a stable system section acro
 	try {
 		await fixture.session.prompt("Read the directory.");
 		await fixture.session.waitForIdle();
+		await notes.write("@human/CHEATSHEET.md", "HUMAN_PIN_AFTER_RESET");
 		await fixture.session.prompt("DIRECTORY_RESET_SENTINEL");
 		await fixture.session.waitForIdle();
 		assert.equal(fixture.requests.length, 3, "two prompts and one reset continuation");
@@ -368,6 +399,45 @@ test("real AgentSession: notesoup tool directory is a stable system section acro
 		assertFreshRequest(fixture, 2, "DIRECTORY_RESET_SENTINEL");
 	} finally {
 		fixture.close();
+	}
+});
+
+test("real AgentSession: identity changes update system teaching and the next boot; reload reuses that snapshot", async () => {
+	const previousAgent = process.env.NOTESOUP_AGENT;
+	delete process.env.NOTESOUP_AGENT;
+	let fixture!: Fixture;
+	try {
+		fixture = await openFixture({
+			compactionEnabled: false,
+			script: (request, context) => {
+				const protocol = getCurrentSystemMessage(context.messages)?.sections?.notesoup_protocol;
+				assert.equal(protocol?.includes("public square shared by every nameless nobody"), request === 1, "the protocol follows the live named/nameless identity");
+				if (request >= 3) {
+					const boot = context.messages.find((message) => message.role === "user" && JSON.stringify(message.content).includes(WINDOW_IDENTITY_OPEN_TAG));
+					assert.ok(JSON.stringify(boot).includes("Agent name: boot-tester (brain: boot-split-model)"));
+				}
+				return request === 2
+					? assistant(fixture, [{ type: "toolCall", id: "identity-reset", name: "empty_brain", arguments: {} }], "toolUse")
+					: assistant(fixture, [{ type: "text", text: "identity checked" }]);
+			},
+		});
+		await fixture.session.prompt("Anonymous startup.");
+		process.env.NOTESOUP_AGENT = "boot-tester";
+		fixture.model = { ...fixture.model, id: "boot-split-model" };
+		await fixture.session.setModel(fixture.model, { persist: false });
+		await fixture.session.prompt("Reset with the changed identity.");
+		await fixture.session.waitForIdle();
+		const boots = fixture.sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === BOOT_TYPE);
+		assert.equal(boots.length, 2);
+		await fixture.session.reload();
+		await fixture.session.prompt("Resume after reload.");
+		await fixture.session.waitForIdle();
+		assert.equal(fixture.requests.length, 4);
+		assert.deepEqual(fixture.sessionManager.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === BOOT_TYPE), boots, "reload never replaces or duplicates a per-window notes snapshot");
+	} finally {
+		fixture?.close();
+		if (previousAgent === undefined) delete process.env.NOTESOUP_AGENT;
+		else process.env.NOTESOUP_AGENT = previousAgent;
 	}
 });
 
@@ -1128,7 +1198,8 @@ test("real AgentSession: a reset survives all notes-home read failures with an i
 		const bootText = typeof boot.content === "string" ? boot.content : JSON.stringify(boot.content);
 		assert.equal(bootText.includes("@human — the human"), true);
 		assert.equal(bootText.match(/This drawer wouldn't open/g)?.length, 5, "each failed section gets one recovery line");
-		assert.ok(bootText.includes(NOTES_PROTOCOL_OPEN_TAG));
+		assert.equal(bootText.includes(NOTES_PROTOCOL_OPEN_TAG), false);
+		assert.ok(getSystemMessageText(getCurrentSystemMessage(fixture.requests[1]!.messages)!).includes(NOTES_PROTOCOL_OPEN_TAG), "a failed notes read cannot remove fixed system teaching");
 	} finally {
 		fixture.close();
 	}

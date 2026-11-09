@@ -125,7 +125,7 @@ test("write lands a real markdown file with harness frontmatter and a pure body"
 	const sessionId = session.getSessionId();
 
 	const result = resultData<NotesWriteData>(await call(captured, "notes_write", { address: "a/b.md", content: "hello" }, ctx));
-	assert.deepEqual(Object.keys(result).sort(), ["address", "outcome"]);
+	assert.deepEqual(Object.keys(result).sort(), ["address", "budget", "outcome", "pinned", "readonly", "warnings"]);
 	const file = physicalPath("session", "a/b.md", ctx);
 	assert.equal(file, join(root, "pi", "session", sessionId, "a", "b.md"));
 	assert.ok(existsSync(file), "the note is a real file under the session scope dir");
@@ -469,8 +469,8 @@ test("mutation receipts keep their existing shape outside named project notebook
 	const ctx = context(session);
 	const written = await call(captured, "notes_write", { address: "@project/decision", content: "body" }, ctx);
 	const updated = await call(captured, "notes_update", { address: "@project/decision", edits: [{ oldText: "body", newText: "changed" }] }, ctx);
-	assert.deepEqual(Object.keys(resultData<NotesWriteData>(written)).sort(), ["address", "outcome", "project_key"]);
-	assert.deepEqual(Object.keys(resultData<NotesUpdateData>(updated)).sort(), ["address", "change_kind", "project_key"]);
+	assert.deepEqual(Object.keys(resultData<NotesWriteData>(written)).sort(), ["address", "budget", "outcome", "pinned", "project_key", "readonly", "warnings"]);
+	assert.deepEqual(Object.keys(resultData<NotesUpdateData>(updated)).sort(), ["address", "budget", "change_kind", "pinned", "project_key", "readonly", "warnings"]);
 	for (const [name, result] of [["notes_write", written], ["notes_update", updated]] as const) {
 		assert.equal(Check(captured.tools.get(name)!.outputSchema as TSchema, result.structuredContent), true, `${name} keeps its ordinary project receipt`);
 	}
@@ -552,7 +552,7 @@ test("a read keeps its body window verbatim under the new presentation", async (
 	assert.equal(text.includes("chars: ["), false, "no parsed range block stands between the header and the body");
 	assert.equal(text.endsWith("\n\n[truncated; continue at offset_chars=4]"), true, "a limit-stopped window names the resume cursor");
 	const header = text.slice(0, text.indexOf("\n\n"));
-	assert.match(header, /^present\.md\norigin self \| created \d{4}-/, "identity and metadata lead, body first in the window itself");
+	assert.match(header, /^present\.md\npinned false \| budget 2048 \| readonly false \| origin self \| created \d{4}-/, "identity and metadata lead, body first in the window itself");
 
 	const whole = await call(captured, "notes_read", { address: "present.md" }, ctx);
 	const wholeText = whole.content[0]!.type === "text" ? whole.content[0]!.text : "";

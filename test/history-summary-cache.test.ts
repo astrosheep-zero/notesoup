@@ -11,7 +11,7 @@ import { cachedSessionRepresentative, historySummaryCacheRoot } from "../src/his
 import { projectHistory, type HistoryProjection } from "../src/history/history.js";
 import type { HistoryContext, HistoryCorpus } from "../src/history/corpus.js";
 import { historyList, historyRead } from "../src/tools/history.js";
-import type { Outcome } from "../src/tools/result.js";
+import type { Outcome } from "../src/result.js";
 
 const AT = "2026-10-06T01:02:03.000Z";
 const ROOT = "019a0000-0000-7000-8000-000000000001";

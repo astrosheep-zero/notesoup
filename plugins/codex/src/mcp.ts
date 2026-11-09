@@ -2,13 +2,15 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
-import { Check, Errors } from "typebox/value";
+import { Check } from "typebox/value";
+import { paramProblem } from "../../../src/tools/schema.js";
 import type { TSchema } from "typebox";
 import { notesList, notesRead, notesSearch, notesUpdate, notesWrite } from "../../../src/tools/notes.js";
 import { historyList, historyRead } from "../../../src/tools/history.js";
-import { wireResult, type Operation, type Outcome } from "../../../src/tools/result.js";
+import type { Outcome } from "../../../src/result.js";
+import { wireResult, type Operation } from "../../../src/tools/result.js";
 import { CodexIdentityError, notesIdentityFor, pluginDataRoot, readBinding, rootSessionIdOf, safeThreadId, turnModel, type ThreadBinding } from "./identity.js";
-import { readCodexHistory } from "./history.js";
+import { readCodexHistory } from "../../../src/history/codex.js";
 import { localHistoryCorpus } from "../../../src/history/local.js";
 import { readStartState } from "./state.js";
 import { notesToolContext } from "../../../src/tools/notes-context.js";
@@ -49,15 +51,6 @@ function successFor(bound: Bound, outcome: Outcome<unknown>): CallToolResult {
 		// A refusal stays a tool-level error so the model does not mistake it for data.
 		...(outcome.ok ? {} : { isError: true }),
 	};
-}
-
-/** The first schema violation, named by parameter so the model can fix that one field. */
-function paramProblem(schema: TSchema, params: unknown): string {
-	const first = Errors(schema, params).find((error) => error.keyword !== "boolean");
-	if (!first) return "unrecognized shape";
-	const extra = first.keyword === "additionalProperties" ? `: ${(first.params as { additionalProperties: string[] }).additionalProperties.join(", ")}` : "";
-	const field = first.instancePath.replace(/^\//, "").replaceAll("/", ".");
-	return `${field ? `${field} ` : ""}${first.message}${extra}`;
 }
 
 type NativeFacts = { threadId: string; rootSessionId: string; currentWindowId?: string };

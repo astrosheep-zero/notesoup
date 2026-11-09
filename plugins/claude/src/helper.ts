@@ -1,7 +1,8 @@
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import type { Static, TSchema } from "typebox";
-import { Check, Errors } from "typebox/value";
+import { Check } from "typebox/value";
+import { paramProblem } from "../../../src/tools/schema.js";
 import { notesList, notesRead, notesSearch, notesUpdate, notesWrite } from "../../../src/tools/notes.js";
 import { historyList, historyRead, type HistoryTextWrapper } from "../../../src/tools/history.js";
 import { localHistoryCorpus, type LocalHistoryOptions } from "../../../src/history/local.js";
@@ -30,16 +31,6 @@ type BoundOperation<TContext extends readonly unknown[]> = {
 function identity(input: ClaudeIdentityInput): NotesIdentity {
 	if (!input || typeof input !== "object" || typeof input.cwd !== "string") throw new Error("invalid identity");
 	return snapshotNotesIdentity({ home: input.home, sessionId: input.sessionId, projectKey: projectKey(input.cwd, input.home), agent: input.agent, model: input.model });
-}
-
-/** The first schema violation, named by parameter so the model can fix that one field. */
-function paramProblem(schema: TSchema, params: unknown): string {
-	// A false subschema reports "schema is false"; its parent's additionalProperties error names the field instead.
-	const first = Errors(schema, params).find((error) => error.keyword !== "boolean");
-	if (!first) return "unrecognized shape";
-	const extra = first.keyword === "additionalProperties" ? `: ${(first.params as { additionalProperties: string[] }).additionalProperties.join(", ")}` : "";
-	const field = first.instancePath.replace(/^\//, "").replaceAll("/", ".");
-	return `${field ? `${field} ` : ""}${first.message}${extra}`;
 }
 
 /** Bind shared execution/rendering to a host context; dispatch validates parameters before calling. */

@@ -12,7 +12,7 @@ import { loadNotesSnapshot } from "../src/boot/snapshot.js";
 import { NOTES_PROTOCOL_CLOSE_TAG, WINDOW_IDENTITY_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG } from "../src/boot/text.js";
 import { notesRead } from "../src/tools/notes.js";
 import { notesToolContext } from "../src/tools/notes-context.js";
-import { success } from "../src/tools/result.js";
+import { success } from "../src/result.js";
 import { createNotesStore } from "../src/notes/index.js";
 import { dshFixture } from "./helpers/dsh.js";
 import { decodeHistory } from "../plugins/dsh/history.js";

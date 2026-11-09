@@ -7,7 +7,7 @@ import { TOOL_OUTPUT_MAX_BYTES } from "../src/tools/output.js";
 import { earliestMatchOffsetChars } from "../src/text-match.js";
 import { historyList, historyRead } from "../src/tools/history.js";
 import { historyDocument, projectHistory, type DecodedHistoryItem } from "../src/history/history.js";
-import { HistoryPageSchema, selectPage, type HistoryPage } from "../src/history/query.js";
+import { CorpusCollector, HistoryPageSchema, selectPage, type HistoryPage } from "../src/history/query.js";
 import {
 	appendText,
 	assertWithinBudget,
@@ -275,6 +275,53 @@ test("a one-row page budget admits the newest candidate first", () => {
 	assert.deepEqual(keptSeqs(1), [3], "a budget for one row admits the newest candidate, not the oldest");
 	assert.deepEqual(keptSeqs(2), [2, 3], "a truncated prefix is the newest rows, delivered in chronological order");
 	assert.deepEqual(keptSeqs(1, "oldest"), [1], "from oldest keeps the other end when the budget is short");
+});
+
+test("query returns budget-failure facts while tools preserve single-session and corpus refusal text", async () => {
+	const projection = projectHistory([{ windowId: "w1", items: [{ seq: 1, windowId: "w1", role: "user", text: "message" }] }], 1, new Set([1]));
+	assert.deepEqual(selectPage(projection, {}, () => false, 100), { ok: false, pageTooLarge: { count: 1, multi: false } });
+	const collector = new CorpusCollector({});
+	collector.add("pi:budget", projection);
+	assert.deepEqual(collector.page(() => false, 100), { ok: false, pageTooLarge: { count: 1, multi: true } });
+	const context = {
+		current: () => projection,
+		corpus: { currentHarness: "pi" as const, async sessions() {
+			return [{ harness: "pi" as const, id: "budget", modifiedAt: 0, async load() { return { projection }; } }];
+		} },
+	};
+	const wrap = (text: string) => "x".repeat(TOOL_OUTPUT_MAX_BYTES + 1) + text;
+	for (const session of [undefined, "pi:budget", "*"]) {
+		const result = await historyList.execute({ session }, context, wrap);
+		const multi = session === "*";
+		const narrow = multi ? "narrow the session pattern, query, roles or `since`/`until`, or read one session/seq with `history_read`" : "narrow with `before_seq`/`after_seq` or `since`/`until`, pass `roles` to skip folding, or `history_read` one seq";
+		const message = `Even trimmed to their shortest, these 1 rows${multi ? "" : " and their folded runs"} fill the 32 KB a call can carry; ${narrow}.`;
+		assert.deepEqual(result, { ok: false, error: { code: "page_too_large", message } });
+		assert.equal(historyList.render(result), `error: page_too_large: ${message}`);
+	}
+});
+
+test("history page selection still charges host wrapping and session notices before delivering previews", async () => {
+	const text = `needle ${"😀".repeat(20_000)}`;
+	const projection = projectHistory([{ windowId: "w1", items: [{ seq: 1, windowId: "w1", role: "user", text }] }], 1, new Set([1]));
+	const notice = "notice ".repeat(100);
+	const context = {
+		current: () => projection,
+		corpus: { currentHarness: "pi" as const, async sessions() {
+			return [{ harness: "pi" as const, id: "wrapped", modifiedAt: 0, async load() { return { projection, notice }; } }];
+		} },
+	};
+	const wrap = (text: string) => "host ".repeat(200) + text;
+	for (const session of [undefined, "pi:wrapped", "*"]) {
+		const params = { session, query: "needle", max_chars_per_item: 50_000 };
+		const plain = await historyList.execute(params, context);
+		const wrapped = await historyList.execute(params, context, wrap);
+		assert.ok(plain.ok && wrapped.ok);
+		assert.ok(wrapped.data.items[0]!.content.length < plain.data.items[0]!.content.length);
+		assert.ok(text.startsWith(wrapped.data.items[0]!.content), "the preview is still verbatim");
+		if (session !== undefined) assert.ok(wrapped.data.notice?.includes(notice));
+		assert.ok(Buffer.byteLength(wrap(historyList.render(wrapped)), "utf8") <= TOOL_OUTPUT_MAX_BYTES);
+		assert.ok(Buffer.byteLength(JSON.stringify(wrapped.data), "utf8") <= TOOL_OUTPUT_MAX_BYTES);
+	}
 });
 
 test("conversation paging prepares ordered folds once, including during first-row shortening", () => {

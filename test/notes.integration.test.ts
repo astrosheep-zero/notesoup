@@ -1,5 +1,6 @@
 import { notesIdentityFromPi } from "../plugins/pi/notes/adapter.js";
 import { DEFAULT_BOOT_TOOL_NAMES } from "../src/boot/text.js";
+import { DEFAULT_NOTE_BUDGET } from "../src/notes/policy.js";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
@@ -10,7 +11,7 @@ import test from "node:test";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { loadNotesSnapshot } from "../src/boot/snapshot.js";
 import { renderBootBlock } from "../src/boot/render.js";
-import { MAP_BOOT_MAX_CHARS, MAPS_BLOCK, NOTES_PROTOCOL_CLOSE_TAG, NOTES_PROTOCOL_OPEN_TAG } from "../src/boot/text.js";
+import { MAPS_BLOCK, NOTES_PROTOCOL_CLOSE_TAG, NOTES_PROTOCOL_OPEN_TAG } from "../src/boot/text.js";
 import { PI_PRE_RESET_HINTS } from "../plugins/pi/text.js";
 import type { DreamBeginData } from "../src/tools/dream.js";
 import { localIso } from "../src/notes/frontmatter.js";
@@ -405,20 +406,19 @@ test("the boot block gives awake agents the notes file layout", async () => {
 	assert.ok(rendered.includes(`\n${PI_PRE_RESET_HINTS}\n${NOTES_PROTOCOL_CLOSE_TAG}`), "Pi's boot closes the protocol with the pre-reset hints");
 });
 
-test("the boot binds its tools and bounds an over-cap MAP with a lookup pointer", async () => {
+test("the boot binds its tools and injects an over-budget MAP whole with a warning", async () => {
 	const session = manager();
 	const captured = makeExtension(session);
 	const ctx = context(session);
-	await call(captured, "notes_write", { address: "MAP.md", content: "M".repeat(MAP_BOOT_MAX_CHARS + 10) }, ctx);
+	await call(captured, "notes_write", { address: "MAP.md", content: "M".repeat(DEFAULT_NOTE_BUDGET + 10) }, ctx);
 	await call(captured, "notes_write", { address: "CHEATSHEET.md", content: "REMEMBER_THIS_RULE" }, ctx);
 	const rendered = await explicitBoot(ctx, "pcw:test:root", undefined);
 
 	for (const tool of ["notes_*", "history_*", "get_context_remaining", "empty_brain"]) {
 		assert.ok(rendered.includes(`\`${tool}\``), `${tool} is bound in the protocol`);
 	}
-	assert.ok(rendered.includes("M".repeat(MAP_BOOT_MAX_CHARS)), "the existing MAP cap keeps a bounded prefix");
-	assert.equal(rendered.includes("M".repeat(MAP_BOOT_MAX_CHARS + 1)), false, "the over-cap suffix is not inlined");
-	assert.ok(rendered.includes("`MAP.md`"), "the full MAP remains available by address");
+	assert.ok(rendered.includes("M".repeat(DEFAULT_NOTE_BUDGET + 10)), "the full MAP is inlined");
+	assert.match(rendered, /Warning: note body is 2058 Unicode code points, over budget 2048/);
 	assert.ok(rendered.includes("CHEATSHEET.md\n\n  REMEMBER_THIS_RULE\n\nMAP.md\n\n"), "a real stored cheatsheet is pinned before the map");
 	assert.equal(/CHEATSHEET\.md ·/.test(rendered), false, "the stored cheatsheet takes no recent seat");
 	for (const retired of ["history_list", "history_read"]) {
@@ -440,7 +440,7 @@ test("an over-budget note is delivered as a bounded prefix and resumed by next_o
 	assert.equal(first.content.includes("…"), false, "the window text is a plain prefix with no marker");
 	assert.ok(first.content.startsWith("H"), "the body is delivered first, with no frontmatter in the way");
 	assert.equal(first.content.length, 12000, "the default window is the full requested count");
-	assert.deepEqual(Object.keys(resultData<NotesReadData>(rawFirst)).sort(), ["address", "metadata", "next_offset_chars", "text", "total_chars"], "read fields are flat");
+	assert.deepEqual(Object.keys(resultData<NotesReadData>(rawFirst)).sort(), ["address", "metadata", "next_offset_chars", "text", "total_chars", "warnings"], "read fields are flat");
 	assert.equal("access_count" in resultData<NotesReadData>(rawFirst).metadata, false, "access bookkeeping stays in storage");
 	assert.equal(textOf(rawFirst).endsWith(`\n\n[truncated; continue at offset_chars=${first.next_offset_chars}]`), true, "the footer names the resume cursor");
 
@@ -549,7 +549,7 @@ test("notes_search scopes by glob; a non-matching glob is an empty page, not an 
 	assert.deepEqual(none.files, [], "a non-matching glob is an empty page, not a refusal");
 });
 
-test("a large mutation keeps a one-line receipt while details.diff carries the UI diff", async () => {
+test("a large mutation keeps a receipt and budget warning while details.diff carries the UI diff", async () => {
 	const session = manager();
 	const captured = makeExtension(session);
 	const ctx = context(session);
@@ -560,7 +560,7 @@ test("a large mutation keeps a one-line receipt while details.diff carries the U
 	assertWithinBudget(raw, "bulk edit receipt");
 	const update = resultData<NotesUpdateData>(raw);
 	assert.equal(update.change_kind, "body");
-	assert.equal(textOf(raw), "updated bulk-edit.md", "model-facing text is the one-line receipt without redundant diff");
+	assert.equal(textOf(raw), "updated bulk-edit.md | pinned false | budget 2048 | readonly false\nWarning: note body is 451500 Unicode code points, over budget 2048; the full body is kept.", "model-facing text carries the receipt and warning without repeating the diff");
 	assert.match((raw.details as { diff?: string } | undefined)?.diff ?? "", new RegExp(`\\+.*?${"b".repeat(300)}`), "details.diff carries the UI diff");
 
 	const body = resultRead(await call(captured, "notes_read", { address: "bulk-edit.md", max_chars: 300 }, ctx)).content;

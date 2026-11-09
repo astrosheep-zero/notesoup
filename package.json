@@ -1,6 +1,6 @@
 {
   "name": "notesoup",
-  "version": "0.57.4",
+  "version": "0.58.0",
   "type": "module",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
@@ -66,22 +66,22 @@
     "prepack": "npm run build"
   },
   "peerDependencies": {
-    "typebox": "*",
-    "@earendil-works/pi-agent-core": "*",
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
     "@deepseek-ai/cordis": "*",
     "@deepseek-ai/cordis-plugin-loader": "*",
     "@deepseek-ai/dsh-agent": "*",
-    "@deepseek-ai/dsh-compaction": "*",
     "@deepseek-ai/dsh-commands": "*",
+    "@deepseek-ai/dsh-compaction": "*",
     "@deepseek-ai/dsh-llm": "*",
     "@deepseek-ai/dsh-session": "*",
     "@deepseek-ai/dsh-session-query": "*",
     "@deepseek-ai/dsh-system-prompt": "*",
     "@deepseek-ai/dsh-token-meter": "*",
-    "@deepseek-ai/dsh-tools": "*"
+    "@deepseek-ai/dsh-tools": "*",
+    "@earendil-works/pi-agent-core": "^1.5.0",
+    "@earendil-works/pi-ai": "^1.5.0",
+    "@earendil-works/pi-coding-agent": "^1.5.0",
+    "@earendil-works/pi-tui": "^1.5.0",
+    "typebox": "*"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-agent-core": {
@@ -132,10 +132,10 @@
   },
   "devDependencies": {
     "@deepseek-ai/dsh": "0.2.1-alpha.2",
-    "@earendil-works/pi-agent-core": "^1.0.0",
-    "@earendil-works/pi-ai": "^1.0.0",
-    "@earendil-works/pi-coding-agent": "^1.0.0",
-    "@earendil-works/pi-tui": "1.0.0",
+    "@earendil-works/pi-agent-core": "1.5.0",
+    "@earendil-works/pi-ai": "1.5.0",
+    "@earendil-works/pi-coding-agent": "1.5.0",
+    "@earendil-works/pi-tui": "1.5.0",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@types/node": "^22.19.19",
     "esbuild": "^0.28.2",

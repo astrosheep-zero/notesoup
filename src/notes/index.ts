@@ -1,4 +1,5 @@
 export { createNotesStore, noteIdentity } from "./store.js";
+export { effectiveNotePolicy, type NotePolicy, type NotePolicyFields } from "./policy.js";
 export { NoteError, type NoteErrorCode } from "./errors.js";
 export { projectKey } from "./project-namespace.js";
 export { slugify } from "./paths.js";

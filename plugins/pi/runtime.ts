@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resetBoundaryCommitted } from "./reset/committed.js";
-import { getCurrentSystemMessage, Type } from "@earendil-works/pi-ai";
+import { getCurrentSystemMessage } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { VERSION, defineTool, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, type SettingsManager } from "@earendil-works/pi-coding-agent";
 import { registerBudget } from "./budget.js";
 import { DREAM_NAMESPACE, HISTORY_NAMESPACE, NOTES_NAMESPACE, output } from "./tool-result.js";
@@ -9,7 +10,9 @@ import { currentReset, currentWindowId, isCheckpointBackedReset, isWindowBoot, i
 import { registerResetLifecycle } from "./reset/lifecycle.js";
 import { buildResetDrafts, LAST_WORD_ADVERTISED_CHARS, MAX_LAST_WORD_CHARS, repairResetTail, sanitizeLastWord } from "./reset/artifacts.js";
 import { BOOT_TYPE, MANUAL_WIPE_TYPE } from "./entries.js";
-import { commandWarningContent } from "./text.js";
+import { commandWarningContent, PI_PRE_RESET_HINTS } from "./text.js";
+import { DEFAULT_BOOT_TOOL_NAMES, MAPS_BLOCK, renderProtocolBlock } from "../../src/boot/text.js";
+import { agentSlug } from "./notes/adapter.js";
 import { buildBootMessage, sendBoot, type IncompleteNotesNotifier } from "./boot.js";
 import { maybeSendMarker } from "./marker.js";
 import { nextHistorySeq } from "./history.js";
@@ -82,6 +85,7 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 	};
 	pi.on("before_agent_start", (event, ctx) => {
 		event.systemPromptOptions.sections.notesoup_tools = notesoupTools;
+		event.systemPromptOptions.sections.notesoup_protocol = `${renderProtocolBlock({ ...DEFAULT_BOOT_TOOL_NAMES, preResetHints: PI_PRE_RESET_HINTS }, agentSlug())}\n\n${MAPS_BLOCK}`;
 		if (enabled) maybeSendMarker(pi, ctx);
 	});
 	pi.on("turn_start", (_event, ctx) => {

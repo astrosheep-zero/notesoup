@@ -4,6 +4,7 @@ import { estimateContextTokens } from "./estimate.js";
 import { convertToLlm, type CustomEntry, type ExtensionContext, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import { BOOT_TYPE, RESET_MARKER_TYPE } from "./entries.js";
 import type { ResetOrigin } from "../../src/budget/text.js";
+import { NOTES_PROTOCOL_OPEN_TAG, NOTES_PROTOCOL_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG } from "../../src/boot/text.js";
 import type { SessionReader } from "./session-reader.js";
 
 export type WindowMarkerData = { readonly windowId: string; readonly origin?: ResetOrigin };
@@ -99,6 +100,23 @@ export function isWindowBootEntry(entry: SessionEntry, windowId: string): boolea
 	return entry.type === "custom_message" && entry.customType === BOOT_TYPE && hasWindowId(entry.details, windowId);
 }
 
+/** Strip only the old boot's leading teaching blocks, never tags quoted inside its notes. */
+function withoutBootTeaching(message: AgentMessage): AgentMessage {
+	if (message.role !== "custom" || typeof message.content !== "string" || !message.content.startsWith(`${WINDOW_IDENTITY_OPEN_TAG}\n`)) return message;
+	const identityEnd = message.content.indexOf(`\n${WINDOW_IDENTITY_CLOSE_TAG}\n\n`);
+	if (identityEnd < 0) return message;
+	const start = identityEnd + `\n${WINDOW_IDENTITY_CLOSE_TAG}\n\n`.length;
+	let rest = message.content.slice(start);
+	for (const [open, close] of [[NOTES_PROTOCOL_OPEN_TAG, NOTES_PROTOCOL_CLOSE_TAG], ["<notesoup:maps>", "</notesoup:maps>"]]) {
+		if (!rest.startsWith(`${open}\n`)) return message;
+		const end = rest.indexOf(`\n${close}\n\n`);
+		if (end < 0) return message;
+		rest = rest.slice(end + `\n${close}\n\n`.length);
+	}
+	if (!rest.startsWith("YOUR NOTES\n──────────\n")) return message;
+	return { ...message, content: message.content.slice(0, start) + rest };
+}
+
 /**
  * The durable marker selects a boot message by identity, never by wall-clock time.
  * The boot is the first conversation message of the window. Folding only its prefix
@@ -109,6 +127,7 @@ export function projectWindow(messages: AgentMessage[], windowId: string): Agent
 	if (cut < 0) throw new Error(`Missing boot for context window ${windowId}`);
 	const head = getCurrentSystemMessage(messages.slice(0, cut));
 	const suffix = messages.slice(cut);
+	suffix[0] = withoutBootTeaching(suffix[0]!);
 	return head ? [head, ...suffix] : suffix;
 }
 
@@ -120,7 +139,7 @@ export function projectWindow(messages: AgentMessage[], windowId: string): Agent
 export function projectRootWindow(messages: AgentMessage[], windowId: string): AgentMessage[] {
 	const matching = messages.filter((message) => isWindowBoot(message, windowId));
 	if (matching.length === 0) return messages;
-	const activeBoot = matching[matching.length - 1];
+	const activeBoot = withoutBootTeaching(matching[matching.length - 1]!);
 	const firstBoot = messages.findIndex((message) => isWindowBoot(message));
 	const withoutBoots = messages.filter((message) => !isWindowBoot(message));
 	return [...withoutBoots.slice(0, firstBoot), activeBoot, ...withoutBoots.slice(firstBoot)];

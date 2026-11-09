@@ -2,7 +2,7 @@
 import { DEFAULT_BOOT_TOOL_NAMES } from "../../../src/boot/text.js";
 import { renderBootBlock, type BootWindowTree } from "../../../src/boot/render.js";
 import type { NotesSnapshot } from "../../../src/boot/snapshot.js";
-import { readCodexTranscript, type CodexRecord, type CodexTranscriptSource, type CodexTranscriptState } from "./transcript.js";
+import { readCodexTranscript, type CodexRecord, type CodexTranscriptSource, type CodexTranscriptState } from "../../../src/history/codex-transcript.js";
 import { CODEX_PRE_RESET_HINTS, CODEX_WIPE_SENTENCE } from "./text.js";
 
 export type CodexSource = CodexTranscriptSource;

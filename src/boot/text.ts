@@ -1,8 +1,5 @@
 /** Each shelf shows this many of its own freshest pages beneath its pinned pages. */
 export const SHELF_FRESH_LIMIT = 3;
-/** Each pinned page has its own code-point cap; overflow keeps a lookup pointer. */
-export const CHEATSHEET_BOOT_MAX_CHARS = 1536;
-export const MAP_BOOT_MAX_CHARS = 4096;
 export const WINDOW_IDENTITY_OPEN_TAG = "<notesoup:window_identity>";
 export const WINDOW_IDENTITY_CLOSE_TAG = "</notesoup:window_identity>";
 export const NOTES_PROTOCOL_OPEN_TAG = "<notesoup:notes_protocol>";
@@ -20,8 +17,8 @@ const PROTOCOL_SELF_NAMELESS = `${PROTOCOL_SELF_NAMED} Except you have no name (
 
 /**
  * Static protocol teaching adapted from Codex's token_budget.guidance_message to
- * notesoup's tool names. It lives once per window in the persisted boot block;
- * it is never re-injected, so it stays cache-stable at the head of the window.
+ * notesoup's tool names. Pi supplies it as a named system section; other hosts
+ * retain it in their persisted boot block. Neither path reads note content.
  *
  * The reported room reaches zero at the hard-reserve wipe line.
  */
@@ -59,12 +56,18 @@ Any other @ address is fake. End of discussion. @ addresses are not file paths: 
 ${NOTES_PROTOCOL_CLOSE_TAG}`;
 
 /**
- * The two pinned pages are taught once per window between the protocol and the notes index.
+ * Default pinned pages and per-note policy are taught between the protocol and the notes index.
  */
 export const MAPS_BLOCK = `<notesoup:maps>
-Every notebook's root can hold two pages that never wait on a shelf: \`CHEATSHEET.md\` and \`MAP.md\`.
-Both get jammed straight into your brain the moment you wake up. No asking, no skipping. Whoever
-wakes up next reads them, and next is you. So keep them short, and keep them true.
+Every notebook's root has two default pins: \`CHEATSHEET.md\` and \`MAP.md\`.
+Pinned pages get jammed straight into your brain the moment you wake up. Whoever wakes up next
+reads them, and next is you. So keep them short, and keep them true.
+
+Set \`pinned\`, \`budget\`, and \`readonly\` with the note tools or frontmatter. Each notebook allows five
+live pins, including the defaults; \`pinned:false\` unpins even a default page. Every page's budget
+starts at 2048 Unicode code points; set a positive integer to change it. Going over warns but saves,
+and pinned bodies arrive whole, not cut short. \`readonly:true\` is a soft lock, not security;
+explicitly set \`readonly:false\` to unlock, on its own or with your changes.
 
 - **\`CHEATSHEET.md\`** holds what you'll want next time — a rule, a warning, a grudge, a name,
   a phone number you'll regret losing. Nobody grades it. Keep it to five lines, or it grows fat

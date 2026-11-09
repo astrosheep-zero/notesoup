@@ -10,7 +10,7 @@ import { createNotesStore, type NotesIdentity } from "../src/notes/index.js";
 import { assertAddress } from "../src/notes/address.js";
 import { normalizeRemote, projectKey } from "../src/notes/project-namespace.js";
 import { notesList, notesRead, notesSearch, notesUpdate, notesWrite } from "../src/tools/notes.js";
-import { success, type Outcome } from "../src/tools/result.js";
+import { success, type Outcome } from "../src/result.js";
 import { notesToolContext } from "../src/tools/notes-context.js";
 
 const toolContext = (identity: NotesIdentity) => notesToolContext(identity, "/work/current");

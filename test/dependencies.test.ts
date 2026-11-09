@@ -55,11 +55,48 @@ test("the host-neutral core resolves without any SDK or plugin dependency", () =
 		assert.equal(manifest.peerDependencies?.[name], "*", `${name} is a host-supplied peer dependency`);
 		assert.equal(typeof manifest.devDependencies?.[name], "string", `${name} is pinned in devDependencies`);
 	}
-	for (const name of ["@earendil-works/pi-agent-core", "@earendil-works/pi-ai", "@earendil-works/pi-coding-agent"]) {
+	const piVersion = manifest.devDependencies["@earendil-works/pi-coding-agent"];
+	for (const name of ["@earendil-works/pi-agent-core", "@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"]) {
+		assert.equal(manifest.devDependencies[name], piVersion, `${name} uses the same exact development release`);
 		assert.equal(manifest.dependencies?.[name], undefined, `${name} is supplied by the host`);
-		assert.equal(manifest.peerDependencies[name], "*", `${name} follows Pi's host dependency contract`);
+		assert.equal(manifest.peerDependencies[name], `^${piVersion}`, `${name} requires the supported Pi host release`);
 		assert.equal(manifest.peerDependenciesMeta[name]?.optional, true, `${name} stays an optional peer`);
 	}
+});
+
+test("history resolves without a direct or transitive tool-layer dependency", () => {
+	const root = repository();
+	const config = ts.readConfigFile(join(root, "tsconfig.json"), ts.sys.readFile);
+	assert.equal(config.error, undefined);
+	const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root);
+	assert.deepEqual(parsed.errors, []);
+	assert.deepEqual(dependencyViolations(root, sources(join(root, "src/history")), parsed.options, new Set(["typebox"])), []);
+});
+
+test("the resolved history boundary rejects direct and indirect tool edges even through a previously visited shared module", t => {
+	const root = mkdtempSync(join(tmpdir(), "notesoup-history-boundary-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const put = (path: string, text: string) => { mkdirSync(dirname(join(root, path)), { recursive: true }); writeFileSync(join(root, path), text); };
+	put("package.json", '{"type":"module"}');
+	put("src/tools/result.ts", "export type Value = string; export const value = 1;");
+	put("src/shared.ts", 'export type { Value } from "@tool-result";');
+	const fixtureOptions = { ...options, baseUrl: root, paths: { "@tool-result": ["src/tools/result.ts"] } };
+	for (const edge of [
+		'import type { Value } from "../shared.js"; export type Query = Value;',
+		'export type { Value } from "../shared.js";',
+		'export const load = () => import("../shared.js");',
+		'export type Query = import("../shared.js").Value;',
+	]) {
+		put("src/history/query.ts", edge);
+		assert.deepEqual(dependencyViolations(root, ["src/shared.ts", "src/history/query.ts"], fixtureOptions, new Set()), [
+			"src/history/query.ts -> src/shared.ts -> src/tools/result.ts",
+		]);
+	}
+	put("src/history/query.ts", 'export { value } from "@tool-result";');
+	assert.deepEqual(dependencyViolations(root, ["src/history/query.ts"], fixtureOptions, new Set()), ["src/history/query.ts -> src/tools/result.ts"]);
+	put("src/shared.ts", 'export type Value = string;');
+	put("src/history/query.ts", 'export type { Value } from "../shared.js";');
+	assert.deepEqual(dependencyViolations(root, ["src/history/query.ts"], fixtureOptions, new Set()), []);
 });
 
 test("a clean production tarball install loads both public entries", async (t) => {
@@ -220,7 +257,7 @@ test("AST guard sees every literal module edge, not import-like prose or comment
 
 test("the core entry is host-neutral and the Pi plugin entry owns the extension", () => {
 	assert.deepEqual(Object.keys(core).sort(), [
-		"DEFAULT_BOOT_TOOL_NAMES", "NoteError", "createNotesStore", "deriveThresholds", "historyList", "historyRead",
+		"DEFAULT_BOOT_TOOL_NAMES", "NoteError", "createNotesStore", "deriveThresholds", "effectiveNotePolicy", "historyList", "historyRead",
 		"loadNotesSnapshot", "noteIdentity", "notesIdentityForCall", "notesList", "notesRead", "notesSearch", "notesToolContext", "notesUpdate", "notesWrite", "projectHistory",
 		"projectKey", "remainingBudget", "renderBootBlock", "renderProtocolBlock", "selectContinuation", "slugify",
 		"tokenBudgetGuidance", "unavailableNotesSnapshot", "warningPrompt", "WARNING_BODY",

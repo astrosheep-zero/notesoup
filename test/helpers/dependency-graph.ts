@@ -49,6 +49,8 @@ export function dependencyViolations(root: string, entries: string[], options: t
 	const pluginRoot = resolve(root, "plugins");
 	const notesRoot = resolve(sourceRoot, "notes");
 	const notesEntry = resolve(sourceRoot, "notes/index.ts");
+	const historyRoot = resolve(sourceRoot, "history");
+	const toolsRoot = resolve(sourceRoot, "tools");
 	const display = (path: string) => relative(root, path).split(sep).join("/");
 	const local = (file: string) => file.startsWith(sourceRoot + sep) || file.startsWith(pluginRoot + sep);
 	const adapter = (file: string): Adapter | undefined => {
@@ -56,15 +58,18 @@ export function dependencyViolations(root: string, entries: string[], options: t
 		return /^plugins\/(pi|claude|dsh|codex)\//.exec(path)?.[1] as Adapter | undefined
 			?? packageAdapter(file.split(sep).join("/").split("/node_modules/").at(-1)!);
 	};
-	const walk = (file: string, chain: string[]): void => {
+	const walk = (file: string, chain: string[], fromHistory = false): void => {
 		file = realpathSync(file);
-		if (visited.has(file)) return;
-		visited.add(file);
+		const history = fromHistory || file.startsWith(historyRoot + sep);
+		// A shared module may be legal on its own but forbidden when reached from history.
+		const key = `${history}:${file}`;
+		if (visited.has(key)) return;
+		visited.add(key);
 		const here = [...chain, display(file)];
 		const owner = adapter(file);
 		const source = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
 		const emitted = new Set(local(file) ? moduleReferences(source, true) : []);
-		if (local(file)) runtime.set(file, []);
+		if (local(file) && !runtime.has(file)) runtime.set(file, []);
 		for (const specifier of moduleReferences(source)) {
 			if (specifier.startsWith("node:") || builtins.has(specifier)) continue;
 			const sdk = packageAdapter(specifier);
@@ -73,7 +78,8 @@ export function dependencyViolations(root: string, entries: string[], options: t
 			if (!resolution) { violations.push([...here, `unresolved ${specifier}`].join(" -> ")); continue; }
 			const target = realpathSync(resolution.resolvedFileName);
 			const targetOwner = adapter(target);
-			if ((targetOwner && targetOwner !== owner) ||
+			if ((history && target.startsWith(toolsRoot + sep)) ||
+				(targetOwner && targetOwner !== owner) ||
 				(owner && target.startsWith(notesRoot + sep) && target !== notesEntry) ||
 				(owner === "dsh" && target.startsWith(resolve(sourceRoot, "dream") + sep)) ||
 				(!owner && target.startsWith(pluginRoot + sep))) {
@@ -84,7 +90,7 @@ export function dependencyViolations(root: string, entries: string[], options: t
 				violations.push([...here, `undeclared runtime dependency ${specifier}`].join(" -> "));
 			}
 			if (emitted.has(specifier) && local(target)) runtime.get(file)!.push(target);
-			if (!targetOwner || local(target)) walk(target, here);
+			if (!targetOwner || local(target)) walk(target, here, history);
 		}
 	};
 	for (const entry of entries) walk(resolve(root, entry), []);

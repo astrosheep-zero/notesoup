@@ -6,9 +6,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { historyFromSession } from "../plugins/pi/history.js";
 import { BOOT_TYPE, GUIDANCE_TYPE, RESET_MARKER_TYPE } from "../plugins/pi/entries.js";
-import { NOTES_PROTOCOL_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG } from "../src/boot/text.js";
+import { MAPS_BLOCK, NOTES_PROTOCOL_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG } from "../src/boot/text.js";
+import { rootWindowId } from "../plugins/pi/window.js";
 import { FORCED_CONTINUATIONS, NORMAL_CONTINUATIONS } from "../src/budget/text.js";
 import { listNotes, physicalPath } from "./helpers/notes.js";
 import { CONTINUATION_TYPE, MANUAL_WIPE_TYPE } from "../plugins/pi/entries.js";
@@ -131,7 +133,8 @@ test("the root boot and reset boot carry durable window identity", async () => {
 	const decisionsMeta = (await listNotes(ctx)).find((row) => row.path === "decisions.md")?.meta;
 	assert.ok(decisionsMeta);
 	assert.match(rootText, /decisions\.md · (?:just now|\d+s ago)/, "boot note metadata carries a relative update time");
-	assert.ok(rootText.includes(NOTES_PROTOCOL_OPEN_TAG));
+	assert.equal(rootText.includes(NOTES_PROTOCOL_OPEN_TAG), false, "fixed teaching is not part of the user boot");
+	assert.equal(rootText.includes(MAPS_BLOCK), false);
 
 	// Reset: the marker and boot are committed together at the turn boundary.
 	await call(captured, "empty_brain", {}, ctx);
@@ -149,9 +152,34 @@ test("the root boot and reset boot carry durable window identity", async () => {
 	assert.ok(resetBoot && resetBoot.type === "custom_message");
 	assert.equal((resetBoot.details as { windowId: string }).windowId, (marker.data as { windowId: string }).windowId);
 	assertBootHistory(String(resetBoot.content), historyFromSession(ctx));
+	assert.equal(String(resetBoot.content).includes(NOTES_PROTOCOL_OPEN_TAG), false);
 	const continuation = entries.find((entry) => entry.type === "custom_message" && entry.customType === CONTINUATION_TYPE);
 	assert.ok(continuation && continuation.type === "custom_message" && continuation.display === false, "the resumed run is represented by one hidden continuation");
 	assert.ok(NORMAL_CONTINUATIONS.includes(String(continuation.content)), "a tool-requested reset draws the normal handoff");
+});
+
+test("resuming old root/reset boots removes only top-level teaching in projection, preserving notes and raw history", async () => {
+	for (const reset of [false, true]) {
+		const sm = manager(), captured = makeExtension(sm), ctx = context(sm);
+		const noteBody = `Quoted teaching is notes data:\n${NOTES_PROTOCOL_OPEN_TAG}\nkeep this note's protocol quote\n</notesoup:notes_protocol>\n${MAPS_BLOCK}`;
+		await call(captured, "notes_write", { address: "MAP.md", content: noteBody }, ctx);
+		const windowId = reset ? "pcw:resume:legacy" : rootWindowId(sm.getSessionId());
+		if (reset) sm.appendCustomEntry(RESET_MARKER_TYPE, { windowId });
+		const oldBoot = await explicitBoot(ctx, windowId, undefined);
+		sm.appendCustomMessageEntry(BOOT_TYPE, oldBoot, false, { windowId });
+		appendText(sm, "user", oldBoot); // An ordinary user's identical quoted block is not a boot.
+		const before = sm.getBranch();
+		const expected = oldBoot.slice(0, oldBoot.indexOf(WINDOW_IDENTITY_CLOSE_TAG) + WINDOW_IDENTITY_CLOSE_TAG.length) + "\n\n" + oldBoot.slice(oldBoot.indexOf("YOUR NOTES\n"));
+		const projected = await runContextWithSystemHook(captured, ctx, [{ role: "system", content: "REAL SYSTEM", timestamp: 0 }, ...sm.buildSessionProjection().messages]);
+		const messages = projected?.messages as AgentMessage[];
+		const boot = messages.find((message) => message.role === "custom" && message.customType === BOOT_TYPE);
+		assert.equal(boot?.role === "custom" ? boot.content : undefined, expected);
+		assert.ok(expected.includes("keep this note's protocol quote") && expected.includes("  <notesoup:maps>\n"), "notes retain same-name tags verbatim");
+		assert.ok(messages.some((message) => message.role === "user" && JSON.stringify(message.content) === JSON.stringify([{ type: "text", text: oldBoot }])), "ordinary user content is not rewritten");
+		assert.deepEqual(sm.getBranch(), before, "projection never migrates or edits the persisted boot/history");
+		const persisted = sm.getBranch().find((entry) => entry.type === "custom_message" && entry.customType === BOOT_TYPE);
+		assert.equal(persisted?.type === "custom_message" ? persisted.content : undefined, oldBoot);
+	}
 });
 
 test("an empty root boot starts at the first projected seq", async () => {

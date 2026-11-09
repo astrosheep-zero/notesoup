@@ -8,7 +8,7 @@ import { createNotesStore, projectKey, snapshotNotesIdentity, type NotesIdentity
 import { parseNote } from "../src/notes/frontmatter.js";
 import { notesList, notesRead, notesSearch, notesUpdate, notesWrite } from "../src/tools/notes.js";
 import { notesToolContext } from "../src/tools/notes-context.js";
-import type { Outcome } from "../src/tools/result.js";
+import type { Outcome } from "../src/result.js";
 
 function fixture(t: TestContext) {
 	const root = mkdtempSync(join(tmpdir(), "notesoup-notes-cwd-"));

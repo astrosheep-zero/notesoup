@@ -30,7 +30,8 @@ import { agentSlug, modelSlug } from "../../plugins/pi/notes/adapter.js";
 import type { HistoryProjection } from "../../src/history/history.js";
 import { rootWindowId } from "../../plugins/pi/window.js";
 import { TOOL_OUTPUT_MAX_BYTES } from "../../src/tools/output.js";
-import { structuredBytes, type OperationError, type TextWindow } from "../../src/tools/result.js";
+import type { OperationError } from "../../src/result.js";
+import { structuredBytes, type TextWindow } from "../../src/tools/result.js";
 
 let defaultCwd = "/private/tmp/notesoup-test-cwd";
 let registerTempPath: ((path: string) => void) | undefined;

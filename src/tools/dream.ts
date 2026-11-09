@@ -5,7 +5,8 @@ import { createNotesStore, noteIdentity, type NoteRow, type NotesIdentity } from
 import { projectNamespaces } from "../notes/project-namespace.js";
 import { gitCommit } from "../dream/git.js";
 import { acquireDreamLock, dreamLockPath, releaseDreamLock, type DreamLock } from "../dream/lock.js";
-import { failure, renderOutcome, resultSchema, success, type Outcome } from "./result.js";
+import { failure, success, type Outcome } from "../result.js";
+import { renderOutcome, resultSchema } from "./result.js";
 import { failureOf, listedFile, ListedFileSchema, NoteIdentitySchema, renderListData, snapshot, SnapshotSchema } from "./notes.js";
 
 /** The one open dream per session; the host owns where it lives. */

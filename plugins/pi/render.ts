@@ -1,7 +1,8 @@
-/** Pi TUI renderers for notesoup's own tools: collapsed one-line slips, expandable bodies. */
+/** Pi TUI renderers: compact slips with visible policy/warnings, expandable bodies. */
 import { renderDiff, type AgentToolResult, type Theme } from "@earendil-works/pi-coding-agent";
-import { Text, TruncatedText, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { Container, Text, TruncatedText, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import type { Static } from "typebox";
+import type { NotePolicy } from "../../src/notes/index.js";
 import type { NotesReadData, NotesUpdateData, NotesWriteData } from "../../src/tools/notes.js";
 import { notesReadParameters, notesUpdateParameters, notesWriteParameters } from "../../src/tools/notes.js";
 
@@ -61,6 +62,20 @@ function boundedLines(text: string, theme: Theme): string {
 	return `${lines.slice(0, EXPANDED_LINE_CAP).join("\n")}\n${theme.fg("dim", `… ${lines.length - EXPANDED_LINE_CAP} more lines`)}`;
 }
 
+/** Keep policy and warnings outside the clipped summary and expandable body, even when collapsed.
+ * Older persisted receipts may have neither; don't invent policy for those results.
+ */
+function noteResult(head: string, policy: Partial<NotePolicy> | undefined, warnings: string[] | undefined, expanded: boolean, body: string | undefined, theme: Theme): Component {
+	const result = new Container();
+	result.addChild(expanded ? new Text(head, 0, 0) : new TruncatedText(head, 0, 0));
+	if (policy?.pinned !== undefined && policy.budget !== undefined && policy.readonly !== undefined) {
+		result.addChild(new Text(theme.fg("dim", `pinned ${policy.pinned} | budget ${policy.budget} | readonly ${policy.readonly}`), 0, 0));
+	}
+	for (const warning of warnings ?? []) result.addChild(new Text(theme.fg("warning", warning), 0, 0));
+	if (expanded && body) result.addChild(new Text(`\n${body}`, 0, 0));
+	return result;
+}
+
 export type NotesWriteArgs = Static<typeof notesWriteParameters>;
 export const notesWriteRenderers = {
 	renderCall: (args: NotesWriteArgs, theme: Theme): Component => callLine(theme, "notes_write", args.address),
@@ -71,8 +86,7 @@ export const notesWriteRenderers = {
 		const content = typeof context.args?.content === "string" ? context.args.content : "";
 		const qualifier = data.outcome === "created" ? "" : theme.fg("dim", ` · ${data.outcome}`);
 		const head = `wrote ${addressText(theme, data.address)}${qualifier}${theme.fg("dim", ` · ${Array.from(content).length} chars`)}`;
-		if (!options.expanded) return new TruncatedText(head, 0, 0);
-		return new Text(`${head}\n\n${boundedLines(content, theme)}`, 0, 0);
+		return noteResult(head, data, data.warnings, options.expanded, options.expanded ? boundedLines(content, theme) : undefined, theme);
 	},
 };
 
@@ -105,8 +119,7 @@ export const notesUpdateRenderers = {
 			const peek = firstAddedLine(diff);
 			if (peek !== undefined && peek !== "") head += theme.fg("dim", " · ") + theme.fg("toolDiffAdded", `+ ${peek}`);
 		}
-		if (!options.expanded) return new TruncatedText(head, 0, 0);
-		return new Text(diff !== "" ? `${head}\n\n${renderDiff(diff)}` : head, 0, 0);
+		return noteResult(head, data, data.warnings, options.expanded, options.expanded && diff !== "" ? renderDiff(diff) : undefined, theme);
 	},
 };
 
@@ -122,9 +135,8 @@ export const notesReadRenderers = {
 		let head = `read ${addressText(theme, data.address)}${theme.fg("dim", ` · ${data.total_chars} chars${truncated ? " · truncated" : ""}`)}`;
 		const peek = data.text.split("\n").find((line) => line.trim() !== "");
 		if (peek !== undefined) head += theme.fg("dim", ` — ${peek.trim()}`);
-		if (!options.expanded) return new TruncatedText(head, 0, 0);
 		const tail = truncated ? `\n${theme.fg("dim", `… continue at offset_chars=${data.next_offset_chars}`)}` : "";
-		return new Text(`${head}\n\n${boundedLines(data.text, theme)}${tail}`, 0, 0);
+		return noteResult(head, data.metadata, data.warnings, options.expanded, options.expanded ? `${boundedLines(data.text, theme)}${tail}` : undefined, theme);
 	},
 };
 

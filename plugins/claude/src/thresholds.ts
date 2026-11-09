@@ -64,21 +64,11 @@ function settingFlag(settings: unknown): boolean | undefined {
  * smallest present value keeps notesoup's reset ahead of whichever one Claude would use.
  */
 function configuredWindow(settings: unknown, env: Record<string, unknown>, model: unknown): number | undefined {
-	const windows: number[] = [];
-	const fromEnv = positiveNumber(env.autoCompactWindow);
-	if (fromEnv !== undefined) windows.push(fromEnv);
-	if (typeof model === "string" && model.length > 0 && isPlainObject(settings)) {
-		const modelSettings = isPlainObject(settings.modelSettings) ? settings.modelSettings : {};
-		const perModel = modelSettings[model];
-		if (isPlainObject(perModel)) {
-			const value = positiveNumber(perModel.autoCompactWindow);
-			if (value !== undefined) windows.push(value);
-		}
-	}
-	if (isPlainObject(settings)) {
-		const value = positiveNumber(settings.autoCompactWindow);
-		if (value !== undefined) windows.push(value);
-	}
+	const root = isPlainObject(settings) ? settings : {};
+	const models = isPlainObject(root.modelSettings) ? root.modelSettings : {};
+	const perModel = typeof model === "string" && model.length > 0 ? models[model] : undefined;
+	const windows = [env.autoCompactWindow, isPlainObject(perModel) ? perModel.autoCompactWindow : undefined, root.autoCompactWindow]
+		.map(positiveNumber).filter((value): value is number => value !== undefined);
 	return windows.length === 0 ? undefined : Math.min(...windows);
 }
 

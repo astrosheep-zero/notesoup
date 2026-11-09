@@ -13,7 +13,7 @@ import { claudeHistoryFromJsonl, offlineClaudeHead, offlineClaudeHistoryFromJson
 import { piHistoryFromJsonl } from "../src/history/pi.js";
 import { historyList, historyRead } from "../src/tools/history.js";
 import { TOOL_OUTPUT_MAX_BYTES } from "../src/tools/output.js";
-import type { Outcome } from "../src/tools/result.js";
+import type { Outcome } from "../src/result.js";
 
 const AT = "2026-10-06T01:02:03.000Z";
 const CODEX = "019a0000-0000-7000-8000-000000000001";

@@ -16,19 +16,15 @@ import { notesToolContext } from "../src/tools/notes-context.js";
 import { historyList, historyRead } from "../src/tools/history.js";
 import { historyRoles } from "../src/tools/schema.js";
 import { MAX_READ_WINDOW_CHARS, TOOL_OUTPUT_MAX_BYTES } from "../src/tools/output.js";
+import { ERROR_MESSAGE_MAX_CHARS, failure, success, type OperationError, type Outcome } from "../src/result.js";
 import {
-	ERROR_MESSAGE_MAX_CHARS,
-	failure,
 	fitsResult,
 	resultSchema,
 	wireResult,
 	readTextWindow,
 	renderOutcome,
 	renderTextWindow,
-	success,
 	structuredBytes,
-	type OperationError,
-	type Outcome,
 	type TextWindow,
 } from "../src/tools/result.js";
 
@@ -237,7 +233,7 @@ test("shared note operations return canonical outcomes with a body-only read win
 	}));
 	assert.equal(observedKind, "body");
 	assert.equal(updated.change_kind, "body");
-	assert.equal(notesUpdate.render(success(updated)), `updated @project/test.md (project ${notesIdentity.projectKey})`);
+	assert.equal(notesUpdate.render(success(updated)), `updated @project/test.md (project ${notesIdentity.projectKey}) | pinned false | budget 2048 | readonly false`);
 	await notesWrite.execute({ address: "owned.md", content: "first", origin: "user" }, toolContext);
 	await notesWrite.execute({ address: "owned.md", content: "rewritten" }, toolContext);
 	assert.equal(data(await notesRead.execute({ address: "owned.md" }, toolContext)).metadata.origin, "user", "tool overwrites preserve an omitted origin");
@@ -246,7 +242,7 @@ test("shared note operations return canonical outcomes with a body-only read win
 	const moved = data(await notesUpdate.execute({ address: "owned.md", rename_to: "@project/renamed.md", edits: [{ oldText: "rewritten", newText: "final" }], origin: "external" }, toolContext));
 	assert.equal(moved.change_kind, "moved");
 	assert.equal(moved.rename_from, "owned.md");
-	assert.equal(notesUpdate.render(success(moved)), "moved owned.md -> @project/renamed.md");
+	assert.equal(notesUpdate.render(success(moved)), "moved owned.md -> @project/renamed.md | pinned false | budget 2048 | readonly false");
 	const renamed = data(await notesRead.execute({ address: moved.address }, toolContext));
 	assert.equal(renamed.text, "final");
 	assert.equal(renamed.metadata.origin, "external");

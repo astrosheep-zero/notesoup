@@ -95,15 +95,6 @@ async function envAutoCompactWindow($: Engine) {
 async function envDisableAutoCompact($: Engine) {
   try { return await $.env.get("DISABLE_AUTO_COMPACT") } catch { return undefined }
 }
-/** Presence-style environment flags: any value but an explicit no counts as on. */
-async function compactDisabled($: Engine): Promise<boolean> {
-  let value: string | undefined
-  try { value = await $.env.get("DISABLE_COMPACT") } catch { return false }
-  if (value === undefined) return false
-  const text = value.trim().toLowerCase()
-  // The same presence convention as the helper's flag parsing: "off"/"no" mean not disabled.
-  return text !== "" && text !== "0" && text !== "false" && text !== "no" && text !== "off"
-}
 /** Presence-style env switch; the same convention as DISABLE_COMPACT. The loader requires literal env names. */
 function envFlag(value: string | undefined): boolean {
   const text = value?.trim().toLowerCase() ?? ""
@@ -349,7 +340,7 @@ export function register(on: On) {
     await refreshIdentity($, state)
     state.headless = !e.isInteractive
     // Compaction is the capability explicit resets and budget warnings depend on.
-    state.compactDisabled = await compactDisabled($)
+    state.compactDisabled = envFlag(await $.env.get("DISABLE_COMPACT").catch(() => undefined))
     if (state.compactDisabled) log($, COMPACT_DISABLED)
     registered.clear()
     await loadTexts($, state)

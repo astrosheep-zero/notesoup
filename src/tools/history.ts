@@ -1,9 +1,10 @@
 /** Host-neutral history operations: one bounded payload for text and structured results. */
 import { Type, type Static } from "typebox";
-import { HISTORY_PREVIEW_CHARS, MAX_READ_WINDOW_CHARS } from "./output.js";
-import { failure, fitsResult, resultSchema, readTextWindow, renderOutcome, renderTextWindow, success, TextWindowRequestSchema, TextWindowSchema, type Operation } from "./result.js";
+import { HISTORY_PREVIEW_CHARS, MAX_READ_WINDOW_CHARS, TOOL_OUTPUT_LIMIT } from "./output.js";
+import { failure, success, type Outcome } from "../result.js";
+import { fitsResult, resultSchema, readTextWindow, renderOutcome, renderTextWindow, TextWindowRequestSchema, TextWindowSchema, type Operation } from "./result.js";
 import { historyRoles, searchQuery } from "./schema.js";
-import { HistoryPageSchema, CorpusCollector, corpusSelection, isMultiPage, markMultiPage, selectPage, type HistoryPage } from "../history/query.js";
+import { HistoryPageSchema, CorpusCollector, corpusSelection, isMultiPage, markMultiPage, selectPage, type HistoryPage, type HistoryPageResult } from "../history/query.js";
 import { currentHistory, loadHistoryRepresentative, loadHistorySession, matchesSession, parseSessionSelector, resolveSession, sessionIdentity, type HistoryContext } from "../history/corpus.js";
 import { allItems, eventDocument, nestedCallSummary, toolSummary, HistoryRoleSchema, NestedCallSummarySchema, ToolSummarySchema, type HistoryFoldedRow, type HistoryPageItem } from "../history/history.js";
 
@@ -81,6 +82,14 @@ function renderRead(data: HistoryReadData): string {
 export type HistoryTextWrapper = (text: string) => string;
 const plainText: HistoryTextWrapper = (text) => text;
 
+/** Translate query budget facts into this tool's bounded refusal; successful pages are unchanged. */
+function pageOutcome(result: HistoryPageResult): Outcome<HistoryPage> {
+	if (!("pageTooLarge" in result)) return result;
+	const { count, multi } = result.pageTooLarge;
+	const narrow = multi ? "narrow the session pattern, query, roles or `since`/`until`, or read one session/seq with `history_read`" : "narrow with `before_seq`/`after_seq` or `since`/`until`, pass `roles` to skip folding, or `history_read` one seq";
+	return failure("page_too_large", `Even trimmed to their shortest, these ${count} rows${multi ? "" : " and their folded runs"} fill the ${TOOL_OUTPUT_LIMIT} a call can carry; ${narrow}.`);
+}
+
 /* ------------------------------------------------------------------ history_list */
 
 const sessionParameter = Type.Optional(Type.String({ minLength: 1, description: "(optional) Session ID or unique prefix, optionally pi:, claude:, codex:, or dsh:. Omit for this session. In history_list, * searches sessions with query or lists recent sessions without it; history_read needs one session." }));
@@ -108,7 +117,7 @@ export const historyList: Operation<typeof historyListParameters, HistoryPage, [
 		// Charge wrapped rendering, identities, notices and recipes, not only event previews.
 		const fits = (page: HistoryPage) => fitsResult(success(page), (result) => wrapText(renderOutcome(result, renderPage)));
 		const maxChars = params.max_chars_per_item ?? HISTORY_PREVIEW_CHARS;
-		if (params.session === undefined) return selectPage(await currentHistory(context), params, fits, maxChars);
+		if (params.session === undefined) return pageOutcome(selectPage(await currentHistory(context), params, fits, maxChars));
 		const selector = parseSessionSelector(params.session);
 		if (!selector.ok) return selector;
 		const corpus = "corpus" in context ? context.corpus : undefined;
@@ -137,7 +146,7 @@ export const historyList: Operation<typeof historyListParameters, HistoryPage, [
 				}
 			}
 			const notice = notices.length ? { notice: notices.join("") } : {};
-			const result = collector.page((page) => fits(markMultiPage({ ...page, ...notice })), maxChars, unvisited);
+			const result = pageOutcome(collector.page((page) => fits(markMultiPage({ ...page, ...notice })), maxChars, unvisited));
 			return result.ok ? success(markMultiPage({ ...result.data, ...notice })) : result;
 		}
 		const target = await resolveSession(corpus, selector.data);
@@ -145,7 +154,7 @@ export const historyList: Operation<typeof historyListParameters, HistoryPage, [
 		const loaded = await loadHistorySession(target.data);
 		if (!loaded.ok) return loaded;
 		const notice = loaded.data.notice === undefined ? {} : { notice: loaded.data.notice };
-		const result = selectPage(loaded.data.projection, { ...params, session: sessionIdentity(target.data) }, (page) => fits({ ...page, ...notice }), maxChars);
+		const result = pageOutcome(selectPage(loaded.data.projection, { ...params, session: sessionIdentity(target.data) }, (page) => fits({ ...page, ...notice }), maxChars));
 		return result.ok ? success({ ...result.data, ...notice }) : result;
 	},
 	render: (result) => renderOutcome(result, renderPage),

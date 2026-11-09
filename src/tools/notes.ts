@@ -1,17 +1,41 @@
 import type { NotesIdentity } from "../notes/identity.js";
+import { assertAddress } from "../notes/address.js";
+import { noteFileName } from "../notes/paths.js";
+import { effectiveNotePolicy, noteBudgetWarnings } from "../notes/policy.js";
 import { Type, type Static } from "typebox";
 import { localIso } from "../notes/frontmatter.js";
 import { isFilesystemError } from "../notes/fs-error.js";
 import { createNotesStore, NoteError, noteIdentity, type NoteChange, type NoteMeta, type NoteQueryStatus, type NoteRow } from "../notes/index.js";
-import { prefixFit, TOOL_OUTPUT_LIMIT } from "./output.js";
-import { failure, fitsResult, resultSchema, readTextWindow, renderOutcome, renderTextWindow, structuredBytes, success, TextWindowRequestSchema, TextWindowSchema, type Outcome } from "./result.js";
-import { nullableString, InvalidQueryError, searchQueries, searchQuery } from "./schema.js";
+import { TOOL_OUTPUT_LIMIT } from "./output.js";
+import { failure, success, type Outcome } from "../result.js";
+import { InvalidQueryError, prefixFit, searchQueries } from "../text-match.js";
+import { fitsResult, resultSchema, readTextWindow, renderOutcome, renderTextWindow, structuredBytes, TextWindowRequestSchema, TextWindowSchema } from "./result.js";
+import { nullableString, searchQuery } from "./schema.js";
 import { notesIdentityForCall, type NotesToolContext } from "./notes-context.js";
 
 const ORIGIN_VALUES = [Type.Literal("user"), Type.Literal("self"), Type.Literal("external")] as const;
 const ORIGIN = Type.Optional(Type.Union([...ORIGIN_VALUES], {
 	description: "(optional) Who wrote it: user, self, or external. Omit to keep the existing origin; new notes default to self.",
 }));
+const POLICY_PARAMETERS = {
+	pinned: Type.Optional(Type.Boolean({ description: "Inject the full body at boot. At most 5 live pins per notebook; root CHEATSHEET.md/MAP.md default true, all others false. Explicit false overrides the default." })),
+	budget: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: "Body budget in Unicode code points (default 2048 for every note). Over budget warns but saves; boot does not truncate." })),
+	readonly: Type.Optional(Type.Boolean({ description: "Soft lock, not a security boundary. true locks changes; explicitly pass false to unlock, including in the same call as edits or overwrite." })),
+};
+const PolicySchema = {
+	pinned: Type.Boolean(), budget: Type.Integer(), readonly: Type.Boolean(),
+};
+const WarningsSchema = { warnings: Type.Array(Type.String()) };
+function policyAt(meta: NoteMeta, address: string) {
+	return effectiveNotePolicy(meta, noteFileName(assertAddress(address).path));
+}
+function renderPolicy(policy: { pinned: boolean; budget: number; readonly: boolean }): string {
+	return `pinned ${policy.pinned} | budget ${policy.budget} | readonly ${policy.readonly}`;
+}
+function withWarnings(text: string, data: { warnings: string[] }): string {
+	return [text, ...data.warnings].join("\n");
+}
+
 const CRUMPLED_PARAMETER = Type.Optional(Type.Boolean({ description: "(optional) true = crumple (hide from list and search, still readable); false = restore." }));
 const CRUMPLED_LIST_PARAMETER = Type.Optional(Type.Boolean({ description: "(optional) true = list only crumpled notes." }));
 const FILE_LIMIT_PARAMETER = Type.Optional(Type.Integer({ minimum: 1, description: "(optional, default as many as fit) Max notes." }));
@@ -33,7 +57,7 @@ export function failureOf(error: unknown): Outcome<never> {
 }
 
 /** Metadata keys this layer normalizes; everything else is exposed verbatim under `extra`. */
-const NORMALIZED_META_KEYS = new Set(["scope", "origin", "createdAt", "updatedAt", "lastAccessed", "accessCount", "crumpledAt", "project"]);
+const NORMALIZED_META_KEYS = new Set(["scope", "origin", "createdAt", "updatedAt", "lastAccessed", "accessCount", "crumpledAt", "project", "pinned", "budget", "readonly"]);
 /** One unrecognized entry, and the verbatim extras together, are bounded so `extra` cannot outgrow the read. */
 const MAX_METADATA_ENTRY_BYTES = 1024;
 const MAX_METADATA_VERBATIM_BYTES = 2048;
@@ -41,6 +65,7 @@ const MAX_METADATA_VERBATIM_BYTES = 2048;
 const TOO_LARGE_EXTRA_VALUE = "[omitted: too large]";
 
 export const NoteMetadataSchema = Type.Object({
+	...PolicySchema,
 	origin: Type.Union([...ORIGIN_VALUES]),
 	created_at: Type.String(),
 	updated_at: Type.String(),
@@ -51,7 +76,7 @@ export const NoteMetadataSchema = Type.Object({
 export type NoteMetadata = Static<typeof NoteMetadataSchema>;
 
 /** Normalize known metadata and bound extras, naming an oversized value instead of hiding it. */
-function noteMetadata(meta: NoteMeta): NoteMetadata {
+function noteMetadata(meta: NoteMeta, address: string): NoteMetadata {
 	const extra: Record<string, unknown> = {};
 	let verbatimBytes = 0;
 	const put = (key: string, value: unknown): void => {
@@ -72,6 +97,7 @@ function noteMetadata(meta: NoteMeta): NoteMetadata {
 		put(key, value);
 	}
 	return {
+		...policyAt(meta, address),
 		origin: meta.origin,
 		created_at: localIso(meta.createdAt),
 		updated_at: localIso(meta.updatedAt),
@@ -83,6 +109,7 @@ function noteMetadata(meta: NoteMeta): NoteMetadata {
 
 function renderMetadata(metadata: NoteMetadata): string {
 	const fields = [
+		renderPolicy(metadata),
 		`origin ${metadata.origin}`,
 		`created ${metadata.created_at}`,
 		`updated ${metadata.updated_at}`,
@@ -117,6 +144,8 @@ export const NoteIdentitySchema = {
 
 export const ListedFileSchema = Type.Object({
 	...NoteIdentitySchema,
+	...PolicySchema,
+	...WarningsSchema,
 	updated_at: Type.String(),
 	crumpled_at: Type.Optional(Type.String()),
 }, { additionalProperties: false });
@@ -139,12 +168,16 @@ export const SnapshotSchema = {
 
 export const NotesWriteDataSchema = Type.Object({
 	...NoteIdentitySchema,
+	...PolicySchema,
+	...WarningsSchema,
 	outcome: Type.Union([Type.Literal("created"), Type.Literal("overwrote"), Type.Literal("uncrumpled")]),
 }, { additionalProperties: false });
 export type NotesWriteData = Static<typeof NotesWriteDataSchema>;
 
 export const NotesUpdateDataSchema = Type.Object({
 	...NoteIdentitySchema,
+	...PolicySchema,
+	...WarningsSchema,
 	change_kind: Type.Union([Type.Literal("none"), Type.Literal("body"), Type.Literal("metadata"), Type.Literal("moved")]),
 	rename_from: Type.Optional(Type.String()),
 }, { additionalProperties: false });
@@ -153,6 +186,7 @@ export type NotesUpdateData = Static<typeof NotesUpdateDataSchema>;
 export const NotesReadDataSchema = Type.Object({
 	...NoteIdentitySchema,
 	metadata: NoteMetadataSchema,
+	...WarningsSchema,
 	...TextWindowSchema.properties,
 }, { additionalProperties: false });
 export type NotesReadData = Static<typeof NotesReadDataSchema>;
@@ -199,14 +233,15 @@ export function snapshot<T extends { address: string }>(
 	return fitsResult(outcome, render) ? outcome : failure("output_too_large", `The list of unreachable notebooks is itself over ${TOOL_OUTPUT_LIMIT}; narrow \`glob\` to fewer notebooks.`);
 }
 
-export function listedFile(row: Pick<NoteRow, "address" | "meta">, identity: NotesIdentity): NotesListData["files"][number] {
-	return { ...noteIdentity(identity, row.address), updated_at: localIso(row.meta.updatedAt), ...(row.meta.crumpledAt === undefined ? {} : { crumpled_at: row.meta.crumpledAt }) };
+export function listedFile(row: Pick<NoteRow, "address" | "meta"> & { body?: string; warnings?: string[] }, identity: NotesIdentity): NotesListData["files"][number] {
+	const policy = policyAt(row.meta, row.address);
+	return { ...noteIdentity(identity, row.address), ...policy, warnings: row.warnings ?? (row.body === undefined ? [] : noteBudgetWarnings(row.body, policy)), updated_at: localIso(row.meta.updatedAt), ...(row.meta.crumpledAt === undefined ? {} : { crumpled_at: row.meta.crumpledAt }) };
 }
 
-export const notesWriteParameters = Type.Object({ address: Type.String(), content: Type.String(), origin: ORIGIN, cwd: CWD_PARAMETER }, { additionalProperties: false });
+export const notesWriteParameters = Type.Object({ address: Type.String(), content: Type.String(), origin: ORIGIN, ...POLICY_PARAMETERS, cwd: CWD_PARAMETER }, { additionalProperties: false });
 
 function renderWriteData(data: NotesWriteData): string {
-	return `${data.outcome} ${renderIdentity(data)}`;
+	return withWarnings(`${data.outcome} ${renderIdentity(data)} | ${renderPolicy(data)}`, data);
 }
 
 export const notesWrite = {
@@ -216,8 +251,8 @@ export const notesWrite = {
 	async execute(params: Static<typeof notesWriteParameters>, context: NotesToolContext): Promise<Outcome<NotesWriteData>> {
 		try {
 			const identity = notesIdentityForCall(context, params.cwd);
-			const { outcome } = await createNotesStore(identity).write(params.address, params.content, { origin: params.origin });
-			return success({ ...noteIdentity(identity, params.address), outcome });
+			const { outcome, meta, warnings } = await createNotesStore(identity).write(params.address, params.content, { origin: params.origin, pinned: params.pinned, budget: params.budget, readonly: params.readonly });
+			return success({ ...noteIdentity(identity, params.address), outcome, ...policyAt(meta, params.address), warnings });
 		} catch (error) { return failureOf(error); }
 	},
 	render: (result: Outcome<NotesWriteData>): string => renderOutcome(result, renderWriteData),
@@ -227,6 +262,7 @@ export const notesUpdateParameters = Type.Object({
 	address: Type.String(),
 	edits: Type.Optional(Type.Array(Type.Object({ oldText: Type.String(), newText: Type.String() }, { additionalProperties: false }))),
 	origin: ORIGIN,
+	...POLICY_PARAMETERS,
 	crumpled: CRUMPLED_PARAMETER,
 	replace_all: Type.Optional(Type.Boolean({ description: "(optional) true = replace every match of `oldText`." })),
 	rename_to: Type.Optional(Type.String({ description: "(optional) Move to this address, optionally with edits or metadata changes. Won't overwrite a live note; references aren't updated." })),
@@ -234,14 +270,15 @@ export const notesUpdateParameters = Type.Object({
 }, { additionalProperties: false });
 
 function renderUpdateData(data: NotesUpdateData): string {
-	return data.rename_from === undefined
+	const receipt = data.rename_from === undefined
 		? `${data.change_kind === "none" ? "unchanged" : "updated"} ${renderIdentity(data)}`
 		: `moved ${data.rename_from} -> ${data.address}`;
+	return withWarnings(`${receipt} | ${renderPolicy(data)}`, data);
 }
 
 export const notesUpdate = {
 	name: "notes_update", label: "Notes update",
-	description: `Change part of a note's body, its origin or crumpled state, or its address. When things change, replace the stale part in place; don't just tack an update onto the bottom. Each \`oldText\` must match exactly once unless \`replace_all\` is true. ${ADDRESS_DESCRIPTION}`,
+	description: `Change part of a note's body, policy (pinned/budget/readonly), origin, crumpled state, or address. A readonly note requires explicit readonly:false before any change, or in the same call. When things change, replace the stale part in place; don't just tack an update onto the bottom. Each \`oldText\` must match exactly once unless \`replace_all\` is true. ${ADDRESS_DESCRIPTION}`,
 	parameters: notesUpdateParameters, outputSchema: resultSchema(NotesUpdateDataSchema), executionMode: "sequential",
 	async execute(params: Static<typeof notesUpdateParameters>, context: NotesToolContext, onChange?: (change: NoteChange) => void): Promise<Outcome<NotesUpdateData>> {
 		try {
@@ -249,11 +286,11 @@ export const notesUpdate = {
 			const store = createNotesStore(identity);
 			// Empty filler is not a request: models that pass every parameter get the edit path.
 			const renameTo = params.rename_to === "" ? undefined : params.rename_to;
-			const { change, moved } = await store.update(params.address, params.edits, { origin: params.origin, crumpled: params.crumpled, replaceAll: params.replace_all, renameTo });
+			const { change, moved, meta, warnings } = await store.update(params.address, params.edits, { origin: params.origin, pinned: params.pinned, budget: params.budget, readonly: params.readonly, crumpled: params.crumpled, replaceAll: params.replace_all, renameTo });
 			onChange?.(change);
 			const from = noteIdentity(identity, params.address).address;
 			const to = noteIdentity(identity, renameTo ?? params.address);
-			return success({ ...to, ...(moved ? { rename_from: from } : {}), change_kind: moved ? "moved" : change.kind });
+			return success({ ...to, ...policyAt(meta, to.address), warnings, ...(moved ? { rename_from: from } : {}), change_kind: moved ? "moved" : change.kind });
 		} catch (error) { return failureOf(error); }
 	},
 	render: (result: Outcome<NotesUpdateData>): string => renderOutcome(result, renderUpdateData),
@@ -262,7 +299,7 @@ export const notesUpdate = {
 export const notesReadParameters = Type.Object({ address: Type.String(), ...TextWindowRequestSchema, cwd: CWD_PARAMETER }, { additionalProperties: false });
 
 function renderReadData(data: NotesReadData): string {
-	return `${renderIdentity(data)}\n${renderMetadata(data.metadata)}\n\n${renderTextWindow(data)}`;
+	return withWarnings(`${renderIdentity(data)}\n${renderMetadata(data.metadata)}`, data) + `\n\n${renderTextWindow(data)}`;
 }
 
 export const notesRead = {
@@ -277,8 +314,9 @@ export const notesRead = {
 			if (!note) return failure("not_found", `No note at ${resolved.address}.`);
 			const totalChars = Array.from(note.body).length;
 			if (params.offset_chars !== undefined && params.offset_chars > totalChars) return failure("invalid_offset", `This note ends at char ${totalChars}; offset_chars ${params.offset_chars} is past the last word.`);
-			const metadata = noteMetadata(note.meta);
-			return readTextWindow(note.body, params.offset_chars, params.max_chars, (window) => ({ ...resolved, metadata, ...window }), (result) => renderOutcome(result, renderReadData));
+			const metadata = noteMetadata(note.meta, resolved.address);
+			const warnings = noteBudgetWarnings(note.body, metadata);
+			return readTextWindow(note.body, params.offset_chars, params.max_chars, (window) => ({ ...resolved, metadata, warnings, ...window }), (result) => renderOutcome(result, renderReadData));
 		} catch (error) { return failureOf(error); }
 	},
 	render: (result: Outcome<NotesReadData>): string => renderOutcome(result, renderReadData),
@@ -289,7 +327,8 @@ export const notesListParameters = Type.Object({ glob: GLOB_PARAMETER, limit: FI
 export function renderListData(data: Snapshot<NotesListData["files"][number] & { last_accessed?: string }>): string {
 	const lines = [`${data.files.length} ${data.files.length === 1 ? "note" : "notes"}`];
 	for (const file of data.files) {
-		lines.push(`- ${renderIdentity(file)} | updated ${file.updated_at}${file.last_accessed === undefined ? "" : ` | accessed ${file.last_accessed}`}${file.crumpled_at === undefined ? "" : ` | crumpled ${file.crumpled_at}`}`);
+		lines.push(`- ${renderIdentity(file)} | ${renderPolicy(file)} | updated ${file.updated_at}${file.last_accessed === undefined ? "" : ` | accessed ${file.last_accessed}`}${file.crumpled_at === undefined ? "" : ` | crumpled ${file.crumpled_at}`}`);
+		lines.push(...file.warnings.map(warning => `  ${warning}`));
 	}
 	if (data.more > 0) lines.push(`${data.more} more matching notes omitted; narrow with glob`);
 	for (const namespace of data.namespaces_unavailable) lines.push(`${namespace} could not be read`);
@@ -315,7 +354,8 @@ export const notesSearchParameters = Type.Object({ query: Type.Optional(searchQu
 function renderSearchData(data: NotesSearchData): string {
 	const lines = [`${data.files.length} ${data.files.length === 1 ? "note" : "notes"}`];
 	for (const file of data.files) {
-		lines.push(`- ${renderIdentity(file)} | updated ${file.updated_at} | ${file.matches.length} ${file.matches.length === 1 ? "match" : "matches"}`);
+		lines.push(`- ${renderIdentity(file)} | ${renderPolicy(file)} | updated ${file.updated_at} | ${file.matches.length} ${file.matches.length === 1 ? "match" : "matches"}`);
+		lines.push(...file.warnings.map(warning => `  ${warning}`));
 		for (const match of file.matches) lines.push(`  line ${match.line} at offset_chars ${match.offset_chars}: ${match.text}`);
 	}
 	if (data.more > 0) lines.push(`${data.more} more matching notes omitted; narrow with glob`);

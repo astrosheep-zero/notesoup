@@ -3,7 +3,8 @@ import { defineTool, type ExtensionAPI, type ExtensionToolContext, type ToolDefi
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { JsonValue } from "@earendil-works/pi-ai";
 import type { Static, TSchema } from "typebox";
-import { wireResult, type Operation, type Outcome, type Renderer } from "../../src/tools/result.js";
+import type { Outcome } from "../../src/result.js";
+import { wireResult, type Operation, type Renderer } from "../../src/tools/result.js";
 
 /** Pi's JSON envelope for reset and budget tools; details carry only log/UI metadata. */
 export function output(value: unknown, details?: unknown, terminate = false) {

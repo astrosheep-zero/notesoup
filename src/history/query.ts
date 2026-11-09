@@ -1,9 +1,7 @@
 /** Stable-anchor paging, folding and literal matching. The operation supplies the full-response budget check. */
 import { Type, type Static } from "typebox";
-import { failure, success, type Outcome } from "../tools/result.js";
-import { prefixFit, TOOL_OUTPUT_LIMIT } from "../tools/output.js";
-import { earliestMatchOffsetChars } from "../text-match.js";
-import { InvalidQueryError, searchQueries } from "../tools/schema.js";
+import { failure, success, type Outcome } from "../result.js";
+import { earliestMatchOffsetChars, InvalidQueryError, prefixFit, searchQueries } from "../text-match.js";
 import { eventDocument, filteredItems, visibleItem, HistoryFoldedRowSchema, HistoryPageItemSchema, MAX_FOLD_TOOL_NAMES, MAX_FOLD_TOOL_NAME_CHARS, type HistoryEvent, type HistoryFilter, type HistoryFoldedRow, type HistoryPageItem, type HistoryProjection } from "./history.js";
 
 type Candidate = { event: HistoryEvent; session?: string; matchOffset?: number; preview?: HistoryPageItem; before?: HistoryFoldedRow };
@@ -66,6 +64,8 @@ export const HistoryPageSchema = Type.Object({
 
 /** One whole page payload, before it becomes an outcome. */
 export type HistoryPage = Static<typeof HistoryPageSchema>;
+/** A caller's budget rejected even the shortest page; tool limits and refusal copy belong to the caller. */
+export type HistoryPageResult = Outcome<HistoryPage> | { ok: false; pageTooLarge: { count: number; multi: boolean } };
 
 /** Shorten preview text first; omit an oversized tool name rather than invent a partial name. */
 function truncateHistoryItem(item: HistoryPageItem, fits: (candidate: HistoryPageItem) => boolean): HistoryPageItem {
@@ -102,7 +102,7 @@ function prepareSelection(projection: HistoryProjection, params: HistorySelectio
 	const folds = !params.roles && params.query === undefined;
 	const candidates: Candidate[] = [];
 	let run: HistoryEvent[] = [];
-	for (const event of filteredItems(projection, params, false)) {
+	for (const event of filteredItems(projection, params)) {
 		if (folds && (event.role === "tool" || event.role === "context")) {
 			run.push(event);
 			continue;
@@ -151,7 +151,7 @@ function resolveSelection(params: HistorySelection): Outcome<HistorySelection> {
 	}
 }
 
-export function selectPage(projection: HistoryProjection, params: HistorySelection, fits: (page: HistoryPage) => boolean, maxChars: number): Outcome<HistoryPage> {
+export function selectPage(projection: HistoryProjection, params: HistorySelection, fits: (page: HistoryPage) => boolean, maxChars: number): HistoryPageResult {
 	const scoped = resolveSelection(params);
 	if (!scoped.ok) return scoped;
 	return selectPrepared(prepareSelection(projection, scoped.data), scoped.data, fits, maxChars);
@@ -165,7 +165,7 @@ export function corpusSelection(params: HistorySelection): Outcome<HistorySelect
 
 /** One topic per session, after role/time filtering; empty dialogue envelopes are not visible. */
 export function sessionRepresentative(projection: HistoryProjection, scoped: HistorySelection): HistoryEvent | undefined {
-	const events = filteredItems(projection, scoped, false).filter((event) =>
+	const events = filteredItems(projection, scoped).filter((event) =>
 		(event.role !== "user" && event.role !== "assistant") || eventDocument(event) !== "");
 	if (scoped.roles) return events.at(-1);
 	return events.find((event) => event.role === "user")
@@ -217,7 +217,7 @@ export class CorpusCollector {
 	/** Returns whether this session contributes an overview representative. */
 	add(session: string, projection: HistoryProjection): boolean {
 		if (this.scoped.query === undefined) return this.addRepresentative(session, sessionRepresentative(projection, this.scoped));
-		for (const event of filteredItems(projection, this.scoped, false)) {
+		for (const event of filteredItems(projection, this.scoped)) {
 			const document = eventDocument(event);
 			if ((event.role === "user" || event.role === "assistant") && document === "") continue;
 			const matchOffset = earliestMatchOffsetChars(document, this.scoped.query as string[]);
@@ -226,12 +226,12 @@ export class CorpusCollector {
 		return true;
 	}
 
-	page(fits: (page: HistoryPage) => boolean, maxChars: number, unvisited = false): Outcome<HistoryPage> {
+	page(fits: (page: HistoryPage) => boolean, maxChars: number, unvisited = false): HistoryPageResult {
 		return selectPrepared({ candidates: this.candidates, multi: true, discarded: this.discarded || unvisited, from: this.scoped.from }, this.scoped, fits, maxChars);
 	}
 }
 
-function selectPrepared(prepared: PreparedSelection, scoped: HistorySelection, fits: (page: HistoryPage) => boolean, maxChars: number): Outcome<HistoryPage> {
+function selectPrepared(prepared: PreparedSelection, scoped: HistorySelection, fits: (page: HistoryPage) => boolean, maxChars: number): HistoryPageResult {
 	const { candidates } = prepared;
 	// Grow a contiguous interval from the requested end; even a byte-limited newest page stays ascending.
 	const from = scoped.from ?? (scoped.after_seq !== undefined ? "oldest" : "newest");
@@ -256,9 +256,6 @@ function selectPrepared(prepared: PreparedSelection, scoped: HistorySelection, f
 		break;
 	}
 	const page = pageData(prepared, start, end, maxChars);
-	if (!fits(page)) {
-		const narrow = prepared.multi ? "narrow the session pattern, query, roles or `since`/`until`, or read one session/seq with `history_read`" : "narrow with `before_seq`/`after_seq` or `since`/`until`, pass `roles` to skip folding, or `history_read` one seq";
-		return failure("page_too_large", `Even trimmed to their shortest, these ${page.items.length} rows${prepared.multi ? "" : " and their folded runs"} fill the ${TOOL_OUTPUT_LIMIT} a call can carry; ${narrow}.`);
-	}
+	if (!fits(page)) return { ok: false, pageTooLarge: { count: page.items.length, multi: prepared.multi === true } };
 	return success(page);
 }
