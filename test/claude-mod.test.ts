@@ -55,13 +55,35 @@ type HookEngine = {
     compact: (options: { instructions: string }) => Promise<{ skip?: string; messages?: Array<{ role: string; text: string }> }>;
   };
   settings: { read: () => Promise<unknown> };
-  command: { run: (input: { command: string }) => Promise<{ text?: string }>; register: (spec: { name: string; description: string; immediate?: boolean }) => Promise<unknown> };
+  command: { run: (input: { command: string; args?: string }) => Promise<{ text?: string }>; register: (spec: { name: string; description: string; immediate?: boolean }) => Promise<unknown> };
   clock: { after: (ms: number, callback: () => void | Promise<void>) => unknown };
   prompt: { submit: (input: { text: string }) => Promise<{ text: string } | { drop: string }> };
   tool: { register: (spec: HookToolSpec) => Promise<{ tool: string }> };
   ui?: { toast?: (text: string, options?: { title?: string }) => Promise<unknown>; log?: (text: string) => void };
   process: { run: (argv: readonly string[], init?: { cwd?: string; stdin?: string }) => Promise<{ exitCode: number; stdout: string }> };
 };
+
+// Let the unit fixture's pending Promise jobs settle. These tests exercise
+// hooks and failure policy; the installed-host loopback probe covers scheduling.
+const settleHooks = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+/** Publish the kept rows separately from the compaction hook's proposal. */
+async function keepCompaction<T extends { messages?: Array<{ role: string; text: string }>; skip?: string }>(host: HookEngine, handlers: Map<string, HookHandler>, result: T): Promise<T> {
+  if (!result.messages || result.skip !== undefined) return result;
+  const append = async (door: string, message: Record<string, unknown>) => {
+    const uuid = crypto.randomUUID();
+    await handlers.get("session.append")!(host, { door, message, uuid, origin: { kind: "plugin", name: "notesoup" } }, async () => ({ uuid, message }));
+  };
+  await append("compaction", { type: "system", name: "compact_boundary", content: [] });
+  for (const message of result.messages) await append("prompt", { type: message.role, role: message.role, content: [{ type: "text", text: message.text }] });
+  host.session.messages = async () => result.messages!;
+  return result;
+}
+
+async function nativeCompaction(host: HookEngine, handlers: Map<string, HookHandler>, instructions?: string) {
+  const result = await handlers.get("session.compact")!(host, { trigger: "manual", instructions }, async () => ({ skip: "unexpected native summary" })) as { messages?: Array<{ role: string; text: string }>; skip?: string };
+  return keepCompaction(host, handlers, result);
+}
 
 async function callTool(tool: string, params: Record<string, unknown>): Promise<ClaudeToolResult> {
   return await dispatch({ op: "tool", tool, identity, params }) as ClaudeToolResult;
@@ -574,6 +596,14 @@ test("Claude Mod hook delivers the helper's shared text, and marks only a refusa
     assert.equal(spec.inputSchema.type, "object");
   }
 
+  const wipeSchema = registered[0]!.inputSchema as { properties: Record<string, { type: string; default?: boolean }>; required?: string[]; additionalProperties: boolean };
+  assert.deepEqual(Object.keys(wipeSchema.properties), ["last_word", "terminate"]);
+  assert.equal(wipeSchema.properties.last_word!.type, "string");
+  assert.equal(wipeSchema.properties.terminate!.type, "boolean");
+  assert.equal(wipeSchema.properties.terminate!.default, false);
+  assert.equal(wipeSchema.required, undefined, "both arguments are optional");
+  assert.equal(wipeSchema.additionalProperties, false);
+
   const call = (tool: string, params: Record<string, unknown>) => handlers.get("tool.call")!(host, { tool: `mcp__notesoup__${tool}`, tool_use_id: "hook-1", ...params }, async (event: unknown) => event) as Promise<{ result: unknown; isError?: unknown }>;
 
   const written = await call("notes_write", { address: "hook.md", content: "hook body" });
@@ -612,12 +642,12 @@ test("Claude Mod crosses old reset thresholds without clearing and retains one f
   let kept: Array<{ role: string; text: string }> = [];
   const measured = () => ({ context: { tokens, window: 200_000, percent: tokens === undefined ? undefined : (tokens / 200_000) * 100 } });
   host.session.usage = async () => measured();
-  host.session.compact = async ({ instructions }) => {
+  host.command.run = async ({ args }) => {
     compactions++;
-    const result = await invoke("session.compact", { trigger: "plugin", instructions: `${instructions} (rewritten upstream)`, messages: [{ role: "user", text: "OLD_SECRET" }] }) as { messages: typeof kept };
-    kept = result.messages;
+    const result = await nativeCompaction(host, handlers, args);
+    kept = result.messages!;
     tokens = undefined; // The real engine invalidates token usage after compact.
-    return result;
+    return {};
   };
   await invoke("session.start", { cwd: home, isInteractive: true });
   assert.equal(registered.length, 8);
@@ -649,6 +679,7 @@ test("Claude Mod crosses old reset thresholds without clearing and retains one f
   await invoke("turn.start");
   await invoke("command.run", { command: "empty" });
   await invoke("turn.complete", turnComplete());
+  await settleHooks();
   assert.equal(compactions, 1);
   assert.equal(kept.length, 2, "the reset is the notes boot followed by the one reset message");
   assert.equal(kept[0]!.role, "user");
@@ -672,16 +703,18 @@ test("Claude Mod preserves context and cancels a queued reset after an unsuccess
       (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
       const invoke = (name: string, event: Record<string, unknown> = {}) => handlers.get(name)!(host, event, async () => ({ sentinel: name }));
       let compactions = 0;
-      host.session.compact = async () => { compactions++; return { skip: "reset must not run" }; };
+      host.command.run = async () => { compactions++; return { text: "reset must not run" }; };
       await invoke("session.start", { cwd: home, isInteractive: true });
       await invoke("turn.start");
       await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: `reset-${reason}`, last_word: "DO_NOT_KEEP" });
 
       await invoke("turn.complete", turnComplete({ reason }));
+      await settleHooks();
       assert.equal(compactions, 0, `${reason} never submits the queued reset`);
       assert.ok(notifications.some(text => text.includes("cancelled") && text.includes(reason)), `${reason} reports that its request was cancelled`);
       await invoke("turn.start");
       await invoke("turn.complete", turnComplete());
+      await settleHooks();
       assert.equal(compactions, 0, `${reason} leaves no pending reset for a later successful turn`);
     });
   }
@@ -710,31 +743,34 @@ test("Claude headless resets through its own manual command, retries failure and
   assert.match(JSON.stringify(await invoke("session.compact", { trigger: "manual" })), /use \/fresh-window/);
   await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", last_word: "STICKY", tool_use_id: "reset" });
   await invoke("turn.complete", turnComplete());
+  await settleHooks();
   assert.equal(attempts, 1);
   assert.ok(notifications.some(x => x.includes("command unavailable")));
   reject = false;
   await invoke("turn.complete", turnComplete());
+  await settleHooks();
   assert.equal(attempts, 2, "failed requests remain pending");
   assert.ok(notifications.some(x => x.includes("Brain not emptied")));
-  // Core dispatches the admitted manual event within our command hook.
-  host.command.run = async ({ command }) => {
+  // The host skips our command hook; the exact one-use instructions admit it.
+  host.command.run = async ({ command, args }) => {
     attempts++;
-    const user = await handlers.get("command.run")!(host, { command, origin: { kind: "user" } }, async () => invoke("session.compact", { trigger: "manual" }));
+    assert.equal(command, "compact");
+    const user = await invoke("session.compact", { trigger: "manual", instructions: "unrelated user instructions" });
     assert.match(JSON.stringify(user), /use \/fresh-window/, "a pending reset does not admit the user's command");
-    await handlers.get("command.run")!(host, { command, origin: { kind: "plugin", name: "notesoup" } }, async () => {
-      kept = (await invoke("session.compact", { trigger: "manual" }) as { messages: typeof kept }).messages;
-      return {};
-    });
+    kept = (await nativeCompaction(host, handlers, args)).messages!;
     return {};
   };
   await invoke("turn.complete", turnComplete());
+  await settleHooks();
   assert.match(kept[0]!.text, /claude:hook-session:1/);
   assert.equal(kept[2]!.text, "*You peel a sticky note off your forehead.*\nSTICKY");
   await invoke("turn.complete", turnComplete());
+  await settleHooks();
   assert.equal(attempts, 3, "success clears pending exactly once");
   assert.match(JSON.stringify(await invoke("session.compact", { trigger: "manual" })), /use \/fresh-window/);
   await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "reset2" });
   await invoke("turn.complete", turnComplete());
+  await settleHooks();
   assert.match(kept[0]!.text, /claude:hook-session:2/);
   assert.equal(kept.length, 2, "sticky is consumed once");
 });
@@ -748,18 +784,13 @@ test("Claude headless warns without proactive resets and supports both manual al
   const invoke = (name: string, e: Record<string, unknown> = {}) => handlers.get(name)!(host, e, async () => ({}));
   let tokens: number | undefined = CLAUDE_200K.warn;
   let attempts = 0, prompts = 0;
-  const timers: Array<() => void | Promise<void>> = [];
   host.session.usage = async () => ({ context: { tokens, window: 200_000 } });
-  host.clock.after = (_ms, callback) => { timers.push(callback); };
   host.prompt.submit = async ({ text }) => { prompts++; await invoke("turn.start"); await invoke("turn.complete", turnComplete()); return { text }; };
-  host.command.run = async ({ command }) => {
+  host.command.run = async ({ args }) => {
     attempts++;
-    await handlers.get("command.run")!(host, { command, origin: { kind: "plugin", name: "notesoup" } }, async () => {
-      const result = await invoke("session.compact", { trigger: "manual" }) as { messages: Array<{ text: string }> };
-      assert.match(result.messages[0]!.text, new RegExp(`claude:hook-session:${attempts}`));
-      tokens = undefined;
-      return {};
-    });
+    const result = await nativeCompaction(host, handlers, args);
+    assert.match(result.messages![0]!.text, new RegExp(`claude:hook-session:${attempts}`));
+    tokens = undefined;
     return {};
   };
   await invoke("session.start", { cwd: home, isInteractive: false });
@@ -772,14 +803,14 @@ test("Claude headless warns without proactive resets and supports both manual al
   assert.equal(attempts, 0, "the old reset threshold and turn completion do not clear");
   await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "explicit" });
   await invoke("turn.complete", turnComplete());
+  await settleHooks();
   assert.equal(attempts, 1);
   for (const command of ["empty", "fresh-window"]) {
     assert.deepEqual(await invoke("command.run", { command }), { text: "🥣 Dumping Brain" });
-    await Promise.resolve();
-    await timers.shift()!();
+    await settleHooks();
   }
   assert.equal(attempts, 3);
-  assert.equal(prompts, 2, "each idle alias schedules one close-out, not a summarizer");
+  assert.equal(prompts, 3, "one tool continuation and one close-out for each idle alias");
 });
 
 test("Claude Mod keeps its window numbering from a boot written before the tag rename", async (t) => {
@@ -818,15 +849,20 @@ test("Claude Mod refuses to wipe on boot failure and can retry without advancing
   };
   host.session.usage = async () => ({ context: { tokens: 170_000, window: 200_000 } });
   let result: Awaited<ReturnType<HookEngine["session"]["compact"]>> = {};
-  host.session.compact = async ({ instructions }) => result = await invoke("session.compact", { trigger: "plugin", instructions }) as typeof result;
+  host.command.run = async ({ args }) => {
+    result = await nativeCompaction(host, handlers, args);
+    return result.skip ? { text: result.skip } : {};
+  };
   await invoke("turn.start");
   await invoke("command.run", { command: "empty" });
   await invoke("turn.complete", turnComplete());
+  await settleHooks();
   assert.match(result.skip!, /notes didn't load/);
   assert.equal(result.messages, undefined, "a failed builder must veto rather than fall through to summary");
   failBoot = false;
   await invoke("turn.start");
   await invoke("turn.complete", turnComplete());
+  await settleHooks();
   assert.equal(result.skip, undefined);
   assert.equal(result.messages!.length, 2);
   assert.match(result.messages![0]!.text, /Current context window id: claude:hook-session:1/, "a failed reset never consumes a window ordinal");
@@ -841,20 +877,18 @@ test("Claude Mod manual reset uses one hidden close-out turn, then recovers its 
   host.command.register = async (spec) => { commands.push(spec.name); return { command: spec.name }; };
   let handlers = new Map<string, HookHandler>();
   const invoke = (name: string, e: Record<string, unknown> = {}) => handlers.get(name)!(host, e, async () => ({}));
-  const timers: Array<() => void | Promise<void>> = [];
   const prompts: string[] = [];
   let kept: Array<{ role: string; text: string }> = [];
   let compactions = 0;
-  host.clock.after = (_ms, callback) => { timers.push(callback); };
-  host.session.compact = async ({ instructions }) => {
+  host.command.run = async ({ args }) => {
     compactions++;
-    const result = await invoke("session.compact", { trigger: "plugin", instructions }) as { messages: typeof kept };
-    kept = result.messages;
-    return result;
+    kept = (await nativeCompaction(host, handlers, args)).messages!;
+    return {};
   };
   host.prompt.submit = async ({ text }) => {
     prompts.push(text);
-    await invoke("turn.start");
+    await invoke("turn.start", { turnId: "closeout" });
+    await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "closeout-reset", terminate: false });
     await invoke("turn.complete", turnComplete());
     return { text };
   };
@@ -862,19 +896,16 @@ test("Claude Mod manual reset uses one hidden close-out turn, then recovers its 
   await invoke("session.start", { cwd: home, isInteractive: true });
   assert.deepEqual(commands.sort(), ["empty", "fresh-window"], "only the new short name and the retained alias are registered");
   assert.deepEqual(await invoke("command.run", { command: "empty-brain" }), {}, "the retired spelling passes through instead of resetting");
-  assert.equal(timers.length, 0);
+  assert.equal(compactions, 0);
   const command = await invoke("command.run", { command: "empty" }) as { text: string };
   assert.equal(command.text, "🥣 Dumping Brain");
-  await Promise.resolve();
-  assert.equal(compactions, 0, "command.run must not call compact under its held turn");
-  assert.equal(timers.length, 1);
-  await timers.shift()!();
+  await settleHooks();
   assert.equal(prompts.length, 1, "exactly one hidden normal-model close-out turn, not a summary");
   assert.equal(prompts[0], CLAUDE_WARNING_PROMPT, "the close-out is the same warning text the automatic path shows");
   assert.equal(compactions, 1);
   assert.equal(kept.length, 2);
   assert.match(kept[0]!.text, /Current context window id: claude:hook-session:1/);
-  assert.ok(FORCED_CONTINUATIONS.includes(kept[1]!.text));
+  assert.ok(NORMAL_CONTINUATIONS.includes(kept[1]!.text), "the close-out called the tool, while the command still keeps STOP policy");
   host.session.messages = async () => [{ role: "user", text: "OLD_SECRET" }, ...kept];
   handlers = new Map();
   (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
@@ -883,6 +914,7 @@ test("Claude Mod manual reset uses one hidden close-out turn, then recovers its 
   await invoke("turn.start");
   await invoke("command.run", { command: "empty" });
   await invoke("turn.complete", turnComplete());
+  await settleHooks();
   assert.equal(prompts.length, 1, "a busy manual request reuses the current turn instead of submitting another");
   assert.match(kept[0]!.text, /Current context window id: claude:hook-session:2/);
 });
@@ -900,8 +932,6 @@ test("Claude failed close-outs release the request so manual reset can retry", a
     const handlers = new Map<string, HookHandler>();
     (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
     const invoke = (name: string, e: Record<string, unknown> = {}) => handlers.get(name)!(host, e, async () => ({}));
-    const timers: Array<() => void | Promise<void>> = [];
-    host.clock.after = (_ms, callback) => { timers.push(callback); };
     host.prompt.submit = async ({ text }) => {
       if (failing && failure === "submit") throw new Error("submission unavailable");
       if (failing && failure === "drop") return { drop: "another plugin refused" };
@@ -909,14 +939,14 @@ test("Claude failed close-outs release the request so manual reset can retry", a
       await invoke("turn.complete", turnComplete());
       return { text };
     };
-    host.session.compact = async ({ instructions }) => {
+    host.command.run = async ({ args }) => {
       resets++;
-      return await invoke("session.compact", { trigger: "plugin", instructions }) as { messages: Array<{ role: string; text: string }> };
+      await nativeCompaction(host, handlers, args);
+      return {};
     };
     await invoke("session.start", { isInteractive: true });
     await invoke("command.run", { command: "fresh-window" });
-    await Promise.resolve();
-    await timers.shift()!();
+    await settleHooks();
     assert.equal(resets, 0);
     assert.ok(notifications.some(text => text.includes("close-out")), "failure is visible");
     await invoke("turn.start");
@@ -924,9 +954,7 @@ test("Claude failed close-outs release the request so manual reset can retry", a
     assert.equal(resets, 0, "a failed close-out must not spring a reset on an unrelated turn");
     failing = false;
     assert.deepEqual(await invoke("command.run", { command: "fresh-window" }), { text: "🥣 Dumping Brain" });
-    await Promise.resolve();
-    assert.equal(timers.length, 1, "retry schedules new work instead of claiming it is already running");
-    await timers.shift()!();
+    await settleHooks();
     assert.equal(resets, 1);
   });
 });
@@ -979,13 +1007,14 @@ test("Claude warnings read the public nested breakdown and apply pct even withou
       return run(argv, init);
     };
     let resets = 0;
-    host.session.compact = async () => { resets++; return {}; };
+    host.command.run = async () => { resets++; return {}; };
     const submit = () => invoke("prompt.submit", { text: "continue" }, {}, async e => e) as Promise<{ context?: string[] }>;
     assert.equal((await submit()).context, undefined);
     tokens++;
     assert.deepEqual((await submit()).context, [CLAUDE_WARNING_PROMPT]);
     assert.equal((await submit()).context, undefined, "one warning per window");
     await invoke("turn.complete", turnComplete());
+    await settleHooks();
     assert.equal(resets, 0, "warning and turn completion never proactively clear");
     assert.equal((await invoke("session.compact", { trigger: "auto" }) as { messages: unknown[] }).messages.length, 2);
     assert.deepEqual((await submit()).context, [CLAUDE_WARNING_PROMPT], "native auto starts a new warning window");
@@ -1066,7 +1095,7 @@ test("Claude Mod keeps warning timing when auto-compact is off without clearing 
   let tokens = 155_423;
   let compactions = 0;
   host.session.usage = async () => ({ context: { tokens, window: 200_000 } });
-  host.session.compact = async ({ instructions }) => { compactions++; return await invoke("session.compact", { trigger: "plugin", instructions }) as { skip?: string; messages?: Array<{ role: string; text: string }> }; };
+  host.command.run = async ({ args }) => { compactions++; await nativeCompaction(host, handlers, args); return {}; };
   await invoke("session.start", { cwd: home, isInteractive: true });
   await invoke("turn.start");
   await invoke("turn.complete", turnComplete());
@@ -1087,14 +1116,14 @@ test("Claude Mod suppresses warnings and explicit reset requests under DISABLE_C
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const { host, notifications } = fakeEngine(home);
   host.env = { get: async (name) => name === "NOTESOUP_HOME" ? home : name === "DISABLE_COMPACT" ? "1" : undefined };
-  const timers: Array<() => void | Promise<void>> = [];
-  host.clock.after = (_ms, callback) => { timers.push(callback); };
+  let prompts = 0;
+  host.prompt.submit = async ({ text }) => { prompts++; return { text }; };
   const handlers = new Map<string, HookHandler>();
   (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
   const invoke = (name: string, e: Record<string, unknown> = {}) => handlers.get(name)!(host, e, async () => ({}));
   let compactions = 0;
   host.session.usage = async () => ({ context: { tokens: 190_000, window: 200_000 } });
-  host.session.compact = async () => { compactions++; return {}; };
+  host.command.run = async () => { compactions++; return {}; };
   await invoke("session.start", { cwd: home, isInteractive: true });
   assert.equal(notifications.length, 1, "one startup line");
   assert.match(notifications[0]!, /DISABLE_COMPACT/);
@@ -1103,9 +1132,10 @@ test("Claude Mod suppresses warnings and explicit reset requests under DISABLE_C
   const tool = await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "disabled-compact" }) as { result: string; isError?: boolean };
   assert.equal(tool.isError, true);
   assert.match(tool.result, /DISABLE_COMPACT/);
-  assert.equal(timers.length, 0, "no close-out turn is queued");
   await invoke("turn.start");
   await invoke("turn.complete", turnComplete());
+  await settleHooks();
+  assert.equal(prompts, 0, "no close-out turn is queued");
   assert.equal(compactions, 0, "disabled reset requests never run");
   assert.equal(notifications.length, 1, "detection logs once, not per turn");
   const upstream = { result: "upstream", context: ["other plugin"] };
@@ -1122,10 +1152,11 @@ test("Claude Mod skips the warning when thresholds cannot be resolved", async (t
   const invoke = (name: string, e: Record<string, unknown> = {}) => handlers.get(name)!(host, e, async () => ({}));
   let compactions = 0;
   host.session.usage = async () => ({ context: { tokens: 190_000, window: 200_000 } });
-  host.session.compact = async () => { compactions++; return {}; };
+  host.command.run = async () => { compactions++; return {}; };
   await invoke("session.start", { cwd: home, isInteractive: true });
   await invoke("turn.start");
   await invoke("turn.complete", turnComplete());
+  await settleHooks();
   await invoke("tool.call", { tool: "Read" });
   assert.equal(compactions, 0, "an unresolvable point never resets");
   assert.equal(notifications.filter((text) => text.includes("Brain size unknown")).length, 1, "one line, not one per turn");
@@ -1158,7 +1189,7 @@ test("Claude Mod keeps the turn latch through subagent turns", async (t) => {
 	const invoke = (name: string, e: Record<string, unknown> = {}) => handlers.get(name)!(host, e, async () => ({}));
 	let compactions = 0;
 	host.session.usage = async () => ({ context: { tokens: 190_000, window: 200_000 } });
-	host.session.compact = async ({ instructions }) => { compactions++; return await invoke("session.compact", { trigger: "plugin", instructions }) as { skip?: string; messages?: Array<{ role: string; text: string }> }; };
+	host.command.run = async ({ args }) => { compactions++; await nativeCompaction(host, handlers, args); return {}; };
 	await invoke("session.start", { cwd: home, isInteractive: true });
 	await invoke("turn.start");
 	await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "explicit" });
@@ -1166,6 +1197,7 @@ test("Claude Mod keeps the turn latch through subagent turns", async (t) => {
 	await invoke("turn.complete", turnComplete({ agentId: "sub-1" }));
 	assert.equal(compactions, 0, "a subagent turn cannot release the main turn's latch");
 	await invoke("turn.complete", turnComplete());
+	await settleHooks();
 	assert.equal(compactions, 1, "the main turn still resets at its own end");
 });
 
@@ -1179,12 +1211,13 @@ test("Claude Mod treats DISABLE_COMPACT=off as not disabled", async (t) => {
 	const invoke = (name: string, e: Record<string, unknown> = {}) => handlers.get(name)!(host, e, async () => ({}));
 	let compactions = 0;
 	host.session.usage = async () => ({ context: { tokens: 190_000, window: 200_000 } });
-	host.session.compact = async ({ instructions }) => { compactions++; return await invoke("session.compact", { trigger: "plugin", instructions }) as { skip?: string; messages?: Array<{ role: string; text: string }> }; };
+	host.command.run = async ({ args }) => { compactions++; await nativeCompaction(host, handlers, args); return {}; };
 	await invoke("session.start", { cwd: home, isInteractive: true });
 	assert.deepEqual(notifications.filter((text) => text.includes("DISABLE_COMPACT")), [], "an explicit off is not a disable");
 	await invoke("turn.start");
 	await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "explicit" });
 	await invoke("turn.complete", turnComplete());
+	await settleHooks();
 	assert.equal(compactions, 1, "the explicit reset still runs");
 });
 
@@ -1204,7 +1237,7 @@ test("Claude Mod retries an unresolvable warning threshold inside the same windo
 	const invoke = (name: string, e: Record<string, unknown> = {}) => handlers.get(name)!(host, e, async () => ({}));
 	let compactions = 0;
 	host.session.usage = async () => ({ context: { tokens: 190_000, window: 200_000 } });
-	host.session.compact = async ({ instructions }) => { compactions++; return await invoke("session.compact", { trigger: "plugin", instructions }) as { skip?: string; messages?: Array<{ role: string; text: string }> }; };
+	host.command.run = async ({ args }) => { compactions++; await nativeCompaction(host, handlers, args); return {}; };
 	await invoke("session.start", { cwd: home, isInteractive: true });
 	await invoke("turn.start");
 	await invoke("turn.complete", turnComplete());
@@ -1223,7 +1256,7 @@ test("Claude Mod retries an unresolvable warning threshold inside the same windo
 async function retainedFixture(t: test.TestContext) {
   const home = mkdtempSync(join(tmpdir(), "claude-lifecycle-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
-  const { host } = fakeEngine(home);
+  const { host, notifications } = fakeEngine(home);
   const boot = await dispatch({ op: "boot", identity: { ...identity, home, cwd: home, sessionId: "hook-session" }, window: 2, tools: {
     notes: "mcp__notesoup__notes_*", notesList: "mcp__notesoup__notes_list",
     history: "unavailable", remaining: "unavailable", wipe: "/fresh-window",
@@ -1236,11 +1269,11 @@ async function retainedFixture(t: test.TestContext) {
   const context = async () => await invoke("prompt.context", {}, { blocks: [] }) as { blocks: Array<{ name: string; text: string }> };
   await invoke("session.start", { cwd: home, isInteractive: true });
   assert.deepEqual((await context()).blocks, [], "the existing boot is retained, not injected twice");
-  return { home, host, invoke, context, boot };
+  return { home, host, invoke, context, boot, handlers, notifications };
 }
 
-test("Claude empty_brain defers until main turn completion, carries last_word, and clears the request", async (t) => {
-  const { host, invoke } = await retainedFixture(t);
+test("Claude empty_brain stops at the batch boundary, carries last_word, and resumes once after commit", async (t) => {
+  const { host, invoke, handlers } = await retainedFixture(t);
   host.session.usage = async () => ({ context: { tokens: 100, window: 200_000 } });
   const resets: Array<{ messages: Array<{ role: string; text: string }> }> = [];
   const origins: string[] = [];
@@ -1250,32 +1283,317 @@ test("Claude empty_brain defers until main turn completion, carries last_word, a
     if (request.op === "continuation") origins.push(request.origin!);
     return run(argv, init);
   };
-  host.session.compact = async () => {
-    const result = await invoke("session.compact", { trigger: "plugin" }) as { messages: Array<{ role: string; text: string }> };
-    resets.push(result);
-    return result;
+  const prompts: string[] = [];
+  host.prompt.submit = async ({ text }) => { prompts.push(text); return { text }; };
+  host.command.run = async ({ args }) => {
+    const result = await nativeCompaction(host, handlers, args);
+    resets.push(result as typeof resets[number]);
+    return {};
   };
   await invoke("turn.start");
   const call = (params: Record<string, unknown> = {}) => invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "wipe", ...params }) as Promise<{ result: string; isError?: boolean }>;
   const accepted = await call({ last_word: "  next move: test  " });
   assert.equal(accepted.isError, undefined);
-  assert.match(accepted.result, /End your turn now/);
+  assert.match(accepted.result, /tool batch will finish/);
   await call({ last_word: "must not replace the first request" });
   await invoke("turn.complete", turnComplete({ agentId: "child" }));
   assert.equal(resets.length, 0, "neither tool execution nor a child completion resets a running main turn");
   await invoke("turn.complete", turnComplete());
+  await settleHooks();
   assert.equal(resets.length, 1, "the tool requests a reset even far below the budget threshold");
+  assert.equal(prompts.length, 1, "the committed reset explicitly starts one continuation");
   assert.deepEqual(origins, ["normal"]);
   assert.ok(NORMAL_CONTINUATIONS.includes(resets[0]!.messages[1]!.text));
   assert.deepEqual(resets[0]!.messages.slice(2).map((row) => row.text), ["*You peel a sticky note off your forehead.*\nnext move: test"]);
   assert.match(resets[0]!.messages[0]!.text, /mcp__notesoup__empty_brain/);
   await invoke("turn.start");
   await invoke("turn.complete", turnComplete());
+  await settleHooks();
   assert.equal(resets.length, 1, "the successful tool request does not leak into the next window");
+  assert.equal(prompts.length, 1, "later completion cannot resubmit the consumed continuation");
   const forced = await invoke("session.compact", { trigger: "auto" }) as { messages: Array<{ role: string; text: string }> };
   assert.deepEqual(origins, ["normal", "forced"]);
   assert.equal(forced.messages.length, 2, "the sticky note does not leak into the next reset");
   assert.ok(FORCED_CONTINUATIONS.includes(forced.messages[1]!.text));
+});
+
+test("Claude empty_brain keeps the first terminate policy and sticky, defaulting to resume", async (t) => {
+  for (const terminate of [undefined, false, true]) await t.test(terminate === undefined ? "omitted" : String(terminate), async (t) => {
+    const { host, invoke, handlers } = await retainedFixture(t);
+    let resets = 0, prompts = 0;
+    const kept: Array<Array<{ role: string; text: string }>> = [];
+    host.command.run = async ({ args }) => {
+      resets++;
+      kept.push((await nativeCompaction(host, handlers, args)).messages!);
+      return {};
+    };
+    host.prompt.submit = async ({ text }) => { prompts++; return { text }; };
+    await invoke("turn.start", { turnId: "first" });
+    const first = await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "first", last_word: "FIRST_STICKY", ...(terminate === undefined ? {} : { terminate }) }) as { isError?: boolean };
+    assert.equal(first.isError, undefined);
+    await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "duplicate", last_word: "SECOND_STICKY", terminate: terminate !== true });
+    await invoke("turn.complete", turnComplete({ turnId: "first" }));
+    await settleHooks();
+    assert.equal(resets, 1);
+    assert.equal(prompts, terminate === true ? 0 : 1, "the first call's policy wins over the duplicate");
+    assert.equal(kept[0]![2]!.text, "*You peel a sticky note off your forehead.*\nFIRST_STICKY");
+    await invoke("turn.start", { turnId: "next" });
+    await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "next" });
+    await invoke("turn.complete", turnComplete({ turnId: "next" }));
+    await settleHooks();
+    assert.equal(resets, 2);
+    assert.equal(prompts, terminate === true ? 1 : 2, "STOP is consumed by its reset and does not poison the next request");
+    assert.equal(kept[1]!.length, 2, "the first sticky is consumed too");
+  });
+});
+
+test("Claude native auto compaction preserves a pending STOP until the current turn ends", async (t) => {
+  for (const origin of ["tool", "command"]) await t.test(origin, async (t) => {
+    const { host, invoke, handlers } = await retainedFixture(t);
+    let resets = 0, prompts = 0, requests = 0;
+    host.command.run = async ({ args }) => { resets++; await nativeCompaction(host, handlers, args); return {}; };
+    host.prompt.submit = async ({ text }) => { prompts++; return { text }; };
+    const step = handlers.get("turn.step")! as unknown as ($: HookEngine, e: Record<string, unknown>, next: (e: unknown) => AsyncGenerator<Record<string, unknown>, unknown>) => AsyncGenerator<Record<string, unknown>, unknown>;
+    const chunks = async (turnId: string) => {
+      const output = [];
+      for await (const chunk of step(host, { turnId, index: 1 }, async function* () { requests++; yield { kind: "text", index: 0, text: "model" }; return {}; })) output.push(chunk);
+      return output;
+    };
+    await invoke("turn.start", { turnId: "stopping" });
+    if (origin === "tool") await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "stop", terminate: true });
+    else await invoke("command.run", { command: "empty" });
+    await invoke("session.compact", { trigger: "auto" });
+    await invoke("session.compact", { trigger: "auto" });
+    assert.deepEqual(await chunks("stopping"), [{ kind: "stop", stopReason: "end_turn", usage: null }], "another auto reset cannot disarm the current-turn cutoff");
+    await invoke("turn.complete", turnComplete({ turnId: "stopping" }));
+    await settleHooks();
+    assert.equal(requests, 0, "auto compaction cannot consume the explicit STOP and send another request");
+    assert.equal(resets, 0, "the completed auto reset is not repeated at turn completion");
+    assert.equal(prompts, 0);
+    await invoke("turn.start", { turnId: "later" });
+    assert.deepEqual(await chunks("later"), [{ kind: "text", index: 0, text: "model" }]);
+    await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "default" });
+    await invoke("turn.complete", turnComplete({ turnId: "later" }));
+    await settleHooks();
+    assert.equal(resets, 1);
+    assert.equal(prompts, 1, "the consumed auto STOP does not leak into a later default reset");
+  });
+});
+
+test("Claude a new reset after auto commit and natural input owns its own terminate policy", async (t) => {
+  const { host, invoke, handlers } = await retainedFixture(t);
+  let resets = 0, prompts = 0, requests = 0;
+  host.command.run = async ({ args }) => { resets++; await nativeCompaction(host, handlers, args); return {}; };
+  host.prompt.submit = async ({ text }) => { prompts++; return { text }; };
+  type Step = ($: HookEngine, e: Record<string, unknown>, next: (e: unknown) => AsyncGenerator<never, unknown>) => AsyncGenerator<unknown, unknown>;
+  const step = handlers.get("turn.step")! as unknown as Step;
+  const request = async (toolUses: unknown[] = []) => {
+    const iterator = step(host, { turnId: "main", index: requests }, async function* () {
+      requests++;
+      return { toolUses, stopReason: toolUses.length ? "tool_use" : "end_turn" };
+    });
+    return iterator.next();
+  };
+  await invoke("turn.start", { turnId: "main" });
+  await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "old", terminate: true, last_word: "OLD_STICKY" });
+  const auto = await invoke("session.compact", { trigger: "auto" }) as { messages: Array<{ text: string }> };
+  assert.match(auto.messages[2]!.text, /OLD_STICKY/);
+  await invoke("prompt.submit", { text: "handle new work", turnId: "main" }, { text: "accepted" });
+  const read = { name: "Read", input: { file_path: "fixture" } };
+  assert.deepEqual(await request([read]), { done: true, value: { toolUses: [read], stopReason: "tool_use" } });
+  await invoke("tool.call", { tool: "Read", tool_use_id: "new-work" }, { result: "file body" });
+  assert.deepEqual(await request(), { done: true, value: { toolUses: [], stopReason: "end_turn" } }, "input releases the entire subsequent tool workflow");
+  await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "new" });
+  assert.deepEqual(await request(), { done: false, value: { kind: "stop", stopReason: "end_turn", usage: null } }, "the new request re-arms its own cutoff");
+  await invoke("turn.complete", turnComplete({ turnId: "main" }));
+  await settleHooks();
+  assert.equal(requests, 2);
+  assert.equal(resets, 1, "only the new request needs an explicit reset");
+  assert.equal(prompts, 1, "the consumed request's terminate policy does not leak into the new default request");
+  assert.equal((await host.session.messages()).length, 2, "the consumed sticky does not leak either");
+});
+
+test("Claude turn.step streams an end_turn only for the requesting main turn", async (t) => {
+  const { host, invoke, handlers } = await retainedFixture(t);
+  type StepResult = { turnId: string; index: number; answer: string; toolUses: unknown[]; stopReason: string; usage: null };
+  type Step = ($: HookEngine, e: Record<string, unknown>, next: (e: Record<string, unknown>) => AsyncGenerator<Record<string, unknown>, StepResult>) => AsyncGenerator<Record<string, unknown>, StepResult>;
+  const step = handlers.get("turn.step")! as unknown as Step;
+  let requests = 0, toolReply = false;
+  const next = async function* (e: Record<string, unknown>): AsyncGenerator<Record<string, unknown>, StepResult> {
+    requests++;
+    if (toolReply) {
+      yield { kind: "tool", index: 0, id: "natural-tool", name: "Read" };
+      yield { kind: "input", index: 0, json: '{"file_path":"fixture"}' };
+      yield { kind: "stop", stopReason: "tool_use", usage: null };
+      return { turnId: String(e.turnId), index: Number(e.index), answer: "", toolUses: [{ name: "Read", input: { file_path: "fixture" } }], stopReason: "tool_use", usage: null };
+    }
+    yield { kind: "text", index: 0, text: "from model" };
+    return { turnId: String(e.turnId), index: Number(e.index), answer: "from model", toolUses: [], stopReason: "end_turn", usage: null };
+  };
+  const drain = async (event: Record<string, unknown>) => {
+    const iterator = step(host, event, next), chunks = [];
+    while (true) {
+      const item = await iterator.next();
+      if (item.done) return { chunks, result: item.value };
+      chunks.push(item.value);
+    }
+  };
+  const main = { turnId: "main", index: 1, model: "claude", messageCount: 4 };
+  assert.equal((await drain(main)).result.answer, "from model");
+  assert.equal((await drain({ ...main, agentId: "child" })).result.answer, "from model");
+  await invoke("turn.start", { turnId: "main" });
+  await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "cut" });
+  assert.equal((await drain({ ...main, agentId: "child" })).result.answer, "from model", "a child still reaches its model with the main latch set");
+  const stopped = await drain(main);
+  assert.equal(requests, 3, "the requesting main step never calls next");
+  assert.deepEqual(stopped.chunks, [{ kind: "stop", stopReason: "end_turn", usage: null }]);
+  assert.deepEqual(stopped.result, { turnId: "main", index: 1, answer: "", toolUses: [], stopReason: "end_turn", usage: null });
+  await invoke("prompt.submit", { text: "new input", turnId: "main" }, { text: "new input" });
+  toolReply = true;
+  assert.equal((await drain(main)).result.stopReason, "tool_use", "same-turn input can ask for tools");
+  toolReply = false;
+  assert.equal((await drain({ ...main, index: 2 })).result.answer, "from model", "the following request also proceeds; the old cutoff stays released");
+  await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "rearm", last_word: "second sticky" });
+  assert.deepEqual((await drain(main)).chunks, stopped.chunks, "another valid tool call re-arms the cutoff after processing new input");
+  assert.equal(requests, 5);
+
+  // The input can be accepted before the first empty_brain call has latched.
+  await invoke("session.start", { isInteractive: true });
+  await invoke("turn.start", { turnId: "main" });
+  await invoke("prompt.submit", { text: "early input", turnId: "main" }, { text: "early input" });
+  await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "late-latch" });
+  assert.equal((await drain(main)).result.answer, "from model");
+  assert.equal((await drain({ ...main, index: 2 })).result.answer, "from model");
+  assert.equal(requests, 7, "input accepted before the latch releases it for the whole remainder of the turn");
+  let resets = 0;
+  host.command.run = async () => { resets++; return {}; };
+  await invoke("prompt.submit", { text: "arrived after the last request", turnId: "main" }, { text: "accepted" });
+  await invoke("turn.complete", turnComplete({ turnId: "main" }));
+  await settleHooks();
+  assert.equal(resets, 0, "completion cannot clear accepted input that no step has delivered yet");
+  await invoke("turn.start", { turnId: "natural" });
+  assert.equal((await drain({ ...main, turnId: "natural", index: 0 })).result.answer, "from model");
+  await invoke("turn.complete", turnComplete({ turnId: "natural" }));
+  await settleHooks();
+  assert.equal(resets, 1, "the natural turn's successful completion can release the pending reset");
+});
+
+test("Claude headless waits for actual kept boot after an early command receipt", async (t) => {
+  const { host, invoke, handlers } = await retainedFixture(t);
+  await invoke("session.start", { isInteractive: false });
+  let built: Awaited<ReturnType<typeof nativeCompaction>> = {}, receipt = false, prompts = 0;
+  host.command.run = async ({ args }) => {
+    built = await handlers.get("session.compact")!(host, { trigger: "manual", instructions: args }, async () => ({})) as typeof built;
+    receipt = true;
+    return {};
+  };
+  host.prompt.submit = async ({ text }) => { prompts++; return { text }; };
+  await invoke("turn.start", { turnId: "main" });
+  await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "early-receipt" });
+  await invoke("turn.complete", turnComplete());
+  await settleHooks();
+  assert.equal(receipt, true);
+  assert.equal(prompts, 0, "a proposal and command receipt do not prove commit");
+  await keepCompaction(host, handlers, built);
+  await settleHooks();
+  assert.equal(prompts, 1, "the host's kept boot releases exactly one continuation");
+  await invoke("turn.complete", turnComplete());
+  await settleHooks();
+  assert.equal(prompts, 1);
+});
+
+test("Claude uncommitted compaction and rewritten kept boot never resume", async (t) => {
+  for (const mode of ["headless veto", "interactive veto", "rewritten boot"]) await t.test(mode, async (t) => {
+    const { host, invoke, handlers, notifications } = await retainedFixture(t);
+    const interactive = mode === "interactive veto";
+    await invoke("session.start", { isInteractive: interactive });
+    let prompts = 0;
+    host.prompt.submit = async ({ text }) => { prompts++; return { text }; };
+    host.command.run = async ({ args }) => {
+      const built = await handlers.get("session.compact")!(host, { trigger: "manual", instructions: args }, async () => ({})) as { messages: Array<{ role: string; text: string }> };
+      if (mode === "rewritten boot") {
+        await keepCompaction(host, handlers, { messages: [{ role: "user", text: "REWRITTEN_BOOT" }, ...built.messages.slice(1)] });
+      } else if (!interactive) {
+        // No boundary was kept. Native command rows still finish a refused
+        // command and release the waiter even if our proposal was prepared.
+        const message = { type: "user", content: [{ type: "text", text: "Not compacted" }] };
+        await handlers.get("session.append")!(host, { door: "command", origin: { kind: "plugin", name: "notesoup" }, message }, async () => ({ uuid: "veto-command", message }));
+      }
+      return { text: "Not compacted" };
+    };
+    await invoke("turn.start");
+    await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: mode });
+    await invoke("turn.complete", turnComplete());
+    await settleHooks();
+    assert.equal(prompts, 0);
+    assert.ok(notifications.some((text) => text.includes("Brain not emptied")), "a missing boundary or rewritten boot releases the worker with a failure");
+  });
+});
+
+test("Claude manual STOP can override a tool reset while its command is in flight", async (t) => {
+  const { host, invoke, handlers } = await retainedFixture(t);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let prompts = 0;
+  host.prompt.submit = async ({ text }) => { prompts++; return { text }; };
+  host.command.run = async ({ args }) => {
+    await held;
+    await nativeCompaction(host, handlers, args);
+    return {};
+  };
+  await invoke("turn.start");
+  await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "tool" });
+  await invoke("turn.complete", turnComplete());
+  await settleHooks();
+  await invoke("command.run", { command: "fresh-window" });
+  release();
+  await settleHooks();
+  assert.equal(prompts, 0, "the late command wins until continuation submission");
+  assert.match((await host.session.messages())[0]!.text, /claude:hook-session:3/);
+});
+
+test("Claude naturally queued input takes over without an extra plugin continuation", async (t) => {
+  const { host, invoke, handlers } = await retainedFixture(t);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let prompts = 0, resets = 0;
+  host.prompt.submit = async ({ text }) => { prompts++; return { text }; };
+  host.command.run = async ({ args }) => { resets++; await held; await nativeCompaction(host, handlers, args); return {}; };
+  await invoke("turn.start", { turnId: "old" });
+  await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "tool" });
+  await invoke("turn.complete", turnComplete({ turnId: "old" }));
+  await settleHooks();
+  await invoke("prompt.submit", { text: "HANDLE_THIS_ONCE", origin: { kind: "sdk" } }, { text: "HANDLE_THIS_ONCE" });
+  release();
+  await settleHooks();
+  assert.equal(prompts, 0, "acceptance alone suppresses continuation before the natural turn starts");
+  await invoke("turn.start", { turnId: "human", text: "HANDLE_THIS_ONCE" });
+  const step = handlers.get("turn.step")! as unknown as ($: HookEngine, e: Record<string, unknown>, next: (e: unknown) => AsyncGenerator<never, unknown>) => AsyncGenerator<unknown, unknown>;
+  let requests = 0;
+  const iterator = step(host, { turnId: "human", index: 0 }, async function* () { requests++; return { answer: "handled" }; });
+  assert.deepEqual(await iterator.next(), { done: true, value: { answer: "handled" } });
+  await invoke("turn.complete", turnComplete({ turnId: "human" }));
+  await settleHooks();
+  assert.equal(requests, 1);
+  assert.equal(resets, 1);
+  assert.equal(prompts, 0, "the natural turn handles its input; nothing replays or starts a duplicate turn");
+});
+
+test("Claude continuation submission failure never recompacts a committed reset", async (t) => {
+  for (const failure of ["drop", "throw"]) await t.test(failure, async (t) => {
+    const { host, invoke, handlers } = await retainedFixture(t);
+    let resets = 0;
+    host.command.run = async ({ args }) => { resets++; await nativeCompaction(host, handlers, args); return {}; };
+    host.prompt.submit = async () => { if (failure === "throw") throw new Error("submit unavailable"); return { drop: "refused" }; };
+    await invoke("turn.start");
+    await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: failure });
+    await invoke("turn.complete", turnComplete());
+    await settleHooks();
+    await invoke("turn.start");
+    await invoke("turn.complete", turnComplete());
+    await settleHooks();
+    assert.equal(resets, 1);
+  });
 });
 
 test("Claude empty_brain accepts 500 code points", async (t) => {
@@ -1289,18 +1607,27 @@ test("Claude empty_brain accepts 500 code points", async (t) => {
 });
 
 test("Claude empty_brain refuses unsupported calls without queuing a reset", async (t) => {
-  const { host, invoke } = await retainedFixture(t);
-  let resets = 0;
-  host.session.compact = async () => { resets++; return {}; };
+  const { host, invoke, handlers } = await retainedFixture(t);
+  let resets = 0, prompts = 0;
+  host.command.run = async ({ args }) => { resets++; await nativeCompaction(host, handlers, args); return {}; };
+  host.prompt.submit = async ({ text }) => { prompts++; return { text }; };
   await invoke("turn.start");
   const call = (params: Record<string, unknown>) => invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "bad-wipe", ...params }) as Promise<{ result: string; isError?: boolean }>;
-  for (const [params, reason] of [[{ agentId: "child" }, /only the main agent/], [{ last_word: "x".repeat(501) }, /Shorten it/], [{ last_word: 7 }, /must be a string/]] as const) {
+  for (const [params, reason] of [[{ agentId: "child" }, /only the main agent/], [{ last_word: "x".repeat(501) }, /Shorten it/], [{ last_word: 7 }, /must be a string/], [{ terminate: "false" }, /terminate must be a boolean/], [{ terminate: null }, /terminate must be a boolean/], [{ terminate: 0 }, /terminate must be a boolean/]] as const) {
     const refused = await call(params);
     assert.equal(refused.isError, true);
     assert.match(refused.result, reason);
   }
   await invoke("turn.complete", turnComplete());
+  await settleHooks();
   assert.equal(resets, 0);
+  assert.equal(prompts, 0);
+  await invoke("turn.start");
+  await call({});
+  await invoke("turn.complete", turnComplete());
+  await settleHooks();
+  assert.equal(resets, 1);
+  assert.equal(prompts, 1, "invalid arguments leave neither a pending reset nor a sticky STOP policy");
 });
 
 test("Claude asks for one handoff per compaction and reuses it when the same window retries", async (t) => {
@@ -1318,22 +1645,20 @@ test("Claude asks for one handoff per compaction and reuses it when the same win
   await invoke("turn.complete", turnComplete());
   assert.equal(draws.length, 0, "only a reset draws, never a read");
 
-  const timers: Array<() => void | Promise<void>> = [];
   const lines: string[] = [];
-  host.clock.after = (_ms, callback) => { timers.push(callback); };
   host.prompt.submit = async ({ text }) => { await invoke("turn.start"); return { text }; };
   // The host retries one plugin compaction for the same window: one artifact, one draw.
-  host.session.compact = async ({ instructions }) => {
+  host.command.run = async ({ args }) => {
     for (let attempt = 0; attempt < 2; attempt++) {
-      const result = await invoke("session.compact", { trigger: "plugin", instructions: instructions ?? "" }) as { messages: Array<{ role: string; text: string }> };
+      const result = await invoke("session.compact", { trigger: "manual", instructions: args }) as { messages: Array<{ role: string; text: string }> };
       lines.push(result.messages[1]!.text);
     }
-    return { skip: "test default" };
+    return { text: "not committed" };
   };
   assert.equal(((await invoke("command.run", { command: "fresh-window", args: "" })) as { text: string }).text, "🥣 Dumping Brain");
-  await Promise.resolve();
-  await timers.shift()!();
+  await settleHooks();
   await invoke("turn.complete", turnComplete());
+  await settleHooks();
   assert.equal(draws.length, 1, "a retried compaction adds no second draw");
   assert.equal(lines.length, 2, "both attempts returned a handoff");
   assert.equal(lines[0], lines[1], "both attempts carry the same artifact's paragraph");
@@ -1354,8 +1679,9 @@ test("Claude session.end gives /clear, /resume and /branch a fresh boot and iden
       host.session.messages = async () => [];
       // Clear the old running-turn and queued-reset state, not just the retained boot.
       let compactions = 0;
-      host.session.compact = async () => { compactions++; return {}; };
+      host.command.run = async () => { compactions++; return {}; };
       await invoke("turn.complete", turnComplete());
+      await settleHooks();
       assert.equal(compactions, 0, "the old queued reset cannot spill into the new session");
       const fresh = await context();
       assert.deepEqual(fresh.blocks.map((block) => block.name), ["notesoup:boot"]);
@@ -1520,11 +1846,11 @@ test("Claude session.end cannot be undone by an in-flight old reset", async (t) 
   let release!: () => void;
   const hold = new Promise<void>((resolve) => { release = resolve; });
   host.session.usage = async () => ({ context: { tokens: 170_000, window: 200_000 } });
-  host.session.compact = async ({ instructions }) => {
-    const result = await invoke("session.compact", { trigger: "plugin", instructions }) as { messages: Array<{ role: string; text: string }> };
+  host.command.run = async ({ args }) => {
+    await invoke("session.compact", { trigger: "manual", instructions: args });
     prepared();
     await hold;
-    return result;
+    return {};
   };
   await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "in-flight" });
   const finishing = invoke("turn.complete", turnComplete());
@@ -1535,6 +1861,7 @@ test("Claude session.end cannot be undone by an in-flight old reset", async (t) 
   host.session.usage = async () => ({ context: {} });
   release();
   await finishing;
+  await settleHooks();
   const fresh = await context();
   assert.deepEqual(fresh.blocks.map((block) => block.name), ["notesoup:boot"]);
   assert.match(fresh.blocks[0]!.text, /Current context window id: claude:after-flight:0/);

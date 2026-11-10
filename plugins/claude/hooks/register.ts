@@ -8,7 +8,7 @@ const OUTPUT_LIMIT = 1024 * 1024
 type Identity = { home: string; sessionId: string; cwd: string; agent: string; model: string }
 type SchemaRow = { name: string; description: string; inputSchema: Record<string, unknown> }
 type HistorySource = { sessionId: string; transcriptPath: string; headUuid?: string }
-type Engine = Pick<EngineInterface, "process" | "session" | "ui" | "clock" | "prompt" | "env" | "settings" | "command">
+type Engine = Pick<EngineInterface, "process" | "session" | "ui" | "prompt" | "env" | "settings" | "command">
 /** The measured context, as much of it as the engine reported. */
 type ContextUsage = { tokens?: number; window?: number; percent?: number }
 /** Shared reset prose, fetched once per session so Pi and Claude cannot drift apart. */
@@ -17,14 +17,78 @@ type ClaudeLimits = {
   source: string; autoCompact: boolean; unit: "tokens" | "percent"
   native: number; reset: number; warn: number; resetMargin: number; warningRunway: number
 }
+type ResetRequest = { tool?: { lastWord?: string }; resume: boolean }
+/** Request: until consumed/cancelled. Cutoff: one turn, even after auto consumes the request.
+ * Commit lives separately in ResetState: one native command attempt, proved by kept rows. */
+class ResetFlow {
+  request?: ResetRequest
+  cutoffTurnId?: string
+  turnId?: string
+  pendingInputTurnId?: string
+  running = false
+
+  requestReset(tool?: { lastWord?: string; terminate: boolean }): boolean {
+    const first = tool ? this.request?.tool === undefined : this.request === undefined
+    const request = this.request ??= { resume: true }
+    if (tool) {
+      if (first) {
+        request.tool = { lastWord: tool.lastWord }
+        request.resume &&= !tool.terminate
+      }
+      this.cutoffTurnId = this.turnId
+    } else request.resume = false
+    return first
+  }
+  input(turnId?: string) {
+    if (turnId !== undefined) this.pendingInputTurnId = turnId
+    if (this.request?.tool) this.request.resume = false
+  }
+  start(turnId: string) {
+    if (this.request?.tool) this.request.resume = false
+    this.turnId = turnId
+    this.running = true
+  }
+  cutoff(turnId: string): boolean {
+    // Input may predate the tool latch. Release the whole workflow, not just one request.
+    if (this.pendingInputTurnId !== undefined && this.pendingInputTurnId === turnId) {
+      this.pendingInputTurnId = undefined
+      this.cutoffTurnId = undefined
+      if (this.request) this.request.resume = false
+      return false
+    }
+    return turnId === this.cutoffTurnId
+  }
+  complete(reason: string): boolean {
+    this.running = false
+    const cancelled = reason !== "answer" && this.request !== undefined
+    if (cancelled || !this.request) this.cancel()
+    return cancelled
+  }
+  get ready(): boolean {
+    return !!this.request && !this.running && !(this.pendingInputTurnId !== undefined && this.pendingInputTurnId === this.turnId)
+  }
+  consume(auto = false): boolean {
+    const request = this.request
+    // Another auto reset must not disarm an already consumed request's cutoff.
+    if (auto && !request) return false
+    this.cutoffTurnId = auto && request && !request.resume ? this.cutoffTurnId ?? (!request.tool ? this.turnId : undefined) : undefined
+    this.request = undefined
+    return request?.tool !== undefined && request.resume
+  }
+  cancel() {
+    this.request = undefined
+    this.cutoffTurnId = undefined
+  }
+}
 type ResetState = {
-  identity?: Identity; history?: HistorySource; historyWindowHead?: string; generation: number; window: number; disabled: boolean; turnRunning: boolean; resetting: boolean
-  manualPending: boolean; headless: boolean; usageFailureLogged: boolean; preparedBoot?: string; retainedBoot?: string
-  toolResetRequested?: boolean; lastWord?: string; manualCompacting?: boolean
-  continuation?: string; continuationWindow?: number
+  identity?: Identity; history?: HistorySource; historyWindowHead?: string; generation: number; window: number; disabled: boolean; flow: ResetFlow
+  headless: boolean; usageFailureLogged: boolean; commit?: { instructions: string; boot?: string; boundary: boolean; resolve: (kept: boolean) => void }; retainedBoot?: string
+  continuation?: { window: number; text: string }
   compactDisabled: boolean; limitsFailureLogged: boolean; limitsAttempts: number; limitsKey?: string
   limits?: ClaudeLimits; warnedWindow?: number; warningPending?: number; texts?: SharedTexts; settingsFailureLogged: boolean
 }
+type ResetWork = { kind: "closeout" | "reset"; generation: number }
+type ResetSignal = { wake?: (work: ResetWork) => void }
 const COMPACT_DISABLED = "Brain can't be emptied with DISABLE_COMPACT"
 const NOTESOUP_DISABLED = "Notesoup is off with NOTESOUP_DISABLED"
 const THRESHOLDS_UNAVAILABLE = "Brain size unknown · no budget warning"
@@ -61,7 +125,7 @@ async function resetMessages($: Engine, state: ResetState, identity: Identity): 
   return { boot: text, messages: [
     { role: "user", text, toolUses: [] },
     { role: "user", text: continuation, toolUses: [] },
-    ...(state.lastWord ? [{ role: "user" as const, text: `*You peel a sticky note off your forehead.*\n${state.lastWord}`, toolUses: [] as [] }] : []),
+    ...(state.flow.request?.tool?.lastWord ? [{ role: "user" as const, text: `*You peel a sticky note off your forehead.*\n${state.flow.request.tool.lastWord}`, toolUses: [] as [] }] : []),
   ] }
 }
 function numberOf(value: unknown): number | undefined {
@@ -185,15 +249,14 @@ async function loadTexts($: Engine, state: ResetState): Promise<SharedTexts | un
 }
 /** One draw per reset artifact, reused on retry; only a real tool request is voluntary. */
 async function continuationFor($: Engine, state: ResetState): Promise<string | undefined> {
-  if (state.continuation !== undefined && state.continuationWindow === state.window) return state.continuation
+  if (state.continuation?.window === state.window) return state.continuation.text
   const generation = state.generation
-  const response = await run($, { op: "continuation", origin: state.toolResetRequested ? "normal" : "forced" })
+  const response = await run($, { op: "continuation", origin: state.flow.request?.tool ? "normal" : "forced" })
   if (generation !== state.generation) return undefined
   const result = response.ok ? response.result : undefined
   const text = typeof result === "object" && result !== null ? (result as { text?: unknown }).text : undefined
   if (typeof text !== "string" || text.length === 0) return undefined
-  state.continuation = text
-  state.continuationWindow = state.window
+  state.continuation = { window: state.window, text }
   return text
 }
 function log($: Engine, text: string) {
@@ -230,23 +293,19 @@ async function run($: { process: { run: (argv: readonly string[], init?: { cwd?:
   // reason (`timed out after …`), which a bare phrase would throw away.
   catch (error) { return { ok: false as const, error: `helper execution failed: ${describeFailure(error)}` } }
 }
-function clearManualRequest(state: ResetState): void {
-  state.manualPending = false
-  state.toolResetRequested = state.lastWord = undefined
-}
 /** Session start does not fire on /clear, /resume or /branch. Forget the old window on end. */
 function forgetSession(state: ResetState) {
   state.generation++
   state.identity = undefined
   state.historyWindowHead = undefined
   state.window = 0
-  state.turnRunning = state.resetting = state.usageFailureLogged = false
-  clearManualRequest(state)
-  state.manualCompacting = false
-  state.preparedBoot = state.retainedBoot = undefined
+  state.flow = new ResetFlow()
+  state.usageFailureLogged = false
+  state.commit?.resolve(false)
+  state.commit = undefined
+  state.retainedBoot = undefined
   state.texts = state.limits = undefined
   state.continuation = undefined
-  state.continuationWindow = undefined
   state.limitsAttempts = 0
   state.limitsKey = undefined
   state.settingsFailureLogged = state.limitsFailureLogged = false
@@ -269,7 +328,7 @@ async function refreshIdentity($: Engine, state: ResetState): Promise<Identity |
   if (state.identity?.sessionId === sessionId) {
     state.identity = { ...state.identity, cwd, model }
     await syncHistoryWindow($, state)
-    return state.identity
+    return generation === state.generation ? state.identity : undefined
   }
   const home = await $.env.get("NOTESOUP_HOME") ?? `${await $.env.get("HOME") ?? await $.env.get("USERPROFILE") ?? ""}/.agents/notes`
   if (generation !== state.generation) return undefined
@@ -288,7 +347,7 @@ async function refreshIdentity($: Engine, state: ResetState): Promise<Identity |
 
 /** A committed append is the head evidence; the persisted file may trail it briefly. */
 async function syncHistoryWindow($: Engine, state: ResetState) {
-  if (!state.identity || !state.history?.headUuid || state.history.sessionId !== state.identity.sessionId || state.resetting || state.historyWindowHead === state.history.headUuid) return
+  if (!state.identity || !state.history?.headUuid || state.history.sessionId !== state.identity.sessionId || state.commit || state.historyWindowHead === state.history.headUuid) return
   const generation = state.generation, head = state.history.headUuid
   const response = await run($, { op: "history_state", identity: state.identity, history: state.history })
   if (generation !== state.generation || state.history?.headUuid !== head || !response.ok || typeof response.result !== "object" || response.result === null) return
@@ -299,8 +358,8 @@ async function syncHistoryWindow($: Engine, state: ResetState) {
 }
 
 export function register(on: On) {
-  const manualSignal: { wake?: () => void } = {}
-  const state: ResetState = { generation: 0, window: 0, disabled: false, turnRunning: false, resetting: false, manualPending: false, headless: false, usageFailureLogged: false, compactDisabled: false, limitsFailureLogged: false, limitsAttempts: 0, settingsFailureLogged: false }
+  const resetSignal: ResetSignal = {}
+  const state: ResetState = { generation: 0, window: 0, disabled: false, flow: new ResetFlow(), headless: false, usageFailureLogged: false, compactDisabled: false, limitsFailureLogged: false, limitsAttempts: 0, settingsFailureLogged: false }
   const registered = new Set<string>()
   let keepMemory = false
   // Classic SessionStart precedes typed session.start and startup appends. Keep this binding
@@ -313,11 +372,26 @@ export function register(on: On) {
     return next(e)
   })
   on("session.append", async ($, e, next) => {
+    const generation = state.generation, commit = state.commit
     const sessionId = await $.session.id(), source = state.history
     const result = await next(e)
-    if (e.agentId === undefined && result.uuid !== undefined && state.history === source && source?.sessionId === sessionId) {
-      source.headUuid = result.uuid
-      state.historyWindowHead = undefined
+    if (e.agentId === undefined && result.uuid !== undefined && generation === state.generation) {
+      if (state.history === source && source?.sessionId === sessionId) {
+        source.headUuid = result.uuid
+        state.historyWindowHead = undefined
+      }
+      // A native command resolves before its compaction rows finish appending;
+      // session.messages() still exposes the last request's snapshot. Observe
+      // the host's kept boundary and first plugin row, including rewrites.
+      if (commit && commit === state.commit && state.identity?.sessionId === sessionId) {
+        if (e.door === "compaction" && result.message.name === "compact_boundary") commit.boundary = true
+        if (e.origin.kind === "plugin" && "name" in e.origin && e.origin.name === "notesoup") {
+          if (commit.boundary && e.door === "prompt") {
+            const blocks = result.message.content
+            commit.resolve(result.message.type === "user" && blocks.length === 1 && blocks[0]?.type === "text" && blocks[0].text === commit.boot)
+          } else if (e.door === "command") commit.resolve(false)
+        }
+      }
     }
     return result
   })
@@ -337,13 +411,13 @@ export function register(on: On) {
     if (state.compactDisabled) log($, COMPACT_DISABLED)
     registered.clear()
     await loadTexts($, state)
-    armManual($, state, manualSignal)
+    armReset($, state, resetSignal)
     await $.command.register({ name: "empty", description: "Reset context to a fresh notes-only window", immediate: true })
     await $.command.register({ name: "fresh-window", description: "Reset context to a fresh notes-only window", immediate: true })
     const wipe = await $.tool.register({
       name: "empty_brain",
       description: "Clear your in-context memory and start a fresh context window. Your session, notes, and history survive. Pass `last_word` to stick a tiny note on your forehead for after the wipe.",
-      inputSchema: { type: "object", properties: { last_word: { type: "string", description: "A tiny sticky note, at most 300 characters. After the wipe it is slapped on your forehead; longer notes are refused." } }, additionalProperties: false },
+      inputSchema: { type: "object", properties: { last_word: { type: "string", description: "A tiny sticky note, at most 300 characters. After the wipe it is slapped on your forehead; longer notes are refused." }, terminate: { type: "boolean", description: "Stop after the wipe. Default: false.", default: false } }, additionalProperties: false },
       isDeferred: false,
     } satisfies ToolSpec)
     registered.add(wipe.tool)
@@ -367,70 +441,73 @@ export function register(on: On) {
     if (e.agentId !== undefined || result.deny !== undefined || generation !== state.generation) return result
     return withWarning($, state, (warning) => warning === undefined ? result : { ...result, context: [...(result.context ?? []), warning] })
   })
-  on("prompt.submit", ($, e, next) => withWarning($, state, (warning) =>
-    next(warning === undefined ? e : { ...e, context: [...(e.context ?? []), warning] })))
+  on("prompt.submit", async ($, e, next) => {
+    const generation = state.generation
+    const result = await withWarning($, state, (warning) =>
+      next(warning === undefined ? e : { ...e, context: [...(e.context ?? []), warning] }))
+    // Our own submissions skip this hook; accepted input owns the continuation.
+    if (generation === state.generation && result.drop === undefined) state.flow.input(e.turnId)
+    return result
+  })
   on("turn.start", async ($, e, next) => {
     // The documented turn.start is main-loop only. Guard tagged host events too:
     // only a main-agent turn.complete clears this latch.
     if (state.disabled) return next(e)
     if ("agentId" in e && e.agentId !== undefined) return next(e)
     if (!await refreshIdentity($, state)) return next(e)
-    state.turnRunning = true
+    state.flow.start(e.turnId)
     return next(e)
   })
+  on("turn.step", async function* ($, e, next) {
+    if (state.disabled || e.agentId !== undefined) return yield* next(e)
+    if (!state.flow.cutoff(e.turnId)) return yield* next(e)
+    // This boundary follows the entire tool batch. A synthetic streamed stop
+    // ends the main turn without aborting siblings or making an old-window request.
+    yield { kind: "stop", stopReason: "end_turn", usage: null }
+    return { turnId: e.turnId, index: e.index, answer: "", toolUses: [], stopReason: "end_turn", usage: null }
+  })
   on("turn.complete", async ($, e, next) => {
+    const generation = state.generation
     const result = await next(e)
-    if (e.agentId !== undefined) return result
-    state.turnRunning = false
+    if (e.agentId !== undefined || generation !== state.generation) return result
+    const cancelled = state.flow.complete(e.reason)
     if (state.disabled) return result
-    // A failed turn proves nothing about whether its notes were saved. Cancel
-    // the request instead of compacting now or springing it on a later turn.
-    if (e.reason !== "answer" && state.manualPending) cancelManualReset($, state, e.reason)
+    // A failed turn proves nothing about whether its notes were saved.
+    if (cancelled) log($, `Brain emptying cancelled · turn ended ${e.reason}; ask /fresh-window again`)
     if (!await refreshIdentity($, state)) return result
-    if (e.reason === "answer" && state.manualPending) await reset($, state)
+    if (e.reason === "answer" && state.flow.request) resetSignal.wake?.({ kind: "reset", generation: state.generation })
     return result
   })
   on("command.run", async ($, e, next) => {
     if (state.disabled) return next(e)
-    // Only our queued native command admits manual compaction. A user's /compact
-    // still reaches the veto, even while a reset is pending.
-    if (e.command === "compact" && state.resetting && state.headless && e.origin.kind === "plugin" && e.origin.name === "notesoup") {
-      state.manualCompacting = true
-      try { return await next(e) } finally { state.manualCompacting = false }
-    }
     if (e.command !== "empty" && e.command !== "fresh-window") return next(e)
     if (!await refreshIdentity($, state)) return { text: "🥣 Different brain now · try /fresh-window again" }
     if (state.compactDisabled) return { text: `🥣 ${COMPACT_DISABLED}` }
-    if (state.resetting || state.manualPending) return { text: "🥣 Brain already being emptied" }
-    if (state.turnRunning) {
-      state.manualPending = true
-      return { text: "🥣 Dumping Brain" }
-    }
-    // command.run holds a turn even when idle. Start one hidden close-out
-    // turn after it returns; turn.complete is the verified self-hook path.
-    state.manualPending = true
-    manualSignal.wake?.()
+    const first = state.flow.requestReset()
+    if (state.commit || !first) return { text: "🥣 Brain already being emptied" }
+    // command.run holds a turn even when idle; close out from the non-held waiter.
+    if (!state.flow.running) resetSignal.wake?.({ kind: "closeout", generation: state.generation })
     return { text: "🥣 Dumping Brain" }
   })
   on("session.compact", async ($, e, next) => {
     // Disabled means fully transparent: native compaction runs exactly as if the mod were absent.
     if (state.disabled) return next(e)
     if (e.agentId !== undefined) return next(e)
-    const identity = await refreshIdentity($, state)
     const generation = state.generation
+    const identity = await refreshIdentity($, state)
     // Every pass-through keeps the current boot unless the engine's own summary replaced it.
     const passThrough = async () => {
       const result = await next(e)
       // Precompute installs nothing; a veto or subagent compact cannot remove our boot.
       if (generation === state.generation && e.trigger !== "precompute" && result.skip === undefined) {
         state.retainedBoot = result.messages.some((message) => message.text === state.retainedBoot) ? state.retainedBoot : undefined
-        state.preparedBoot = undefined
+        if (state.commit) state.commit.boot = undefined
       }
       return result
     }
     // Native compaction never runs the summarizer while notesoup is on: user
     // manual and precompute are vetoed; auto becomes the notes-only reset.
-    const own = state.resetting && identity !== undefined && (e.trigger === "plugin" || (e.trigger === "manual" && state.manualCompacting === true))
+    const own = state.commit !== undefined && identity !== undefined && e.trigger === "manual" && e.instructions === state.commit.instructions
     if (e.trigger === "manual" && !own) return { skip: "No compacting brains here · use /fresh-window" }
     if (e.trigger === "precompute") return { skip: "No precomputing brains here" }
     if (!own && e.trigger !== "auto") return passThrough()
@@ -442,16 +519,8 @@ export function register(on: On) {
       log($, `Notes didn't load (${built.skip}) · Claude compacted natively`)
       return passThrough()
     }
-    if (own) {
-      state.preparedBoot = built.boot
-    } else {
-      // The auto hijack keeps the books a successful plugin reset does.
-      state.retainedBoot = built.boot
-      state.preparedBoot = undefined
-      state.window++
-      clearManualRequest(state)
-      log($, "Brain emptied")
-    }
+    if (state.commit) state.commit.boot = own ? built.boot : undefined
+    if (!own) retainReset($, state, built.boot, true)
     return { messages: built.messages }
   })
   // notesoup replaces Claude's summarization and auto-memory guidance; memory can be kept on request.
@@ -495,17 +564,12 @@ async function callNotesTool($: Engine, state: ResetState, e: ToolCallInput): Pr
     if (agentId !== undefined) return errorResult("only the main agent can empty this brain")
     if (state.compactDisabled) return errorResult(COMPACT_DISABLED)
     if (params.last_word !== undefined && typeof params.last_word !== "string") return errorResult("last_word must be a string")
+    if (params.terminate !== undefined && typeof params.terminate !== "boolean") return errorResult("terminate must be a boolean")
     const lastWord = typeof params.last_word === "string" ? params.last_word.trim() || undefined : undefined
     const length = lastWord ? Array.from(lastWord).length : 0
     if (length > 500) return errorResult(`last_word is ${length} characters; the sticky note holds 500. Shorten it and call again.`)
-    if (!state.toolResetRequested) {
-      state.toolResetRequested = true
-      state.lastWord = lastWord
-      state.continuation = undefined
-      state.continuationWindow = undefined
-    }
-    state.manualPending = true
-    return { result: "Brain will be emptied after this turn. End your turn now; do not call more tools or explain things to the human before the reset." }
+    if (state.flow.requestReset({ lastWord, terminate: params.terminate === true })) state.continuation = undefined
+    return { result: `Brain reset requested. This tool batch will finish, then the turn stops before its next model request unless it has new user input to handle. Your notes and sticky note survive the reset.${state.flow.request!.resume ? " You will continue in a fresh window after the reset." : " No automatic continuation will be submitted."}` }
   }
   if (name.startsWith("history_") && agentId !== undefined) return errorResult("history is unavailable for subagents; main-session history is not their transcript")
   const result = await run($, { op: "tool", tool: name, params, identity, history: state.history })
@@ -568,88 +632,92 @@ function restoreWindow(state: ResetState, messages: readonly { role: string; tex
   }
 }
 
-// The waiter is created in session.start, so its Promise continuation keeps
-// that non-held host context. Timers started inside command.run inherit its
-// held dispatch even after the command returns. No polling timer is needed.
-function armManual($: Engine, state: ResetState, signal: { wake?: () => void }) {
-  const requested = new Promise<void>((resolve) => { signal.wake = resolve })
-  void requested.then(() => {
-    signal.wake = undefined
-    const generation = state.generation
-    $.clock.after(0, () => finishManual($, state, signal, generation))
+// Create and re-arm this waiter in session.start's non-held context. Timers
+// created in a held hook inherit that dispatch even after the hook returns.
+function armReset($: Engine, state: ResetState, signal: ResetSignal) {
+  let wake!: (work: ResetWork) => void
+  const requested = new Promise<ResetWork>((resolve) => { signal.wake = wake = resolve })
+  void requested.then((work) => {
+    if (signal.wake !== wake) return
+    // A close-out submission resolves when its turn starts, so arm the next
+    // waiter before submitting: that turn's completion must not lose its wake.
+    armReset($, state, signal)
+    return runResetWork($, state, work)
   })
 }
-async function finishManual($: Engine, state: ResetState, signal: { wake?: () => void }, generation: number) {
+async function runResetWork($: Engine, state: ResetState, work: ResetWork) {
+  const { generation, kind } = work
+  if (generation !== state.generation || !state.flow.ready) return
   try {
-    if (generation !== state.generation) return
-    if (state.manualPending && !state.turnRunning) {
+    let text: string
+    if (kind === "reset") {
+      const turnId = state.flow.turnId
+      if (!await reset($, state) || generation !== state.generation || turnId !== state.flow.turnId || state.flow.request?.resume === false) return
+      // The retained handoff is already present; this prompt only starts the next turn.
+      text = "Continue from your notes in this fresh context window."
+    } else {
       const texts = await loadTexts($, state)
       if (generation !== state.generation) return
       if (texts?.warning === undefined) {
-        clearManualRequest(state)
+        state.flow.cancel()
         log($, "Brain still full: the close-out prompt didn't load")
         return
       }
-      const result = await $.prompt.submit({ text: texts.warning })
-      if (generation === state.generation && result.drop !== undefined) {
-        clearManualRequest(state)
-        log($, "Brain still full: the close-out turn didn't start")
-      }
+      text = texts.warning
     }
-  } catch {
-    if (generation === state.generation) {
-      clearManualRequest(state)
-      log($, "Brain still full: the close-out turn didn't start")
-    }
-  } finally { armManual($, state, signal) }
+    const result = await $.prompt.submit({ text })
+    if (result.drop !== undefined) throw result.drop
+  } catch (error) {
+    if (generation !== state.generation) return
+    if (kind === "closeout") state.flow.cancel()
+    log($, kind === "closeout" ? "Brain still full: the close-out turn didn't start" : `Brain emptied, but continuation didn't start · ${describeFailure(error)}`)
+  }
 }
 
-/** A non-answer ends the request, never the context; the user can explicitly ask again. */
-function cancelManualReset($: Engine, state: ResetState, reason: "aborted" | "refusal" | "error"): void {
-  clearManualRequest(state)
-  log($, `Brain emptying cancelled · turn ended ${reason}; ask /fresh-window again`)
+function retainReset($: Engine, state: ResetState, boot: string, auto = false): boolean {
+  state.retainedBoot = boot
+  state.window++
+  const resume = state.flow.consume(auto)
+  log($, "Brain emptied")
+  return resume
 }
 
 // The sandbox permits $ forwarding only to file-top-level helpers.
-async function reset($: Engine, state: ResetState): Promise<void> {
-  if (!state.identity || state.compactDisabled || state.resetting) return
+async function reset($: Engine, state: ResetState): Promise<boolean> {
+  if (!state.identity || state.compactDisabled || state.commit) return false
   const generation = state.generation
-  state.resetting = true
-  state.preparedBoot = undefined
+  let resolveCommit!: (kept: boolean) => void
+  const committed = new Promise<boolean>((resolve) => { resolveCommit = resolve })
+  const commit = state.commit = { instructions: `${RESET_INSTRUCTIONS} ${crypto.randomUUID()}`, boot: undefined as string | undefined, boundary: false, resolve: resolveCommit }
   try {
-    let failure: string | undefined
-    if (state.headless) {
-      const receipt = await $.command.run({ command: "compact" })
-      if (generation !== state.generation) return
-      // A command receipt is not SessionCompacted. Our admitted hook must have
-      // prepared the boot; session.messages() here still reads the completed
-      // turn's snapshot, not the next request's newly compacted context.
-      if (state.preparedBoot === undefined) failure = receipt.text ?? "notes boot was not retained"
-    } else {
-      const result = await $.session.compact({ instructions: RESET_INSTRUCTIONS })
-      failure = result.skip
+    // Both modes need the native command; direct compact skips our hook or is unavailable.
+    const receipt = await $.command.run({ command: "compact", args: commit.instructions })
+    if (generation !== state.generation) return false
+    let failure = commit.boot === undefined ? receipt.text ?? "notes boot was not retained" : undefined
+    if (failure === undefined) {
+      // Interactive command completion exposes the newly installed rows here;
+      // headless completion still sees the old request and appends afterwards.
+      const messages = await $.session.messages()
+      if (generation !== state.generation) return false
+      if (messages.some((message) => message.role === "user" && message.text === commit.boot)) commit.resolve(true)
+      else if (!state.headless) commit.resolve(false)
+      if (!await committed) failure = "notes boot was not committed"
     }
-    if (generation !== state.generation) return
-    if (failure !== undefined || state.preparedBoot === undefined) {
-      state.manualPending = true
+    if (generation !== state.generation) return false
+    if (failure !== undefined || commit.boot === undefined) {
       log($, `Brain not emptied · ${failure ?? "notes boot was not retained"}`)
-      return
+      return false
     }
-    state.retainedBoot = state.preparedBoot
-    state.window++
-    clearManualRequest(state)
-    log($, "Brain emptied")
+    return retainReset($, state, commit.boot)
   } catch (error) {
-    if (generation !== state.generation) return
+    if (generation !== state.generation) return false
     const text = String(error)
-    state.manualPending = true
     if (!/a turn is (running|in flight)/.test(text)) {
       log($, `Brain still full: ${text.replace(/[\r\n].*$/s, "")}`)
     }
+    return false
   } finally {
-    if (generation === state.generation) {
-      state.preparedBoot = undefined
-      state.resetting = false
-    }
+    commit.resolve(false)
+    if (state.commit === commit) state.commit = undefined
   }
 }
