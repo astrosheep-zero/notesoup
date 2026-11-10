@@ -81,17 +81,6 @@ function tokenLimits(source: ClaudeLimitSource, autoCompact: boolean, native: nu
 	};
 }
 
-/** The percent fallback: the same reserves expressed as points of ASSUMED_WINDOW_TOKENS. */
-function percentLimits(autoCompact: boolean, pct: number | undefined, resetMargin: number, warningRunway: number): ClaudeLimits {
-	const base = 100 * (1 - (CLAUDE_OUTPUT_RESERVE_TOKENS + CLAUDE_AUTOCOMPACT_BUFFER_TOKENS) / ASSUMED_WINDOW_TOKENS);
-	const native = pct === undefined ? base : Math.min(pct, base);
-	const reset = Math.max(MIN_POINT_PERCENT, native - (resetMargin / ASSUMED_WINDOW_TOKENS) * 100);
-	return {
-		source: "percent", autoCompact, unit: "percent",
-		native, reset, warn: Math.max(MIN_POINT_PERCENT, reset - (warningRunway / ASSUMED_WINDOW_TOKENS) * 100), resetMargin, warningRunway,
-	};
-}
-
 /**
  * Resolve the points from whatever the host could read. Every field is undocumented-adjacent,
  * so a missing or malformed one degrades to the next source and finally to the percent
@@ -125,21 +114,22 @@ export function resolveClaudeLimits(facts: unknown): ClaudeLimits {
 		if (native > 0) return tokenLimits("auto-compact", true, native, resetMargin, warningRunway);
 	}
 
-	// (b) The same point computed from the reported window plus settings and environment. A real
-	// window always answers here: falling through to the percent fallback would express the
-	// points on an assumed 200K window, which is later than the window notesoup can see.
+	// (b/c) Compute once, using the classic 200K capacity only when the host reports none.
 	const window = positiveNumber(usage.window);
-	if (window !== undefined) {
-		const configured = configuredWindow(settings, env, breakdown.model);
-		const effective = Math.min(configured ?? window, window);
-		const available = effective - CLAUDE_OUTPUT_RESERVE_TOKENS;
-		const threshold = available - CLAUDE_AUTOCOMPACT_BUFFER_TOKENS;
-		const native = autoCompact
-			? pct === undefined ? threshold : Math.min(Math.floor(available * (pct / 100)), threshold)
-			: available;
-		return tokenLimits("window", autoCompact, native, resetMargin, warningRunway);
-	}
-
-	// (c) Nothing usable but percentages.
-	return percentLimits(autoCompact, pct, resetMargin, warningRunway);
+	const capacity = window ?? ASSUMED_WINDOW_TOKENS;
+	const configured = configuredWindow(settings, env, breakdown.model);
+	const effective = Math.min(configured ?? capacity, capacity);
+	const available = effective - CLAUDE_OUTPUT_RESERVE_TOKENS;
+	const thresholdFromWindow = available - CLAUDE_AUTOCOMPACT_BUFFER_TOKENS;
+	const native = autoCompact
+		? pct === undefined ? thresholdFromWindow : Math.min(Math.floor(available * (pct / 100)), thresholdFromWindow)
+		: available;
+	const limits = tokenLimits(window === undefined ? "percent" : "window", autoCompact, native, resetMargin, warningRunway);
+	if (window !== undefined) return limits;
+	return {
+		...limits, unit: "percent",
+		native: limits.native / capacity * 100,
+		reset: Math.max(MIN_POINT_PERCENT, limits.reset / capacity * 100),
+		warn: Math.max(MIN_POINT_PERCENT, limits.warn / capacity * 100),
+	};
 }

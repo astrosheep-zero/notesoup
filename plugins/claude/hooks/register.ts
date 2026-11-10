@@ -22,7 +22,7 @@ type ResetState = {
   manualPending: boolean; headless: boolean; usageFailureLogged: boolean; preparedBoot?: string; retainedBoot?: string
   toolResetRequested?: boolean; lastWord?: string; manualCompacting?: boolean
   continuation?: string; continuationWindow?: number
-  compactDisabled: boolean; limitsFailureLogged: boolean; limitsAttempts: number; limitsWindow: number
+  compactDisabled: boolean; limitsFailureLogged: boolean; limitsAttempts: number; limitsKey?: string
   limits?: ClaudeLimits; warnedWindow?: number; warningPending?: number; texts?: SharedTexts; settingsFailureLogged: boolean
 }
 const COMPACT_DISABLED = "Brain can't be emptied with DISABLE_COMPACT"
@@ -131,11 +131,12 @@ async function breakdownContext($: Engine): Promise<Record<string, unknown> | un
     return typeof breakdown === "object" && breakdown !== null ? breakdown as unknown as Record<string, unknown> : undefined
   } catch { return undefined }
 }
-/** Everything the resolver may read: measured usage plus the raw settings and environment. */
+/** Threshold inputs only: changing fill must not invalidate the resolved points. */
 async function limitFacts($: Engine, state: ResetState, usage: ContextUsage): Promise<Record<string, unknown>> {
+  const breakdown = await breakdownContext($)
   return {
-    usage,
-    breakdown: await breakdownContext($),
+    usage: { window: usage.window },
+    breakdown: { model: breakdown?.model, autoCompactThreshold: breakdown?.autoCompactThreshold, isAutoCompactEnabled: breakdown?.isAutoCompactEnabled },
     settings: await readSettings($, state),
     env: {
       pctOverride: await envPctOverride($),
@@ -144,35 +145,26 @@ async function limitFacts($: Engine, state: ResetState, usage: ContextUsage): Pr
     },
   }
 }
-/**
- * The points the current window is measured against, resolved by the helper's shared
- * derivation. One resolved result per reported window value: an unknown window resolves the
- * percent fallback, and a later real window re-resolves against it. A failed round trip is
- * retried a bounded number of times instead of disabling thresholds for the whole window.
- */
+/** Reuse points only while their inputs match; bound retries per configuration, not capacity. */
 async function limitsOf($: Engine, state: ResetState, usage: ContextUsage): Promise<ClaudeLimits | undefined> {
-  const window = usage.window !== undefined && usage.window > 0 ? usage.window : 0
-  const sameWindow = state.limitsWindow === window
-  if (sameWindow && state.limits !== undefined) return state.limits
-  if (sameWindow && state.limitsAttempts >= MAX_LIMITS_ATTEMPTS) return undefined
   const generation = state.generation
   const facts = await limitFacts($, state, usage)
   if (generation !== state.generation) return undefined
+  const key = JSON.stringify([state.identity?.model, facts])
+  const sameFacts = state.limitsKey === key
+  if (sameFacts && state.limits !== undefined) return state.limits
+  if (sameFacts && state.limitsAttempts >= MAX_LIMITS_ATTEMPTS) return undefined
   const response = await run($, { op: "limits", facts })
   if (generation !== state.generation) return undefined
   const limits = response.ok ? limitsShape(response.result) : undefined
-  state.limitsWindow = window
-  if (limits) {
-    state.limits = limits
-    state.limitsAttempts = 0
-    return limits
-  }
-  state.limitsAttempts = sameWindow ? state.limitsAttempts + 1 : 1
-  if (!state.limitsFailureLogged) {
+  state.limitsKey = key
+  state.limits = limits
+  state.limitsAttempts = limits ? 0 : sameFacts ? state.limitsAttempts + 1 : 1
+  if (!limits && !state.limitsFailureLogged) {
     state.limitsFailureLogged = true
     log($, THRESHOLDS_UNAVAILABLE)
   }
-  return undefined
+  return limits
 }
 /** The measured value the points are expressed in; tokens win, percent × window stands in. */
 function measuredValue(limits: ClaudeLimits, usage: ContextUsage): number | undefined {
@@ -255,7 +247,8 @@ function forgetSession(state: ResetState) {
   state.texts = state.limits = undefined
   state.continuation = undefined
   state.continuationWindow = undefined
-  state.limitsAttempts = state.limitsWindow = 0
+  state.limitsAttempts = 0
+  state.limitsKey = undefined
   state.settingsFailureLogged = state.limitsFailureLogged = false
   state.warnedWindow = state.warningPending = undefined
 }
@@ -307,7 +300,7 @@ async function syncHistoryWindow($: Engine, state: ResetState) {
 
 export function register(on: On) {
   const manualSignal: { wake?: () => void } = {}
-  const state: ResetState = { generation: 0, window: 0, disabled: false, turnRunning: false, resetting: false, manualPending: false, headless: false, usageFailureLogged: false, compactDisabled: false, limitsFailureLogged: false, limitsAttempts: 0, limitsWindow: 0, settingsFailureLogged: false }
+  const state: ResetState = { generation: 0, window: 0, disabled: false, turnRunning: false, resetting: false, manualPending: false, headless: false, usageFailureLogged: false, compactDisabled: false, limitsFailureLogged: false, limitsAttempts: 0, settingsFailureLogged: false }
   const registered = new Set<string>()
   let keepMemory = false
   // Classic SessionStart precedes typed session.start and startup appends. Keep this binding
@@ -593,13 +586,19 @@ async function finishManual($: Engine, state: ResetState, signal: { wake?: () =>
       const texts = await loadTexts($, state)
       if (generation !== state.generation) return
       if (texts?.warning === undefined) {
+        clearManualRequest(state)
         log($, "Brain still full: the close-out prompt didn't load")
         return
       }
-      await $.prompt.submit({ text: texts.warning })
+      const result = await $.prompt.submit({ text: texts.warning })
+      if (generation === state.generation && result.drop !== undefined) {
+        clearManualRequest(state)
+        log($, "Brain still full: the close-out turn didn't start")
+      }
     }
   } catch {
     if (generation === state.generation) {
+      clearManualRequest(state)
       log($, "Brain still full: the close-out turn didn't start")
     }
   } finally { armManual($, state, signal) }

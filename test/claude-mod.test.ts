@@ -57,7 +57,7 @@ type HookEngine = {
   settings: { read: () => Promise<unknown> };
   command: { run: (input: { command: string }) => Promise<{ text?: string }>; register: (spec: { name: string; description: string; immediate?: boolean }) => Promise<unknown> };
   clock: { after: (ms: number, callback: () => void | Promise<void>) => unknown };
-  prompt: { submit: (input: { text: string }) => Promise<unknown> };
+  prompt: { submit: (input: { text: string }) => Promise<{ text: string } | { drop: string }> };
   tool: { register: (spec: HookToolSpec) => Promise<{ tool: string }> };
   ui?: { toast?: (text: string, options?: { title?: string }) => Promise<unknown>; log?: (text: string) => void };
   process: { run: (argv: readonly string[], init?: { cwd?: string; stdin?: string }) => Promise<{ exitCode: number; stdout: string }> };
@@ -103,7 +103,7 @@ function fakeEngine(home: string): { host: HookEngine; registered: HookToolSpec[
       settings: { read: async () => ({}) },
       command: { run: async () => ({}), register: async (spec) => ({ command: spec.name }) },
       clock: { after: () => { throw new Error("test has no pending manual timer") } },
-      prompt: { submit: async () => undefined },
+      prompt: { submit: async ({ text }) => ({ text }) },
       tool: { register: async (spec) => { registered.push(structuredClone(spec)); return { tool: `mcp__notesoup__${spec.name}` }; } },
       ui: { toast: async (text) => { notifications.push(text); }, log: (text) => { notifications.push(text); } },
       process: { run: async (argv, init) => ({
@@ -293,7 +293,17 @@ test("Claude limits derive from Claude's own auto-compact point, never a fixed p
   assert.equal(percent.source, "percent");
   assert.equal(percent.unit, "percent");
   assert.ok(Math.abs(percent.native - 83.5) < 1e-9 && Math.abs(percent.reset - 79.404) < 1e-9 && Math.abs(percent.warn - 71.212) < 1e-9, "83.5 / 79.4 / 71.2 on 200K");
-  assert.equal(limitPoints({ env: { pctOverride: "50" } }).native, 50);
+  for (const facts of [
+    { env: { pctOverride: "50" } },
+    { settings: { autoCompactEnabled: false }, env: { pctOverride: "10" } },
+    { settings: { autoCompactWindow: 100_000 } },
+  ]) {
+    const fallback = resolveClaudeLimits(facts);
+    const tokens = resolveClaudeLimits({ ...facts, usage: { window: 200_000 } });
+    for (const point of ["native", "reset", "warn"] as const)
+      assert.ok(Math.abs(fallback[point] - tokens[point] / 200_000 * 100) < 1e-9, `${point}: percent fallback uses the same token derivation`);
+    assert.equal(fallback.autoCompact, tokens.autoCompact);
+  }
   // A real window is never re-expressed on the assumed 200K window, and no point is zero:
   // the mod treats `measured >= reset` as due, so a zero point would clear memory every turn.
   const tiny = limitPoints({ usage: { window: 8_000 } });
@@ -741,7 +751,7 @@ test("Claude headless warns without proactive resets and supports both manual al
   const timers: Array<() => void | Promise<void>> = [];
   host.session.usage = async () => ({ context: { tokens, window: 200_000 } });
   host.clock.after = (_ms, callback) => { timers.push(callback); };
-  host.prompt.submit = async () => { prompts++; await invoke("turn.start"); await invoke("turn.complete", turnComplete()); };
+  host.prompt.submit = async ({ text }) => { prompts++; await invoke("turn.start"); await invoke("turn.complete", turnComplete()); return { text }; };
   host.command.run = async ({ command }) => {
     attempts++;
     await handlers.get("command.run")!(host, { command, origin: { kind: "plugin", name: "notesoup" } }, async () => {
@@ -770,12 +780,6 @@ test("Claude headless warns without proactive resets and supports both manual al
   }
   assert.equal(attempts, 3);
   assert.equal(prompts, 2, "each idle alias schedules one close-out, not a summarizer");
-  host.prompt.submit = async () => { throw new Error("close-out unavailable"); };
-  await invoke("command.run", { command: "empty" });
-  await Promise.resolve();
-  await timers.shift()!();
-  await invoke("turn.complete", turnComplete());
-  assert.equal(attempts, 4, "a failed close-out also leaves the reset pending");
 });
 
 test("Claude Mod keeps its window numbering from a boot written before the tag rename", async (t) => {
@@ -852,6 +856,7 @@ test("Claude Mod manual reset uses one hidden close-out turn, then recovers its 
     prompts.push(text);
     await invoke("turn.start");
     await invoke("turn.complete", turnComplete());
+    return { text };
   };
   (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
   await invoke("session.start", { cwd: home, isInteractive: true });
@@ -882,6 +887,49 @@ test("Claude Mod manual reset uses one hidden close-out turn, then recovers its 
   assert.match(kept[0]!.text, /Current context window id: claude:hook-session:2/);
 });
 
+
+test("Claude failed close-outs release the request so manual reset can retry", async (t) => {
+  for (const failure of ["texts", "submit", "drop"]) await t.test(failure, async (t) => {
+    const home = mkdtempSync(join(tmpdir(), "claude-closeout-retry-"));
+    t.after(() => rmSync(home, { recursive: true, force: true }));
+    const { host, notifications } = fakeEngine(home);
+    const helper = host.process.run;
+    let failing = true, resets = 0;
+    host.process.run = async (argv, init) => failing && failure === "texts" && JSON.parse(init!.stdin!).op === "texts"
+      ? { exitCode: 1, stdout: "" } : helper(argv, init);
+    const handlers = new Map<string, HookHandler>();
+    (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
+    const invoke = (name: string, e: Record<string, unknown> = {}) => handlers.get(name)!(host, e, async () => ({}));
+    const timers: Array<() => void | Promise<void>> = [];
+    host.clock.after = (_ms, callback) => { timers.push(callback); };
+    host.prompt.submit = async ({ text }) => {
+      if (failing && failure === "submit") throw new Error("submission unavailable");
+      if (failing && failure === "drop") return { drop: "another plugin refused" };
+      await invoke("turn.start");
+      await invoke("turn.complete", turnComplete());
+      return { text };
+    };
+    host.session.compact = async ({ instructions }) => {
+      resets++;
+      return await invoke("session.compact", { trigger: "plugin", instructions }) as { messages: Array<{ role: string; text: string }> };
+    };
+    await invoke("session.start", { isInteractive: true });
+    await invoke("command.run", { command: "fresh-window" });
+    await Promise.resolve();
+    await timers.shift()!();
+    assert.equal(resets, 0);
+    assert.ok(notifications.some(text => text.includes("close-out")), "failure is visible");
+    await invoke("turn.start");
+    await invoke("turn.complete", turnComplete());
+    assert.equal(resets, 0, "a failed close-out must not spring a reset on an unrelated turn");
+    failing = false;
+    assert.deepEqual(await invoke("command.run", { command: "fresh-window" }), { text: "🥣 Dumping Brain" });
+    await Promise.resolve();
+    assert.equal(timers.length, 1, "retry schedules new work instead of claiming it is already running");
+    await timers.shift()!();
+    assert.equal(resets, 1);
+  });
+});
 
 test("Claude Mod delivers one warning per window through main tools or prompt submission, never boot", async (t) => {
   const { host, invoke, context } = await retainedFixture(t);
@@ -942,6 +990,40 @@ test("Claude warnings read the public nested breakdown and apply pct even withou
     assert.equal((await invoke("session.compact", { trigger: "auto" }) as { messages: unknown[] }).messages.length, 2);
     assert.deepEqual((await submit()).context, [CLAUDE_WARNING_PROMPT], "native auto starts a new warning window");
   }
+});
+
+test("Claude warning limits follow live model, threshold and settings changes without re-resolving for fill", async (t) => {
+  const home = mkdtempSync(join(tmpdir(), "claude-live-limits-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const { host } = fakeEngine(home);
+  let model = "claude-a", threshold = 167_000, tokens = 10_000;
+  const settings = { notesoup: { warningRunwayTokens: WARNING_RUNWAY_TOKENS } };
+  host.session.model = async () => model;
+  host.session.usage = async () => ({ context: { tokens, window: 200_000, breakdown: { model, autoCompactThreshold: threshold } } });
+  host.settings.read = async () => settings;
+  const helper = host.process.run;
+  let resolutions = 0;
+  host.process.run = async (argv, init) => {
+    if (JSON.parse(init!.stdin!).op === "limits") resolutions++;
+    return helper(argv, init);
+  };
+  const handlers = new Map<string, HookHandler>();
+  (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
+  await handlers.get("session.start")!(host, { isInteractive: true }, async e => e);
+  const submit = () => handlers.get("prompt.submit")!(host, { text: "continue" }, async e => e) as Promise<{ context?: string[] }>;
+  assert.equal((await submit()).context, undefined);
+  tokens = 30_000;
+  assert.equal((await submit()).context, undefined);
+  assert.equal(resolutions, 1, "changing fill reuses the points");
+  model = "claude-b";
+  assert.equal((await submit()).context, undefined);
+  assert.equal(resolutions, 2, "a model change invalidates points even at the same capacity");
+  threshold = 67_000;
+  assert.equal((await submit()).context, undefined);
+  assert.equal(resolutions, 3, "a live threshold change invalidates points without a model change");
+  settings.notesoup.warningRunwayTokens = 30_000;
+  assert.deepEqual((await submit()).context, [CLAUDE_WARNING_PROMPT]);
+  assert.equal(resolutions, 4, "settings changes apply without a session or capacity change");
 });
 
 test("Claude Mod consumes a warning only after an accepted delivery and ignores stale generations", async (t) => {
@@ -1239,7 +1321,7 @@ test("Claude asks for one handoff per compaction and reuses it when the same win
   const timers: Array<() => void | Promise<void>> = [];
   const lines: string[] = [];
   host.clock.after = (_ms, callback) => { timers.push(callback); };
-  host.prompt.submit = async () => { await invoke("turn.start"); };
+  host.prompt.submit = async ({ text }) => { await invoke("turn.start"); return { text }; };
   // The host retries one plugin compaction for the same window: one artifact, one draw.
   host.session.compact = async ({ instructions }) => {
     for (let attempt = 0; attempt < 2; attempt++) {
