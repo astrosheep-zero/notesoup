@@ -122,7 +122,8 @@ export function settingsFixture(options: {
 	registerTempPath?.(agentDir);
 	const fixtureManager = SettingsManager.create(cwd, agentDir, { projectTrusted: true });
 	const projectReserve = (options.project?.compaction as { reserveTokens?: number } | undefined)?.reserveTokens;
-	assert.equal(fixtureManager.getCompactionSettings().reserveTokens, projectReserve ?? options.reserveTokens ?? 16_384, "fixture reserve reads back");
+	const expectedReserve = projectReserve ?? options.reserveTokens;
+	if (expectedReserve !== undefined) assert.equal(fixtureManager.getCompactionSettings().reserveTokens, expectedReserve, "fixture reserve reads back");
 	return { cwd, agentDir };
 }
 

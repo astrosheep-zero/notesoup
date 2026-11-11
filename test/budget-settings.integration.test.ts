@@ -5,6 +5,7 @@ import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { DEFAULT_REMINDER_MARGIN_TOKENS, DEFAULT_RESERVE_TOKENS } from "../src/budget/constants.js";
+import { tokenBudgetGuidance } from "../src/budget/text.js";
 import { GUIDANCE_TYPE, RESET_MARKER_TYPE, WARNING_TYPE } from "../plugins/pi/entries.js";
 import { deriveThresholds } from "../src/budget/policy.js";
 import { readThresholdSettings } from "../plugins/pi/thresholds.js";
@@ -28,6 +29,10 @@ import {
 import { installExtensionTestHooks } from "./helpers/extension-test-environment.js";
 
 const testEnvironment = installExtensionTestHooks("notesoup-integration");
+const explicitBudgetSettings = {
+	compaction: { enabled: true, reserveTokens: 16_384 },
+	notesoup: { reminderMarginTokens: 24_576, warningRunwayTokens: 16_384 },
+};
 
 test("budget derivation preserves defaults and validates overrides independently", () => {
 	assert.deepEqual(deriveThresholds(32_768, {}), {
@@ -40,7 +45,7 @@ test("budget derivation preserves defaults and validates overrides independently
 	assert.deepEqual(invalid.thresholds, deriveThresholds(32_768, {}).thresholds);
 	assert.equal(invalid.warnings.length, 3);
 	for (const key of ["reserveTokens", "warningRunwayTokens", "reminderMarginTokens"]) {
-		assert.equal(invalid.warnings.filter((warning) => warning.includes(`notesoup.${key} must be a positive integer · using the default`)).length, 1);
+		assert.equal(invalid.warnings.filter((warning) => warning.includes(`notesoup.${key}`)).length, 1);
 	}
 	assert.deepEqual(deriveThresholds(32_768, { reserveTokens: 8192, warningRunwayTokens: null }).thresholds,
 		{ reserve: 8192, reminder: 32_768, warning: 24_576 }, "an invalid runway does not discard a valid reserve");
@@ -49,7 +54,7 @@ test("budget derivation preserves defaults and validates overrides independently
 test("Pi budget settings merge per key without changing native compaction settings or enablement", async () => {
 	const fixture = settingsFixture({
 		reserveTokens: 32_768,
-		global: { notesoup: { reserveTokens: 12_000, warningRunwayTokens: 20_000 } },
+		global: { notesoup: { reserveTokens: 12_000, warningRunwayTokens: 20_000, reminderMarginTokens: 24_576 } },
 		project: { notesoup: { reserveTokens: 8192 } },
 	});
 	const sm = manager();
@@ -79,7 +84,7 @@ test("Pi budget settings merge per key without changing native compaction settin
 });
 
 test("Pi warning, reported room, and hard wipe use the notesoup reserve override", async () => {
-	const fixture = settingsFixture({ reserveTokens: 32_768, global: { notesoup: { reserveTokens: 8192, warningRunwayTokens: 16_384 } } });
+	const fixture = settingsFixture({ reserveTokens: 32_768, global: { notesoup: { reserveTokens: 8192, warningRunwayTokens: 16_384, reminderMarginTokens: 24_576 } } });
 	const sm = manager();
 	appendText(sm, "user", "ongoing work");
 	const captured = makeExtension(sm);
@@ -87,7 +92,7 @@ test("Pi warning, reported room, and hard wipe use the notesoup reserve override
 	const at = (remaining: number) => context(sm, undefined, { tokens: 200_000 - remaining, percent: 0, contextWindow: 200_000 }, true, fixture.cwd);
 	const early = await runContextHook(captured, at(24_577));
 	assert.equal((early?.messages[0] as { customType?: string })?.customType, GUIDANCE_TYPE, "no warning above reserve + runway");
-	assert.match(String((early?.messages[0] as { content?: string })?.content), /About 16385 tokens of room left\./, "guidance subtracts the overridden reserve");
+	assert.equal((early?.messages[0] as { content?: string })?.content, tokenBudgetGuidance(16_385, "empty_brain"), "guidance subtracts the overridden reserve");
 	const warning = await runContextHook(captured, at(24_576));
 	assert.equal((warning?.messages[0] as { customType?: string })?.customType, WARNING_TYPE, "warn at 8192 + 16384, not native reserve + runway");
 	const room = async (remaining: number) => resultJson<{ remaining_tokens: number }>(await call(captured, "get_context_remaining", {}, at(remaining))).remaining_tokens;
@@ -102,11 +107,11 @@ test("Pi warning, reported room, and hard wipe use the notesoup reserve override
 
 test("low-budget guidance and warning persist at turn_end, once per active window", async () => {
 	const sessionManager = manager();
-	const captured = makeExtension(sessionManager);
+	const captured = makeExtension(sessionManager, SettingsManager.inMemory(explicitBudgetSettings));
 	const low = context(sessionManager, undefined, { tokens: 165_000, percent: 82.5, contextWindow: 200_000 });
 	const guidance = await runContextHook(captured, low);
 	assert.deepEqual(guidance?.messages.map((message) => (message as { customType?: string }).customType), [GUIDANCE_TYPE], "guidance reaches the crossing request");
-	assert.match(String((guidance?.messages[0] as { content?: string }).content), /About 18616 tokens of room left\./, "the reminder reports room to the reserve, not to the warning");
+	assert.equal((guidance?.messages[0] as { content?: string }).content, tokenBudgetGuidance(18_616, "empty_brain"), "the reminder reports room to the reserve, not to the warning");
 	assert.equal(captured.sent.length, 0, "guidance does not trigger a detached turn");
 	const guidanceBoundary = await commitTurnEndBoundary(captured, sessionManager, low);
 	assert.equal(guidanceBoundary.entries.filter((entry) => entry.type === "custom_message" && entry.customType === GUIDANCE_TYPE).length, 1);
@@ -124,23 +129,23 @@ test("low-budget guidance and warning persist at turn_end, once per active windo
 
 test("early guidance stays silent and the final warning notifies immediately once", async () => {
 	const sm = manager();
-	const captured = makeExtension(sm);
+	const captured = makeExtension(sm, SettingsManager.inMemory(explicitBudgetSettings));
 	const early = context(sm, undefined, { tokens: 165_000, percent: 82.5, contextWindow: 200_000 });
 	assert.equal((await runContextHook(captured, early))?.messages.length, 1, "early guidance reaches the crossing request");
 	await commitTurnEndBoundary(captured, sm, early);
 	await runHandlers(captured, "agent_settled", {}, early);
-	assert.equal(noticesOf(early).filter((notice) => notice.message.includes("Context running low") || notice.message.includes("Context almost full")).length, 0, "early model guidance has no UI toast");
+	assert.equal(noticesOf(early).filter((notice) => notice.type === "warning").length, 0, "early model guidance has no UI toast");
 	assert.equal(sm.getBranch().filter((entry) => entry.type === "custom_message" && entry.customType === GUIDANCE_TYPE).length, 1, "early guidance remains durable for the model");
 
 	const final = context(sm, undefined, { tokens: 181_000, percent: 90.5, contextWindow: 200_000 });
 	const warning = await runContextHook(captured, final);
 	assert.equal((warning?.messages[0] as { customType?: string } | undefined)?.customType, WARNING_TYPE);
-	assert.equal(noticesOf(final).filter((notice) => notice.message === "🥣 Brain almost full").length, 1, "notify at injection, before any turn_end");
+	assert.equal(noticesOf(final).filter((notice) => notice.type === "warning").length, 1, "notify at injection, before any turn_end");
 	await runContextHook(captured, final);
 	await commitTurnEndBoundary(captured, sm, final);
 	await runHandlers(captured, "turn_start", {}, final);
 	await runHandlers(captured, "agent_settled", {}, final);
-	assert.equal(noticesOf(final).filter((notice) => notice.message === "🥣 Brain almost full").length, 1, "repeated injection and commit do not notify again");
+	assert.equal(noticesOf(final).filter((notice) => notice.type === "warning").length, 1, "repeated injection and commit do not notify again");
 });
 
 test("get_context_remaining declares its output and returns matching structured and text values", async () => {
@@ -174,7 +179,7 @@ test("the reported room ends at the hard reserve, clamps at zero, and preserves 
 		return resultJson<{ remaining_tokens: number | null }>(await call(captured, "get_context_remaining", {}, ctx)).remaining_tokens;
 	};
 	assert.equal(await readBudget(72_563), 94_669, "the reported room excludes only the project reserve (32768)");
-	assert.equal(await readBudget(150_848), 16_384, "the warning line still has the entire runway left");
+	assert.equal(await readBudget(150_848), 16_384, "an intermediate usage reports the room above the configured reserve");
 	assert.equal(await readBudget(167_232), 0, "the hard reserve reads zero");
 	assert.equal(await readBudget(190_000), 0, "below the reserve, still zero");
 	assert.equal(await readBudget(210_000), 0, "over the physical window");
@@ -260,12 +265,12 @@ test("an invalid reminder margin degrades to its default with one warning and ne
 test("the warning supersedes the early reminder when usage jumps across both thresholds", async () => {
 	const sm = manager();
 	appendText(sm, "user", "ongoing work");
-	const captured = makeExtension(sm);
+	const captured = makeExtension(sm, SettingsManager.inMemory(explicitBudgetSettings));
 	const ctx = context(sm, undefined, { tokens: 199_000, percent: 99.5, contextWindow: 200_000 }, false);
 	const warningResult = await runContextHook(captured, ctx);
 	assert.deepEqual(warningResult?.messages.map((message) => (message as { customType?: string }).customType), [WARNING_TYPE]);
 	await commitTurnEndBoundary(captured, sm, ctx);
-	const reloaded = makeExtension(sm);
+	const reloaded = makeExtension(sm, SettingsManager.inMemory(explicitBudgetSettings));
 	await runHandlers(reloaded, "context", { messages: [] }, ctx);
 	assert.equal(reloaded.sent.length, 0, "persisted warning also suppresses a late reminder after reload");
 });

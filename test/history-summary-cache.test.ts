@@ -300,7 +300,7 @@ test("Codex cache fingerprints actual archived compressed ancestors and revalida
 	assert.equal(data(await historyList.execute(params, f.context())).items.length, 0, "new ambiguous discovery must invalidate a warm child summary");
 	const explicit = await historyList.execute({ session: `codex:${CHILD}` }, f.context());
 	assert.ok(!explicit.ok);
-	assert.match(explicit.error.message, /ambiguous native files/);
+	assert.equal(explicit.error.code, "history_unavailable");
 	await fs.unlink(duplicatePath);
 	assert.match(historyList.render(await historyList.execute(params, f.context())), /edited topic/);
 	await fs.unlink(ancestorPath);

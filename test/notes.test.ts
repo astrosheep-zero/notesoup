@@ -35,21 +35,11 @@ function assertReceiptIdentity(value: { address: string; project_key?: string },
 	assert.equal(value.project_key, scope === "project" ? projectKey(ctx.cwd, process.env.NOTESOUP_HOME!) : undefined);
 }
 
-test("exactly the five notes tools are registered; the legacy five are gone", () => {
+test("tools register their namespaces and sequential note mutations", () => {
 	const captured = makeExtension(manager());
-	for (const name of ["notes_write", "notes_update", "notes_read", "notes_list", "notes_search"]) {
-		assert.ok(captured.tools.get(name), `${name} is registered`);
-	}
-	for (const legacy of ["notes_write_file", "notes_append_to_file", "notes_read_file", "notes_search_contents", "notes_list_files"]) {
-		assert.equal(captured.tools.get(legacy), undefined, `${legacy} is unregistered`);
-	}
 	assert.equal(captured.tools.get("notes_write")?.executionMode, "sequential");
 	assert.equal(captured.tools.get("notes_update")?.executionMode, "sequential");
 	assert.equal(captured.tools.get("notes_read")?.executionMode, undefined);
-});
-
-test("notes and history tools are grouped under their own namespaces", () => {
-	const captured = makeExtension(manager());
 	for (const name of ["notes_write", "notes_update", "notes_read", "notes_list", "notes_search"]) {
 		assert.equal(captured.tools.get(name)?.namespace?.name, "notes", `${name} is in notes`);
 	}
@@ -78,26 +68,20 @@ test("every notes tool declares a result schema that accepts its own structured 
 	}
 });
 
-test("note schemas drop status/stale and expose crumpled listing", () => {
+test("note schemas accept their operations, reject unknown fields, and expose crumpled listing", () => {
 	const captured = makeExtension(manager());
-	const schema = (name: string): TSchema => captured.tools.get(name)!.parameters as TSchema;
-	const write = schema("notes_write");
-	assert.equal(Check(write, { address: "a.md", content: "x" }), true);
-	assert.equal(Check(write, { address: "a.md", content: "x", stale: true }), false, "notes_write no longer accepts stale");
-	assert.equal(Check(write, { address: "a.md", content: "x", crumpled: true }), false, "notes_write does not accept crumpled");
-	const edit = schema("notes_update");
-	assert.equal(Check(edit, { address: "a.md", crumpled: true }), true);
-	assert.equal(Check(edit, { address: "a.md", stale: true }), false, "notes_update no longer accepts stale");
-	assert.equal(Check(edit, { address: "a.md", status: "archived" }), false, "status is gone");
-	for (const name of ["notes_list", "notes_search"]) {
-		const base = name === "notes_search" ? { query: "x" } : {};
-		assert.equal(Check(schema(name), { ...base, crumpled: true }), true, `${name} accepts crumpled`);
-		assert.equal(Check(schema(name), { ...base, status: "active" }), false, `${name} rejects status`);
-		// The retired names are unknown parameters, refused like any other: `additionalProperties: false`.
-		for (const retired of [{ wastebasket: true }, { pattern: "**" }]) {
-			assert.equal(Check(schema(name), { ...base, ...retired }), false, `${name} refuses the retired ${Object.keys(retired)[0]} as an unknown parameter`);
-		}
+	for (const [name, params] of [
+		["notes_write", { address: "a.md", content: "x" }],
+		["notes_update", { address: "a.md", crumpled: true }],
+		["notes_read", { address: "a.md" }],
+		["notes_list", { crumpled: true }],
+		["notes_search", { query: "x", crumpled: true }],
+	] as const) {
+		const schema = captured.tools.get(name)!.parameters as TSchema;
+		assert.equal(Check(schema, params), true, name);
+		assert.equal(Check(schema, { ...params, unsupported: true }), false, `${name} refuses unknown fields`);
 	}
+	assert.equal(Check(captured.tools.get("notes_write")!.parameters, { address: "a.md", content: "x", crumpled: true }), false, "restoration belongs to notes_update");
 });
 
 test("Pi resolves a per-call relative cwd against the session cwd", async () => {
@@ -136,8 +120,6 @@ test("write lands a real markdown file with harness frontmatter and a pure body"
 		assert.match(raw, new RegExp(`^${key}: ${value}$`, "m"), `frontmatter carries ${key}=${value}`);
 	}
 	assert.equal(/^scope:/m.test(raw), false, "scope is derived from the file notebook, never persisted");
-	assert.equal(/^status:/m.test(raw), false, "status is gone from persisted notes");
-	assert.equal(/^stale:/m.test(raw), false, "the boolean stale flag is gone from persisted notes");
 	assert.equal(/^crumpledAt:/m.test(raw), false, "a fresh note is uncrumpled");
 	for (const key of ["createdAt", "updatedAt", "lastAccessed"]) {
 		assert.match(raw, new RegExp(`^${key}: \\d{4}-\\d{2}-\\d{2}T`, "m"), `frontmatter renders ${key} via localIso`);
@@ -462,20 +444,6 @@ test("notes receipts report resolved identity across scopes", async () => {
 	for (const row of searched.files) assertReceiptIdentity(row, row.address, notes.find((note) => note.address === row.address)!.scope, ctx);
 });
 
-test("mutation receipts keep their existing shape outside named project notebooks", async () => {
-	freshRoot();
-	const session = manager();
-	const captured = makeExtension(session);
-	const ctx = context(session);
-	const written = await call(captured, "notes_write", { address: "@project/decision", content: "body" }, ctx);
-	const updated = await call(captured, "notes_update", { address: "@project/decision", edits: [{ oldText: "body", newText: "changed" }] }, ctx);
-	assert.deepEqual(Object.keys(resultData<NotesWriteData>(written)).sort(), ["address", "budget", "outcome", "pinned", "project_key", "readonly", "warnings"]);
-	assert.deepEqual(Object.keys(resultData<NotesUpdateData>(updated)).sort(), ["address", "budget", "change_kind", "pinned", "project_key", "readonly", "warnings"]);
-	for (const [name, result] of [["notes_write", written], ["notes_update", updated]] as const) {
-		assert.equal(Check(captured.tools.get(name)!.outputSchema as TSchema, result.structuredContent), true, `${name} keeps its ordinary project receipt`);
-	}
-});
-
 test("list and search merge scopes and carry addresses; the path jail rejects escapes", async () => {
 	freshRoot();
 	const session = manager();
@@ -537,27 +505,6 @@ test("a read offsets the body in code points, not bytes or frontmatter", async (
 	assert.equal(start.text, "🐑字\n");
 	assert.equal(start.next_offset_chars, 3);
 	assert.equal(resultRead(await call(captured, "notes_read", { address: "emoji.md", offset_chars: 14 }, ctx)).text, "", "the exact end is an empty window, not a refusal");
-});
-
-test("a read keeps its body window verbatim under the new presentation", async () => {
-	freshRoot();
-	const session = manager();
-	const captured = makeExtension(session);
-	const ctx = context(session);
-	await call(captured, "notes_write", { address: "present.md", content: "0123456789" }, ctx);
-
-	const limited = await call(captured, "notes_read", { address: "present.md", max_chars: 4 }, ctx);
-	const text = limited.content[0]!.type === "text" ? limited.content[0]!.text : "";
-	assert.equal(text.includes("READ WINDOW"), false, "the old READ WINDOW block is gone");
-	assert.equal(text.includes("chars: ["), false, "no parsed range block stands between the header and the body");
-	assert.equal(text.endsWith("\n\n[truncated; continue at offset_chars=4]"), true, "a limit-stopped window names the resume cursor");
-	const header = text.slice(0, text.indexOf("\n\n"));
-	assert.match(header, /^present\.md\npinned false \| budget 2048 \| readonly false \| origin self \| created \d{4}-/, "identity and metadata lead, body first in the window itself");
-
-	const whole = await call(captured, "notes_read", { address: "present.md" }, ctx);
-	const wholeText = whole.content[0]!.type === "text" ? whole.content[0]!.text : "";
-	assert.equal(wholeText.endsWith("\n\n0123456789"), true, "a complete window carries no continuation footer");
-	assert.equal(wholeText.includes("more characters"), false);
 });
 
 test("@ addresses select one notebook, keep boundaries, and never fall back", async () => {

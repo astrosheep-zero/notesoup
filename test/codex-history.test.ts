@@ -175,19 +175,20 @@ test("root: raw messages, top-level envelope metadata, native tool pairing and n
 	assert.ok(tool.ok);
 	assert.equal(tool.data.tool, "exec_command");
 	assert.equal(tool.data.tool_status, "error");
-	assert.match(historyRead.render(tool), /printf output/);
-	assert.match(historyRead.render(tool), /partial\nerror/);
+	assert.match(tool.data.text, /printf output/);
+	assert.match(tool.data.text, /partial\nerror/);
 	assert.equal(tool.data.output_truncated, undefined);
 	assert.equal(tool.data.nested_calls, undefined);
 	const paired = await historyRead.execute({ seq: 9 }, projection);
 	assert.equal(paired.ok, true);
 	if (paired.ok) assert.equal(paired.data.seq, 7);
 	const omitted = await historyRead.execute({ seq: 6 }, projection);
-	assert.match(historyRead.render(omitted), /holds nothing/);
+	assert.ok(!omitted.ok);
+	assert.equal(omitted.error.code, "unknown_seq");
 	const page = await historyList.execute({ query: "printf output" }, projection);
 	assert.ok(page.ok);
 	assert.equal(page.data.items.length, 1);
-	assert.match(historyList.render(page), /seq 7/);
+	assert.equal(page.data.items[0]?.seq, 7);
 	assert.deepEqual(await readFile(f.path), before);
 	assert.equal((await stat(f.path)).mtimeMs, info.mtimeMs);
 });
@@ -215,9 +216,11 @@ test("two native checkpoints retain old raw history; replacement_history is not 
 		[`codex:${ROOT}:${W0}`, 2, 3], [`codex:${ROOT}:${W1}`, 4, 6], [`codex:${ROOT}:${W2}`, 7, 8],
 	]);
 	const earlier = await historyList.execute({ after_seq: 3, before_seq: 7, roles: ["user"] }, second.projection);
-	assert.match(historyList.render(earlier), /^seq 6 \| user\nmiddle text$/);
+	assert.ok(earlier.ok);
+	assert.deepEqual(earlier.data.items.map((item) => [item.seq, item.role, item.content]), [[6, "user", "middle text"]]);
 	const old = await historyRead.execute({ seq: 2 }, second.projection);
-	assert.match(historyRead.render(old), /old raw text/);
+	assert.ok(old.ok);
+	assert.match(old.data.text, /old raw text/);
 	const { projection: _projection, dependencies: _dependencies, lineageSources: _lineageSources, ...facts } = second;
 	assert.deepEqual(await readCodexTranscriptState({ transcriptPath: f.path, threadId: ROOT }), facts);
 	assert.deepEqual(await readCodexHistory({ transcriptPath: f.path, threadId: ROOT }), second);

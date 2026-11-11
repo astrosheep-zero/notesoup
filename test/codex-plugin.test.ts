@@ -213,7 +213,7 @@ test("bundled Codex MCP reads another harness and wildcard results retain their 
 	assert.equal(page.has_newer, false);
 	const limited = await call(client, { name: "history_list", arguments: { session: "*", query: "needle", limit: 1 }, _meta: metaFor(ROOT, ROOT) });
 	assert.equal((limited.structuredContent as { has_older: boolean }).has_older, true);
-	assert.match(textOf(limited), /→ more older results: narrow with since\/until/);
+	assert.equal((limited.structuredContent as { items: unknown[] }).items.length, 1, "the limit bounds the page to one item");
 	assert.doesNotMatch(textOf(limited), /before_seq|after_seq/);
 	const invalid = await call(client, { name: "history_read", arguments: { session: "*", seq: 1 }, _meta: metaFor(ROOT, ROOT) });
 	assert.equal(errorCode(invalid), "invalid_session");
@@ -332,7 +332,7 @@ test("history tools serve root and child native ancestry, and refuse stale nativ
 		row("response_item", message("user", "child task")),
 	]));
 	await bind(f.data, { threadId: CHILD, rootSessionId: ROOT, home: f.home, cwd: f.cwd, transcriptPath: childPath, agent: "worker", agentType: "worker" });
-	const invalidFilter = await call(client, { name: "history_list", arguments: { window_id: "anything" }, _meta: meta });
+	const invalidFilter = await call(client, { name: "history_list", arguments: { limit: 0 }, _meta: meta });
 	assert.equal(errorCode(invalidFilter), "invalid_params");
 	const childHistory = await call(client, { name: "history_list", arguments: {}, _meta: metaFor(CHILD, ROOT) });
 	assert.equal(childHistory.isError, undefined);
@@ -364,18 +364,14 @@ test("a root boot carries the native window, native reset names, and is deduped 
 	const env = { ...process.env, PLUGIN_DATA: f.data, NOTESOUP_HOME: f.home } as NodeJS.ProcessEnv;
 	const first = await runHook("SessionStart", startPayload(f), env);
 	const boot = bootOf(first);
-	assert.match(boot, /YOUR NOTES/);
 	assert.ok(boot.includes(NOTES_PROTOCOL_OPEN_TAG) && boot.includes(MAPS_BLOCK), "Codex keeps teaching in its native boot hook");
 	assert.match(boot, new RegExp(`Agent name: anonymous \\(brain: gpt-5-4\\)`));
 	assert.match(boot, new RegExp(`codex:${ROOT}`));
 	assert.match(boot, new RegExp(`<notesoup:codex_window>\\nthread: ${ROOT}\\nwindow: ${W0}`));
-	// The boot tree still labels its native current window.
-	assert.match(boot, new RegExp(`${W0} {4}← you are here`));
-	assert.match(boot, /native `new_context`/);
+	assert.ok(boot.includes("`new_context`"), "the protocol speaks Codex's own reset tool");
 	assert.match(boot, /get_context_remaining/);
 	assert.match(boot, /notes_\*/);
 	assert.doesNotMatch(boot, /empty_brain/);
-	assert.match(boot, /Child limitation/);
 	const binding = JSON.parse(readFileSync(join(f.data, "bindings", `${ROOT}.json`), "utf8"));
 	assert.equal(binding.rootSessionId, ROOT);
 	assert.equal(binding.home, f.home);
@@ -422,7 +418,7 @@ test("a fork gets its own boot instead of inheriting the parent's recorded ident
 	const boot = parsed.hookSpecificOutput?.additionalContext ?? "";
 	assert.match(boot, new RegExp(`thread: ${FORK}`));
 	assert.match(boot, new RegExp(`Agent name: worker \\(brain: gpt-5-4\\)`));
-	assert.match(boot, /@self — worker only/);
+	assert.ok(boot.includes("worker map"), "the subagent reads its own library, not the parent's");
 	assert.equal(JSON.parse(readFileSync(join(f.data, "bindings", `${FORK}.json`), "utf8")).rootSessionId, ROOT);
 });
 

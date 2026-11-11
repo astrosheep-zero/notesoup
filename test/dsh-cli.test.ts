@@ -25,9 +25,8 @@ test("dsh profile loads our rows and a second process restores the on-disk windo
 	const example = await readFile(join(repository, "docs/dsh.profile.patch.yml"), "utf8");
 	const patch = example
 		.replace("'notesoup/dsh/engine'", `'${pathToFileURL(join(repository, "dist/plugins/dsh/engine.js")).href}'`)
-		.replace("'notesoup/dsh'", `'${pathToFileURL(join(repository, "dist/plugins/dsh/index.js")).href}'`)
-		.replace("# notesHome: /absolute/path/to/notes", `notesHome: ${join(directory, "notes")}`);
-	await writeFile(join(profile, "cordis.patch.yml"), patch + "\n- id: session-title-llm\n  disabled: true\n");
+		.replace("'notesoup/dsh'", `'${pathToFileURL(join(repository, "dist/plugins/dsh/index.js")).href}'`);
+	await writeFile(join(profile, "cordis.patch.yml"), patch + `\n- id: notesoup-engine\n  config:\n    notesHome: ${JSON.stringify(join(directory, "notes"))}\n- id: session-title-llm\n  disabled: true\n`);
 	// A broken ambient proxy must not intercept the local Messages server.
 	const env = { ...process.env, NODE_USE_ENV_PROXY: "1", HTTP_PROXY: "http://127.0.0.1:1", http_proxy: "http://127.0.0.1:1", DSH_HOME: home, DEEPSEEK_API_KEY: "mock-key", DEEPSEEK_BASE_URL: mock.url, DSH_TOOLS_MODE: "native" };
 	const cli = resolve(repository, "node_modules/@deepseek-ai/dsh/lib/bin.js");

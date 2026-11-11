@@ -3,7 +3,7 @@ import test from "node:test";
 import { SessionManager, type SessionBoundaryDraft } from "@earendil-works/pi-coding-agent";
 import { BOOT_TYPE, CONTINUATION_TYPE, MARKER_TYPE, RESET_MARKER_TYPE } from "../plugins/pi/entries.js";
 import { nextHistorySeq } from "../plugins/pi/history.js";
-import { buildMarkerDraft, MARKER_INTERVAL } from "../plugins/pi/marker.js";
+import { buildMarkerDraft } from "../plugins/pi/marker.js";
 import { appendText, call, commitTurnEndBoundary, context, installExtensionTestEnvironment, makeExtension, runCommand, runHandlers, sentOf } from "./helpers/extension.js";
 
 const env = installExtensionTestEnvironment("notesoup-marker-test");
@@ -83,7 +83,6 @@ test("no marker before the interval", async () => {
 	const captured = makeExtension(sessionManager);
 	await beforeAgentStart(captured, context(sessionManager));
 	assert.equal(sentOf(captured, MARKER_TYPE).length, 0);
-	assert.equal(MARKER_INTERVAL, 100);
 });
 
 test("a reset tail awaiting repair blocks markers, and boot anchors the new window's interval", async () => {

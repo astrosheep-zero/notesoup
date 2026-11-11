@@ -40,48 +40,41 @@ test("only EOF proves a miss, while errors after tokens or a fallback still prop
 	for (const queries of [["absentword"], ["needle"], ["😀"]]) await assert.rejects(createHistoryPrefilter(queries)(broken()), /read failed/);
 });
 
-test("incremental Unicode unescaping matches the old prefilter at every byte split", async () => {
-	const presentation = `Codex unknown arguments not recorded output nested calls complete incomplete terminal ms image audio items null
-		copied subagent inference prefix omitted child-local history starts at native ordinal copied model context
-		does not prove original parent event addresses compaction boundary replacement_history is an inference checkpoint
-		not new conversation events opaque content omitted not recovered plaintext MCP completion without a recorded raw call
-		FunctionCallOutput display without raw output encrypted content unavailable world_state snapshot patch omitted from
-		the text projection not a newly spoken message native structured retained context not newly spoken dialogue`;
-	const prior = (text: string, queries: readonly string[]) => {
-		const normalized = text.replace(/\\+u([0-9a-fA-F]{4})/g, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
-		return queries.some((query) => (query.match(/[\p{L}\p{N}_-]+/gu) ?? []).every((token) => {
-			const parts = /^\d+ms$/iu.test(token) ? [token.slice(0, -2), "ms"] : [token];
-			return parts.every((part) => {
-				const literal = new RegExp(part, "iu");
-				return literal.test(text) || literal.test(normalized) || literal.test(presentation);
-			});
-		}));
-	};
-	const cases: [string, string[]][] = [
-		[String.raw`{"text":"\u006eeedle"}`, ["needle"]],
-		[String.raw`{"text":"\u006eeedle"}`, ["u006eeedle"]],
-		[String.raw`{"text":"\u006eeedle"}`, ["needle u006eeedle"]],
-		[String.raw`{"text":"\u006eeedle"}`, ["absentword", "needle"]],
-		[String.raw`{"text":"\u006eeedle"}`, ["needle absentword"]],
-		[String.raw`NEE\u0044LE LONG\u017f CASE\u03a3`, ["needle longs caseς"]],
-		[String.raw`\uD801\uDC00needle`, ["𐐨needle"]],
-		[String.raw`\uD801\uDC00needle`, ["ud801 𐐨needle"]],
-		[String.raw`\u005cu006eeedle`, ["needle"]],
-		[String.raw`\u005c\u0075\u0030\u0030\u0036\u0065eedle`, ["needle"]],
-		[String.raw`prefix\\u006eeedle`, ["prefixneedle"]],
-		[String.raw`\u006e\\u0065edle`, ["needle"]],
-		[String.raw`{"arguments":"{\"path\":\"\\u006eeedle\"}"}`, ["needle"]],
-		[String.raw`\u00xz needle\u00`, ["needle u00"]],
-		[String.raw`need\u00xzle`, ["needle"]],
-		[String.raw`\u006e\u00xz`, ["nu00xz"]],
-		[String.raw`\u006e\u00xz`, ["u00xz"]],
-		[String.raw`\u006e\u00`, ["u00"]],
-		[String.raw`\u006e` + "\\", ["absentword"]],
-		[String.raw`\U006eeedle`, ["needle"]],
-		["LONGſ CASEΣ 你好", ["longs caseς 你好"]],
+test("raw and one-pass Unicode-unescaped matching agree across every byte split", async () => {
+	// true is a conservative "may match" (the strict decoder still decides); false is a proven miss.
+	const cases: [text: string, queries: string[], expected: boolean][] = [
+		// `\u006e` decodes to n; the raw escape text is searchable too.
+		[String.raw`{"text":"\u006eeedle"}`, ["needle"], true],
+		[String.raw`{"text":"\u006eeedle"}`, ["u006eeedle"], true],
+		[String.raw`{"text":"\u006eeedle"}`, ["needle u006eeedle"], true],
+		// Queries are OR; every token in one query is required.
+		[String.raw`{"text":"\u006eeedle"}`, ["absentword", "needle"], true],
+		[String.raw`{"text":"\u006eeedle"}`, ["needle absentword"], false],
+		// Case folding applies to raw and decoded text alike.
+		[String.raw`NEE\u0044LE LONG\u017f CASE\u03a3`, ["needle longs caseς"], true],
+		[String.raw`\uD801\uDC00needle`, ["𐐨needle"], true],
+		[String.raw`\uD801\uDC00needle`, ["ud801 𐐨needle"], true],
+		// Decoding is one pass: producing a backslash does not re-open the following escape.
+		[String.raw`\u005cu006eeedle`, ["needle"], false],
+		[String.raw`\u005c\u0075\u0030\u0030\u0036\u0065eedle`, ["needle"], false],
+		// Two raw backslashes plus an escape decode to one character.
+		[String.raw`prefix\\u006eeedle`, ["prefixneedle"], true],
+		[String.raw`\u006e\\u0065edle`, ["needle"], true],
+		[String.raw`{"arguments":"{\"path\":\"\\u006eeedle\"}"}`, ["needle"], true],
+		// Incomplete escapes stay literal; raw hex remains a possible literal hit.
+		[String.raw`\u00xz needle\u00`, ["needle u00"], true],
+		[String.raw`need\u00xzle`, ["needle"], false],
+		[String.raw`\u006e\u00xz`, ["nu00xz"], false],
+		[String.raw`\u006e\u00xz`, ["u00xz"], true],
+		[String.raw`\u006e\u00`, ["u00"], true],
+		// A trailing backslash is flushed as a literal, never merged into a query token.
+		[String.raw`\u006e` + "\\", ["absentword"], false],
+		// Uppercase `U` is not an escape marker.
+		[String.raw`\U006eeedle`, ["needle"], false],
+		["LONGſ CASEΣ 你好", ["longs caseς 你好"], true],
 	];
-	for (const [text, queries] of cases) {
-		const bytes = Buffer.from(text), plan = createHistoryPrefilter(queries), expected = prior(text, queries);
+	for (const [text, queries, expected] of cases) {
+		const bytes = Buffer.from(text), plan = createHistoryPrefilter(queries);
 		for (let cut = 1; cut < bytes.length; cut++) {
 			async function* split() { yield bytes.subarray(0, cut); yield bytes.subarray(cut); }
 			assert.equal(await plan(split()), expected, `${JSON.stringify({ text, queries })} split ${cut}`);

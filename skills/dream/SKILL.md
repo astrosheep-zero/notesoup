@@ -5,7 +5,7 @@ description: Review and consolidate durable notes using notesoup's shared dream 
 
 # Dream
 
-Read `../../playbook.md` completely, resolving the path from this skill's directory. It is the shared guide to reviewing and organizing notes. Standing reminders belong in a separate `CHEATSHEET.md` (five lines); `MAP.md` holds only the note index. Both default to pinned and load every window when live unless explicitly unpinned. Every note defaults to a 2048-code-point advisory budget, adjustable per note; pinned bodies load whole with overflow warnings. Respect soft readonly locks; explicitly unlock with `readonly:false` before changing a locked note.
+Read `../../playbook.md` completely, resolving the path from this skill's directory. It is the shared guide to reviewing and organizing notes. Standing reminders belong in a separate `CHEATSHEET.md` (five lines); `MAP.md` holds only the note index. Both default to pinned and load every window when live unless explicitly unpinned. Ordinary notes default to a 4096-code-point advisory budget (2048 for root `CHEATSHEET.md` and `MAP.md`), adjustable per note; pinned bodies load whole with overflow warnings. Respect soft readonly locks; explicitly unlock with `readonly:false` before changing a locked note.
 
 Dream in this agent's current session. Do not start another agent or model unless the human asks.
 

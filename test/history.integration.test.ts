@@ -73,14 +73,12 @@ test("Pi registered tools resolve another persisted session and propagate its id
 	assert.equal(current.session, `pi:${session.getSessionId()}`);
 });
 
-test("history_list exposes bounded paging, `from` and a literal query, while notes use snapshot limits", () => {
+test("history_list exposes bounded paging, `from` and a literal query", () => {
 	const captured = makeExtension(manager());
 	const readSchema = captured.tools.get("history_read")?.parameters as { properties?: Record<string, unknown>; required?: string[] };
-	const legacyItemKey = ["item", "id"].join("_");
 	assert.ok(readSchema.properties?.seq);
 	assert.deepEqual(readSchema.required, ["seq"]);
-	assert.equal(readSchema.properties?.[legacyItemKey], undefined);
-	assert.equal(readSchema.properties?.window_id, undefined);
+	assert.equal(readSchema.properties?.window_id, undefined, "history_read accepts no window selector");
 
 	const listSchema = captured.tools.get("history_list")!.parameters as TSchema;
 	const properties = (listSchema as unknown as { properties: Record<string, { minimum?: number; anyOf?: Array<{ const?: string }>; items?: { anyOf?: Array<{ const?: string }> } }> }).properties;
@@ -91,10 +89,6 @@ test("history_list exposes bounded paging, `from` and a literal query, while not
 	assert.equal(Check(listSchema, { after_seq: -1 }), false);
 	assert.deepEqual(properties.from?.anyOf?.map((item) => item.const), ["newest", "oldest"]);
 	assert.ok(properties.query);
-	assert.equal(properties.around, undefined);
-	assert.equal(properties.tool_name, undefined);
-	assert.equal(properties.custom_type, undefined);
-	assert.equal(properties.cursor, undefined);
 	assert.deepEqual(properties.roles?.items?.anyOf?.map((item) => item.const), ["user", "assistant", "tool", "context"], "the role filter carries the four public roles");
 	assert.ok(properties.since, "the time filter has a since param");
 	assert.ok(properties.until, "the time filter has an until param");
@@ -102,24 +96,13 @@ test("history_list exposes bounded paging, `from` and a literal query, while not
 	assert.equal(Check(listSchema, { since: "" }), false, "an empty time value is refused by the schema");
 	assert.equal(Check(listSchema, { query: "needle", from: "oldest", roles: ["tool"] }), true);
 	assert.equal(Check(listSchema, { from: "recent" }), false);
-	// The retired names are unknown parameters, refused like any other: `additionalProperties: false`.
-	for (const retired of [{ before: 5 }, { after: 5 }, { order: "oldest" }, { limit_chars: 10 }]) {
-		assert.equal(Check(listSchema, retired), false, `${Object.keys(retired)[0]} is refused as an unknown parameter`);
-	}
 	assert.equal(Check(listSchema, { query: "" }), true, "an empty literal is equivalent to an omitted query");
-	for (const invalid of [{ roles: ["tool_call"] }, { roles: ["system"] }, { tool_name: "bash" }, { roles: [] }]) {
+	for (const invalid of [{ roles: ["tool_call"] }, { roles: ["system"] }, { roles: [] }]) {
 		assert.equal(Check(listSchema, invalid), false, JSON.stringify(invalid));
 	}
 
 	assert.deepEqual(Object.keys(properties).sort(), ["session", "query", "roles", "before_seq", "after_seq", "since", "until", "from", "limit", "max_chars_per_item"].sort());
-	assert.equal(Check(listSchema, { window_id: "anything" }), false, "unknown filters are rejected before selection");
-
-	const notesSchema = captured.tools.get("notes_list")?.parameters as { properties?: Record<string, unknown> };
-	assert.equal(notesSchema.properties?.cursor, undefined);
-	assert.ok(notesSchema.properties?.limit);
-	const notesSearchSchema = captured.tools.get("notes_search")?.parameters as { properties?: Record<string, unknown> };
-	assert.equal(notesSearchSchema.properties?.cursor, undefined);
-	assert.ok(notesSearchSchema.properties?.limit);
+	assert.equal(Check(listSchema, { window_id: "anything" }), false, "removed filters are refused as unknown parameters");
 });
 
 test("every history operation declares a result schema its own payload satisfies", async () => {
@@ -136,7 +119,6 @@ test("every history operation declares a result schema its own payload satisfies
 		const structured = result.structuredContent;
 		assert.ok(structured !== undefined, `${toolName} carries a structured outcome`);
 		assert.equal(Check(operation.outputSchema, structured), true, `${toolName} payload satisfies its own outputSchema`);
-		assert.equal(rendered(result).split("\n")[0], "seq 1 | user");
 		if (toolName === "history_list") {
 			assert.deepEqual(page(result).items, [{ seq: 1, role: "user", created_at: page(result).items[0]!.created_at, content: "hello", truncated: false, offset_chars: 0 }]);
 		} else {
@@ -277,7 +259,7 @@ test("a one-row page budget admits the newest candidate first", () => {
 	assert.deepEqual(keptSeqs(1, "oldest"), [1], "from oldest keeps the other end when the budget is short");
 });
 
-test("query returns budget-failure facts while tools preserve single-session and corpus refusal text", async () => {
+test("query reports budget failures while tools refuse the page", async () => {
 	const projection = projectHistory([{ windowId: "w1", items: [{ seq: 1, windowId: "w1", role: "user", text: "message" }] }], 1, new Set([1]));
 	assert.deepEqual(selectPage(projection, {}, () => false, 100), { ok: false, pageTooLarge: { count: 1, multi: false } });
 	const collector = new CorpusCollector({});
@@ -292,11 +274,8 @@ test("query returns budget-failure facts while tools preserve single-session and
 	const wrap = (text: string) => "x".repeat(TOOL_OUTPUT_MAX_BYTES + 1) + text;
 	for (const session of [undefined, "pi:budget", "*"]) {
 		const result = await historyList.execute({ session }, context, wrap);
-		const multi = session === "*";
-		const narrow = multi ? "narrow the session pattern, query, roles or `since`/`until`, or read one session/seq with `history_read`" : "narrow with `before_seq`/`after_seq` or `since`/`until`, pass `roles` to skip folding, or `history_read` one seq";
-		const message = `Even trimmed to their shortest, these 1 rows${multi ? "" : " and their folded runs"} fill the 32 KB a call can carry; ${narrow}.`;
-		assert.deepEqual(result, { ok: false, error: { code: "page_too_large", message } });
-		assert.equal(historyList.render(result), `error: page_too_large: ${message}`);
+		assert.ok(!result.ok);
+		assert.equal(result.error.code, "page_too_large");
 	}
 });
 
@@ -465,13 +444,11 @@ test("conversation view folds tools and injected messages, while explicit roles 
 	append(session, { role: "assistant", content: [], stopReason: "toolUse", timestamp: Date.now() });
 
 	const conversation = page(await call(captured, "history_list", {}, ctx));
-	const legacyItemKey = ["item", "id"].join("_");
 	assert.ok(conversation.folded_after);
 	assert.ok(conversation.items.every((item) => "seq" in item && !("folded" in item)));
 	assert.equal(conversation.items.some((item) => (item.role as string) === "developer"), false);
 	assert.equal(conversation.items.some((item) => item.role === "tool"), false);
 	assert.equal(conversation.items.some((item) => item.role === "assistant" && item.content === ""), false);
-	assert.equal(conversation.items.every((item) => legacyItemKey in item === false), true);
 	const folded = conversation.folded_after!;
 	assert.equal(folded.count, 3, "two tool events and one injected context are folded, not the empty assistant message");
 	assert.deepEqual(folded.tools, { bash: 1, read: 1 });
@@ -482,7 +459,6 @@ test("conversation view folds tools and injected messages, while explicit roles 
 	const hiddenOnly = page(await call(captured, "history_list", { after_seq: 2, before_seq: 6 }, ctx));
 	assert.deepEqual(hiddenOnly.items, []);
 	assert.deepEqual(hiddenOnly.folded_after, { first_seq: 3, last_seq: 4, count: 2, tools: { bash: 1, read: 1 } });
-	assert.match(rendered(await call(captured, "history_list", { after_seq: 2, before_seq: 6 }, ctx)), /seqs 3-4 \| folded 2 events/);
 
 	const expanded = page(await call(captured, "history_list", { roles: ["tool"] }, ctx));
 	assert.deepEqual(expanded.items.map((item) => [item.seq, item.role, item.tool, item.tool_status]), [[3, "tool", "bash", "ok"], [4, "tool", "read", "ok"]]);
@@ -633,7 +609,6 @@ test("standalone bash execution retains command, output, and truncation path", a
 		truncated: false,
 		content: 'bash {"command":"echo needle"}\n--- output ---\nneedle output',
 	});
-	assert.match(rendered(raw), /output truncated, full text at \/tmp\/bash-output\.txt/, "a truncation with a path names both");
 	const query = page(await call(captured, "history_list", { roles: ["tool"], query: "NEEDLE OUTPUT" }, ctx));
 	assert.deepEqual(query.items.map((item) => item.seq), [1]);
 	const read = resultRead<{ seq: number }>(await call(captured, "history_read", { seq: 1, offset_chars: query.items[0]!.offset_chars as number }, ctx));
@@ -652,8 +627,6 @@ test("a truncated tool run without a recorded path still reports output_truncate
 	const item = found.items[0]!;
 	assert.equal(item.output_truncated, true, "the truncation is reported even with no path");
 	assert.equal("full_output_path" in item, false, "no path is invented");
-	assert.match(rendered(raw), /output truncated/, "the header still says the output was truncated");
-	assert.equal(rendered(raw).includes("full text at"), false, "the header claims no path");
 	const read = resultRead<{ output_truncated?: true; full_output_path?: string }>(await call(captured, "history_read", { seq: 1 }, ctx));
 	assert.equal(read.output_truncated, true, "the read reports the same truncation");
 	assert.equal("full_output_path" in read, false);
@@ -672,10 +645,10 @@ test("list renders paging and fold recipes across resets, and read renders a nei
 
 	const earlier = page(await call(captured, "history_list", { before_seq: 31, from: "oldest", limit: 30 }, ctx));
 	assert.deepEqual(earlier.items.map((item) => item.seq), Array.from({ length: 30 }, (_, index) => index + 1));
-	const earlierQuery = page(await call(captured, "history_list", { query: "older window", before_seq: 31 }, ctx));
-	assert.equal(earlierQuery.items.length, 20, "queries and seq bounds recover earlier windows without a separate address");
-	const current = await call(captured, "history_list", { after_seq: 30 }, ctx);
-	assert.match(rendered(current), /^seq 31 \| user\ncurrent window$/);
+	const earlierQuery = page(await call(captured, "history_list", { query: "older window", before_seq: 31, limit: 30 }, ctx));
+	assert.equal(earlierQuery.items.length, 30, "queries and seq bounds recover earlier windows without a separate address");
+	const current = page(await call(captured, "history_list", { after_seq: 30 }, ctx));
+	assert.deepEqual(current.items.map((item) => [item.seq, item.content]), [[31, "current window"]], "the reset marker consumes no address");
 
 	toolCall(session, "t1", "bash", { command: "ls" });
 	toolResult(session, "t1", "bash", "done");

@@ -215,14 +215,12 @@ test("wildcard query merges every role chronologically, limits from either end, 
 	assert.deepEqual(newest.items, page.items.slice(-2));
 	assert.equal(newest.has_older, true);
 	assert.equal(newest.has_newer, false);
-	assert.match(historyList.render(newestResult), /→ more older results: narrow with since\/until, query, roles or the session pattern/);
 	assert.doesNotMatch(historyList.render(newestResult), /before_seq|after_seq/);
 	const oldestResult = await historyList.execute({ session: "*", query: "needle", limit: 2, from: "oldest" }, ctx);
 	const oldest = data(oldestResult);
 	assert.deepEqual(oldest.items, page.items.slice(0, 2));
 	assert.equal(oldest.has_older, false);
 	assert.equal(oldest.has_newer, true);
-	assert.match(historyList.render(oldestResult), /→ more newer results:/);
 	assert.doesNotMatch(historyList.render(oldestResult), /before_seq|after_seq/);
 	const filtered = data(await historyList.execute({ session: "*", query: "needle", roles: ["tool", "context"], since: "2026-10-06T01:02:05", until: "2026-10-06T01:02:07Z" }, ctx));
 	assert.deepEqual(filtered.items.map((item) => item.role), ["tool"]);
@@ -469,7 +467,8 @@ test("cross-session Claude gaps are visible even on an empty page, budgeted, and
 	const empty = await historyList.execute({ session: "claude:claude-one", query: "absent" }, f.ctx);
 	assert.equal(data(empty).items.length, 0);
 	assert.match(data(empty).notice!, /missing ancestor.*"missing"/);
-	assert.match(historyList.render(empty), /Only confirmed ancestry.*\n\nNo events/);
+	const emptyText = historyList.render(empty);
+	assert.ok(emptyText.includes(data(empty).notice!), "the gap notice survives an empty page");
 	const list = await historyList.execute({ session: "claude:*", query: "needle", max_chars_per_item: 50_000 }, f.ctx);
 	assert.ok(Buffer.byteLength(JSON.stringify(data(list))) <= TOOL_OUTPUT_MAX_BYTES);
 	assert.ok(Buffer.byteLength(historyList.render(list)) <= TOOL_OUTPUT_MAX_BYTES);

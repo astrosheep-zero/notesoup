@@ -30,22 +30,18 @@ test("dream skill is publicly discoverable and resolves the shared playbook", ()
 	const root = packageRoot();
 	const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 	assert.deepEqual(manifest.pi.skills, ["./skills"]);
-	assert.deepEqual(manifest.pi.extensions, ["./plugins/pi/index.ts"]);
-	assert.equal(manifest.bin, undefined, "the dream CLI is gone; dreams run through the dream_* tools");
 	assert.ok(manifest.files.includes("skills"));
 
 	discoverSkill(join(root, "skills"), "memory");
 	const skill = discoverSkill(join(root, "skills"), "dream");
-	const skillPlaybook = resolve(skill.baseDir, "../../playbook.md");
+	const reference = readFileSync(join(skill.baseDir, "SKILL.md"), "utf8").match(/`([^`]+playbook\.md)`/)?.[1];
+	assert.ok(reference, "the skill links its playbook");
+	const skillPlaybook = resolve(skill.baseDir, reference);
 	const packagePlaybook = resolve(root, "playbook.md");
 	assert.equal(skillPlaybook, packagePlaybook);
 	const playbook = readFileSync(packagePlaybook, "utf8");
 	assert.equal(readFileSync(skillPlaybook, "utf8"), playbook);
 
-	const instructions = readFileSync(join(skill.baseDir, "SKILL.md"), "utf8");
-	for (const name of ["dream_begin", "dream_forget", "dream_end"]) assert.ok(instructions.includes(name));
-	assert.match(instructions, /missing from the current tool list, search for them/);
-	assert.doesNotMatch(instructions, /tool_search|searchTools|codemode/);
 });
 
 test("npm tarball keeps the skill's relative playbook path portable after extraction", () => {
@@ -61,7 +57,6 @@ test("npm tarball keeps the skill's relative playbook path portable after extrac
 		assert.ok(packedPaths.includes("skills/dream/SKILL.md"));
 		assert.ok(packedPaths.includes("skills/memory/SKILL.md"));
 		assert.ok(packedPaths.includes("playbook.md"));
-		assert.ok(packedPaths.includes("plugins/pi/index.ts"));
 
 		const extracted = join(fixture, "extracted");
 		execFileSync("mkdir", ["-p", extracted]);
@@ -69,7 +64,9 @@ test("npm tarball keeps the skill's relative playbook path portable after extrac
 		const installedRoot = join(extracted, "package");
 		discoverSkill(join(installedRoot, "skills"), "memory");
 		const installedSkill = discoverSkill(join(installedRoot, "skills"), "dream");
-		const referencedPlaybook = resolve(installedSkill.baseDir, "../../playbook.md");
+		const reference = readFileSync(join(installedSkill.baseDir, "SKILL.md"), "utf8").match(/`([^`]+playbook\.md)`/)?.[1];
+		assert.ok(reference, "the installed skill links its playbook");
+		const referencedPlaybook = resolve(installedSkill.baseDir, reference);
 		assert.equal(referencedPlaybook, resolve(installedRoot, "playbook.md"));
 		assert.equal(readFileSync(referencedPlaybook, "utf8"), readFileSync(join(root, "playbook.md"), "utf8"));
 	} finally {

@@ -7,8 +7,6 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveProjectNamespace } from "../src/notes/project-namespace.js";
-import { renderBootBlock } from "../src/boot/render.js";
-import { loadNotesSnapshot } from "../src/boot/snapshot.js";
 import { NOTES_PROTOCOL_CLOSE_TAG, WINDOW_IDENTITY_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG } from "../src/boot/text.js";
 import { notesRead } from "../src/tools/notes.js";
 import { notesToolContext } from "../src/tools/notes-context.js";
@@ -368,7 +366,7 @@ test("dsh explicit resets survive auto:false; shared tool reads and expected err
 		assert.equal(read.isError, false);
 		if (!read.isError) assert.equal((read.value as { text: string }).text, "raw");
 	}
-	const invalidHistory = await call("history_list", { window_id: "missing" });
+	const invalidHistory = await call("history_list", { limit: 0 });
 	assert.equal(invalidHistory.isError, true);
 	if (invalidHistory.isError) assert.equal(invalidHistory.error.info?.code, "INVALID_PARAMS");
 	const invalid = await call("notes_read", { address: "anything", max_chars: 0 });
@@ -407,10 +405,6 @@ test("dsh explicit resets survive auto:false; shared tool reads and expected err
 	const refused = await call("notes_write", { address, content: "no overwrite" });
 	assert.equal(refused.isError, true);
 	if (refused.isError) assert.equal(refused.error.info?.code, "invalid_scope");
-	const snapshot = engine.windows.get(agent.session).snapshot;
-	const sharedBoot = renderBootBlock({ agentName: identity.agent, modelName: identity.model, tree: { trunk: `dsh:${agent.session.id}`, windows: [{ shortName: "0", isCurrent: false }, { shortName: "1", isCurrent: true }] }, notes: await loadNotesSnapshot(identity, snapshot.openedAt), tools: { notes: "notes_*", notesList: "notes_list", history: "history_*", remaining: "get_context_remaining", wipe: "empty_brain" } });
-	// The shared protocol, including the pinned-page instructions, is used verbatim inside host framing.
-	assert.ok(snapshot.boot.includes(sharedBoot.split("YOUR NOTES")[0]!));
 	const blocked = ctx.on("tools/post-execute", async (exec, _result, next) => exec.name === "empty_brain" ? { kind: "block", feedback: [{ type: "text", text: "blocked" }] } : next());
 	mock.script.push({ tool: "empty_brain", input: {} }, { text: "request refused" });
 	await run(agent, "refused clear");

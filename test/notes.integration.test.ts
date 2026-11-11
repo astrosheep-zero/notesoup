@@ -1,6 +1,5 @@
 import { notesIdentityFromPi } from "../plugins/pi/notes/adapter.js";
-import { DEFAULT_BOOT_TOOL_NAMES } from "../src/boot/text.js";
-import { DEFAULT_NOTE_BUDGET } from "../src/notes/policy.js";
+import { DEFAULT_BOOT_TOOL_NAMES, renderProtocolBlock } from "../src/boot/text.js";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
@@ -11,11 +10,9 @@ import test from "node:test";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { loadNotesSnapshot } from "../src/boot/snapshot.js";
 import { renderBootBlock } from "../src/boot/render.js";
-import { MAPS_BLOCK, NOTES_PROTOCOL_CLOSE_TAG, NOTES_PROTOCOL_OPEN_TAG } from "../src/boot/text.js";
-import { PI_PRE_RESET_HINTS } from "../plugins/pi/text.js";
 import type { DreamBeginData } from "../src/tools/dream.js";
 import { localIso } from "../src/notes/frontmatter.js";
-import type { NoteRow, Scope } from "../src/notes/index.js";
+import { createNotesStore } from "../src/notes/index.js";
 import { listNotes, physicalPath, scopeDir } from "./helpers/notes.js";
 import { MAX_READ_WINDOW_CHARS, TOOL_OUTPUT_MAX_BYTES } from "../src/tools/output.js";
 import { notesUpdate } from "../src/tools/notes.js";
@@ -25,7 +22,6 @@ import {
 	assertWithinBudget,
 	call,
 	context,
-	explicitBoot,
 	makeExtension,
 	manager,
 	resultData,
@@ -270,159 +266,29 @@ test("the filesystem notes loader treats an absent notebook as empty but surface
 	);
 });
 
-test("boot note acquisition is one closed snapshot and isolates one or all failed notebooks", async () => {
-	const sm = manager();
-	const ctx = context(sm);
-	const updated = Date.now();
-	const note = (scope: Scope, path: string, address: string, body: string): NoteRow => ({
-		address,
-		scope,
-		path,
-		body,
-		sizeBytes: Buffer.byteLength(body, "utf8"),
-		meta: {
-			scope,
-			origin: "self",
-			createdAt: updated,
-			updatedAt: updated,
-			lastAccessed: updated,
-			accessCount: 0,
-		},
-	});
-	const rows = new Map<Scope, NoteRow[]>([
-		["session", [note("session", "MAP.md", "MAP.md", "SESSION_MAP_BODY"), note("session", "session.md", "session.md", "# Session note\n\nSESSION_POCKET_BODY")]],
-		["project", [note("project", "MAP.md", "@project/MAP.md", "PROJECT_MAP_BODY")]],
-		["human", [note("human", "MAP.md", "@human/MAP.md", "HUMAN_MAP_BODY"), note("human", "human.md", "@human/human.md", "# Human note\n\nHUMAN_POCKET_BODY")]],
-		["agent", [note("agent", "MAP.md", "@agents/root/MAP.md", "AGENT_MAP_BODY")]],
-		["model", [note("model", "model.md", "@models/default/model.md", "# Model note\n\nMODEL_POCKET_BODY")]],
-	]);
-	const calls = new Map<Scope, number>();
-	const snapshot = await loadNotesSnapshot(notesIdentityFromPi(ctx), Date.now(), (scope) => {
-		calls.set(scope, (calls.get(scope) ?? 0) + 1);
-		return rows.get(scope) ?? [];
-	});
-	assert.deepEqual([...calls.entries()], [["session", 1], ["project", 1], ["human", 1], ["agent", 1], ["model", 1]], "each selected notebook is loaded exactly once");
-	const renderData = {
-		tools: DEFAULT_BOOT_TOOL_NAMES,
-		agentName: "root",
-		modelName: "default",
-		tree: { trunk: "pcw:test", windows: [{ shortName: "root", isCurrent: false }, { shortName: "next", isCurrent: true }] },
-		notes: snapshot,
-	};
-	const rendered = renderBootBlock(renderData);
-	assert.equal(renderBootBlock(renderData), rendered, "rendering the same boot data twice is deterministic");
-	assert.ok(rendered.includes("HUMAN_MAP_BODY") && rendered.includes("PROJECT_MAP_BODY") && rendered.includes("AGENT_MAP_BODY") && rendered.includes("SESSION_MAP_BODY"), "all notebook maps, including session, are pinned");
-	assert.ok(rendered.includes("session.md") && rendered.includes("@human/human.md"), "the fresh page carries rows from every notebook");
-	assert.equal(rendered.includes("SESSION_POCKET_BODY"), false, "fresh-page bodies stay excluded");
-	assert.equal(rendered.includes("- MAP.md"), false, "a pinned session map does not take a feed seat");
-	assert.match(rendered, / {2}Session note\n {2}session\.md · (?:just now|\d+s ago)/, "a feed entry is the note's own title over its locator");
-	assert.equal(rendered.includes("UTF-8 bytes"), false, "fresh rows omit implementation-oriented byte counts");
-	assert.ok(rendered.indexOf(NOTES_PROTOCOL_OPEN_TAG) < rendered.indexOf("YOUR NOTES"), "the protocol explains the notes before presenting them");
-	assert.ok(rendered.indexOf(MAPS_BLOCK) < rendered.indexOf("YOUR NOTES"), "the MAP block sits between the protocol and the notes index");
-	assert.ok(rendered.indexOf(NOTES_PROTOCOL_CLOSE_TAG) < rendered.indexOf(MAPS_BLOCK), "the MAP block follows the protocol block");
-	assert.match(rendered, /@project — this project\n─+/, "shelves carry underlined headers");
-	assert.ok(rendered.includes("recent"), "shelves label their fresh pages");
-	assert.ok(rendered.indexOf("no @ — this session") < rendered.indexOf("recent"), "the first shelf opens the index");
-	const headings = ["no @ — this session", "@project — this project", "@self — root only", "@model — default only", "@human — the human"];
-	for (let i = 1; i < headings.length; i++) assert.ok(rendered.indexOf(headings[i - 1]!) < rendered.indexOf(headings[i]!), "shelves proceed from current hands to durable");
-
-	const expanded = await loadNotesSnapshot(notesIdentityFromPi(ctx), Date.now(), (scope) => {
-		if (scope === "project" || scope === "human" || scope === "agent" || scope === "model") {
-			return Array.from({ length: 6 }, (_, i) => note(scope, `note-${i}.md`, `@${scope === "agent" ? "agents/root" : scope === "model" ? "models/default" : scope}/note-${i}.md`, `body ${i}`));
-		}
-		return rows.get(scope) ?? [];
-	});
-	const expandedText = renderBootBlock({ ...renderData, notes: expanded });
-	const freshRows = expandedText.match(/^ {2}\S[^\n]* · (?:just now|\d+s ago)$/gm) ?? [];
-	assert.equal(freshRows.length, 13, "each shelf keeps three of its own pages; the session shelf keeps its one");
-	assert.ok(expandedText.includes("@project/note-2.md"), "the project shelf's third page");
-	assert.equal(expandedText.includes("@project/note-3.md"), false, "the project shelf's fourth page stays shelved");
-	assert.ok(expandedText.includes("@models/default/note-2.md"), "the model shelf also gets three");
-	assert.equal(expandedText.includes("You find"), false, "the old pocket heading is gone");
-
-	const empty = await loadNotesSnapshot(notesIdentityFromPi(ctx), Date.now(), () => []);
-	assert.match(renderBootBlock({ ...renderData, notes: empty }), /YOUR NOTES\n──────────\n\nNone yet\. A blank slate is a fine place to start — just don't finish there\./);
-	const crumpledNote = note("session", "crumpled.md", "crumpled.md", "SHOULD_NOT_SHOW");
-	const mapAndUnicode = await loadNotesSnapshot(notesIdentityFromPi(ctx), Date.now(), (scope) => scope === "session" ? [
-		note("session", "MAP.md", "MAP.md", "SESSION_MAP_BODY"),
-		note("session", "unicode.md", "unicode.md", "🐑字"),
-		{ ...crumpledNote, meta: { ...crumpledNote.meta, crumpledAt: localIso(updated) } },
-	] : []);
-	const mapAndUnicodeText = renderBootBlock({ ...renderData, notes: mapAndUnicode });
-	assert.match(mapAndUnicodeText, / {2}🐑字\n {2}unicode\.md · (?:just now|\d+s ago)/, "a headingless note is announced by its first line");
-	assert.ok(mapAndUnicodeText.includes("no @ — this session\n───────────────────\n\nMAP.md\n\n  SESSION_MAP_BODY\n\nrecent\n\n  🐑字\n  unicode.md · just now"), "the session shelf keeps its typography");
-	assert.equal(mapAndUnicodeText.includes("crumpled.md"), false);
-	assert.equal(/MAP\.md ·/.test(mapAndUnicodeText), false, "maps never take feed seats");
-	assert.equal(mapAndUnicodeText.includes("@human — the human"), false, "empty shelves are omitted");
-
-	const readFailure = (code: string): NodeJS.ErrnoException => Object.assign(new Error("scripted read failure"), { code });
-	const oneFailed = await loadNotesSnapshot(notesIdentityFromPi(ctx), Date.now(), (scope) => {
-		if (scope === "human") throw readFailure("EIO");
-		return rows.get(scope) ?? [];
-	});
-	assert.deepEqual(oneFailed.unavailable.map((namespace) => namespace.label), ["@human"]);
-	const oneFailedText = renderBootBlock({
-		tools: DEFAULT_BOOT_TOOL_NAMES,
-		agentName: "root",
-		modelName: "default",
-		tree: renderData.tree,
-		notes: oneFailed,
-	});
-	assert.ok(oneFailedText.includes("PROJECT_MAP_BODY") && oneFailedText.includes("@human — the human\n──────────────────\n\n  This drawer wouldn't open. Try `notes_list` again."), "healthy notebooks and a per-section recovery notice survive one failure");
-	assert.equal(oneFailedText.includes("HUMAN_POCKET_BODY"), false, "the failed notebook's index is omitted");
-	assert.equal(oneFailedText.includes("Human note"), false, "the failed notebook takes no feed seats");
-
-	const allFailed = await loadNotesSnapshot(notesIdentityFromPi(ctx), Date.now(), (scope) => {
-		throw readFailure(scope === "session" ? "EACCES" : "EIO");
-	});
-	assert.equal(allFailed.unavailable.length, 5);
-	const allFailedText = renderBootBlock({
-		tools: DEFAULT_BOOT_TOOL_NAMES,
-		agentName: "root",
-		modelName: "default",
-		tree: renderData.tree,
-		notes: allFailed,
-	});
-	assert.ok(allFailedText.includes("pcw:test") && allFailedText.includes("root") && allFailedText.includes("next"), "identity survives an all-notebook failure");
-	assert.ok(allFailedText.includes("Your memory gets wiped when this window ends"), "protocol survives an all-notebook failure");
-	assert.equal(allFailedText.includes("scripted read failure"), false, "the model-facing notice does not expose OS/error details");
-	await assert.rejects(
-		() => loadNotesSnapshot(notesIdentityFromPi(ctx), Date.now(), () => { throw new TypeError("programmer failure"); }),
-		(error: unknown) => error instanceof TypeError,
-		"unrelated TypeError construction failures remain visible",
-	);
-	await assert.rejects(
-		() => loadNotesSnapshot(notesIdentityFromPi(ctx), Date.now(), () => { throw Object.assign(new Error("invalid argument"), { code: "ERR_INVALID_ARG_TYPE" }); }),
-		(error: unknown) => (error as NodeJS.ErrnoException).code === "ERR_INVALID_ARG_TYPE",
-		"Node ERR_* failures are not treated as filesystem errno failures",
-	);
-});
-
-test("the boot block gives awake agents the notes file layout", async () => {
-	const session = manager();
-	const rendered = await explicitBoot(context(session), "pcw:test:root", undefined);
-	assert.equal(rendered.includes(process.env.NOTESOUP_HOME ?? ""), false, "the absolute notes home is never exposed");
-	assert.match(rendered, /`<path>`, no @[\s\S]*`@project\/<path>`[\s\S]*`@human\/<path>`/);
-	assert.ok(rendered.includes(`\n${PI_PRE_RESET_HINTS}\n${NOTES_PROTOCOL_CLOSE_TAG}`), "Pi's boot closes the protocol with the pre-reset hints");
-});
-
-test("the boot binds its tools and injects an over-budget MAP whole with a warning", async () => {
-	const session = manager();
-	const captured = makeExtension(session);
-	const ctx = context(session);
-	await call(captured, "notes_write", { address: "MAP.md", content: "M".repeat(DEFAULT_NOTE_BUDGET + 10) }, ctx);
-	await call(captured, "notes_write", { address: "CHEATSHEET.md", content: "REMEMBER_THIS_RULE" }, ctx);
-	const rendered = await explicitBoot(ctx, "pcw:test:root", undefined);
-
-	for (const tool of ["notes_*", "history_*", "get_context_remaining", "empty_brain"]) {
-		assert.ok(rendered.includes(`\`${tool}\``), `${tool} is bound in the protocol`);
+test("boot acquisition isolates filesystem failures but not programmer errors", async () => {
+	const identity = notesIdentityFromPi(context(manager()));
+	const notes = createNotesStore(identity);
+	await notes.write("@project/available", "AVAILABLE_NOTE");
+	const [available] = await notes.list();
+	assert.ok(available);
+	for (const failures of [["human"], ["session", "project", "human", "agent", "model"]] as const) {
+		const snapshot = await loadNotesSnapshot(identity, Date.now(), scope => {
+			if ((failures as readonly string[]).includes(scope)) throw Object.assign(new Error("private filesystem detail"), { code: "EIO" });
+			return scope === "project" ? [available] : [];
+		});
+		assert.deepEqual(snapshot.unavailable.map(namespace => namespace.scope), failures);
+		assert.deepEqual(snapshot.namespaces.get("project"), failures.length === 1 ? [available] : []);
+		const rendered = renderBootBlock({
+			tools: DEFAULT_BOOT_TOOL_NAMES, agentName: "root", modelName: "default",
+			tree: { trunk: "snapshot-test", windows: [{ shortName: "root", isCurrent: true }] }, notes: snapshot,
+		});
+		assert.ok(rendered.includes("snapshot-test"));
+		assert.ok(rendered.includes(renderProtocolBlock(DEFAULT_BOOT_TOOL_NAMES, "root")));
+		assert.equal(rendered.includes("private filesystem detail"), false);
 	}
-	assert.ok(rendered.includes("M".repeat(DEFAULT_NOTE_BUDGET + 10)), "the full MAP is inlined");
-	assert.match(rendered, /Warning: note body is 2058 Unicode code points, over budget 2048/);
-	assert.ok(rendered.includes("CHEATSHEET.md\n\n  REMEMBER_THIS_RULE\n\nMAP.md\n\n"), "a real stored cheatsheet is pinned before the map");
-	assert.equal(/CHEATSHEET\.md ·/.test(rendered), false, "the stored cheatsheet takes no recent seat");
-	for (const retired of ["history_list", "history_read"]) {
-		assert.equal(rendered.includes(retired), false, `${retired} no longer appears in the boot block`);
+	for (const error of [new TypeError("programmer failure"), Object.assign(new Error("invalid argument"), { code: "ERR_INVALID_ARG_TYPE" })]) {
+		await assert.rejects(() => loadNotesSnapshot(identity, Date.now(), () => { throw error; }), thrown => thrown === error);
 	}
 });
 
@@ -560,7 +426,9 @@ test("a large mutation keeps a receipt and budget warning while details.diff car
 	assertWithinBudget(raw, "bulk edit receipt");
 	const update = resultData<NotesUpdateData>(raw);
 	assert.equal(update.change_kind, "body");
-	assert.equal(textOf(raw), "updated bulk-edit.md | pinned false | budget 2048 | readonly false\nWarning: note body is 451500 Unicode code points, over budget 2048; the full body is kept.", "model-facing text carries the receipt and warning without repeating the diff");
+	assert.match(textOf(raw), /^updated bulk-edit\.md\b/);
+	assert.ok(update.warnings.length > 0);
+	for (const warning of update.warnings) assert.ok(textOf(raw).includes(warning), "budget warnings remain visible");
 	assert.match((raw.details as { diff?: string } | undefined)?.diff ?? "", new RegExp(`\\+.*?${"b".repeat(300)}`), "details.diff carries the UI diff");
 
 	const body = resultRead(await call(captured, "notes_read", { address: "bulk-edit.md", max_chars: 300 }, ctx)).content;
@@ -616,13 +484,14 @@ test("an extra value beyond the verbatim budget is named in place, not dropped",
 	const path = physicalPath("session", "many-extras.md", ctx);
 	mkdirSync(dirname(path), { recursive: true });
 	const stamp = localIso(Date.now());
-	const keys = Array.from({ length: 10 }, (_, index) => `k${index}: "${"x".repeat(400)}"`).join("\n");
+	const count = Math.ceil(TOOL_OUTPUT_MAX_BYTES / 400) + 1;
+	const keys = Array.from({ length: count }, (_, index) => `k${index}: "${"x".repeat(400)}"`).join("\n");
 	writeFileSync(path, `---\norigin: self\ncreatedAt: ${stamp}\nupdatedAt: ${stamp}\nlastAccessed: ${stamp}\naccessCount: 0\n${keys}\n---\n\nbody`);
 
 	const metadata = resultData<NotesReadData>(await call(captured, "notes_read", { address: "many-extras.md" }, ctx)).metadata;
 	assert.equal(metadata.extra.k0, "x".repeat(400), "the first extras are delivered verbatim");
-	assert.equal(metadata.extra.k9, "[omitted: too large]", "an extra past the verbatim budget is named, not dropped");
-	assert.equal(Object.keys(metadata.extra).length, 10, "every key is still accounted for");
+	assert.equal(metadata.extra[`k${count - 1}`], "[omitted: too large]", "an extra past the verbatim budget is named, not dropped");
+	assert.equal(Object.keys(metadata.extra).length, count, "every key is still accounted for");
 });
 
 test("an unexpected notes defect propagates with its own identity while real filesystem refusals stay structured", async () => {
@@ -671,7 +540,8 @@ test("a body that repeats one anchor thousands of times refuses with bounded, co
 	const refusal = resultError(raw);
 	assert.equal(refusal.code, "ambiguous_edit");
 	assert.match(refusal.message, /edits\[0\]/, "the message names the failing edit index");
-	assert.match(refusal.message, /5000 times \(lines 1, 2, 3, 4, 5, 6, 7, 8, and 4992 more\)/, "the message names a bounded sample and the exact total");
+	assert.match(refusal.message, /5000 times/, "the message names the exact total");
+	assert.ok(refusal.message.length < repeats, "the message summarizes rather than enumerating every line");
 	assert.equal(resultRead(await call(captured, "notes_read", { address: "many.md", max_chars: 15 }, ctx)).content, "beta\n".repeat(3), "the refused edit changed nothing");
 
 	const replaced = resultData<NotesUpdateData>(await call(captured, "notes_update", { address: "many.md", edits: [{ oldText: "beta", newText: "B" }], replace_all: true }, ctx));

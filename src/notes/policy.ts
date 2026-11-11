@@ -2,7 +2,7 @@ import { NoteError } from "./errors.js";
 
 export type NotePolicyFields = { pinned?: boolean; budget?: number; readonly?: boolean };
 export type NotePolicy = Required<NotePolicyFields>;
-export const DEFAULT_NOTE_BUDGET = 2048;
+export const DEFAULT_NOTE_BUDGET = 4096;
 export const MAX_PINNED_NOTES = 5;
 /** Defaults and ordering live here; no other layer assigns behavior by page name. */
 const DEFAULT_PINNED_PAGES = ["CHEATSHEET.md", "MAP.md"] as const;
@@ -19,9 +19,10 @@ export function validateNotePolicy(fields: NotePolicyFields): void {
 /** Only root default pages are pinned implicitly; an explicit false always wins. */
 export function effectiveNotePolicy(fields: NotePolicyFields, path: string): NotePolicy {
 	validateNotePolicy(fields);
+	const defaultPage = DEFAULT_PINNED_PAGES.some(page => page === path);
 	return {
-		pinned: fields.pinned ?? DEFAULT_PINNED_PAGES.some(page => page === path),
-		budget: fields.budget ?? DEFAULT_NOTE_BUDGET,
+		pinned: fields.pinned ?? defaultPage,
+		budget: fields.budget ?? (defaultPage ? 2048 : DEFAULT_NOTE_BUDGET),
 		readonly: fields.readonly ?? false,
 	};
 }

@@ -64,10 +64,11 @@ Pinned pages get jammed straight into your brain the moment you wake up. Whoever
 reads them, and next is you. So keep them short, and keep them true.
 
 Set \`pinned\`, \`budget\`, and \`readonly\` with the note tools or frontmatter. Each notebook allows five
-live pins, including the defaults; \`pinned:false\` unpins even a default page. Every page's budget
-starts at 2048 Unicode code points; set a positive integer to change it. Going over warns but saves,
-and pinned bodies arrive whole, not cut short. \`readonly:true\` is a soft lock, not security;
-explicitly set \`readonly:false\` to unlock, on its own or with your changes.
+live pins, including the defaults; \`pinned:false\` unpins even a default page. Budgets start at 4096
+Unicode code points, or 2048 for root \`CHEATSHEET.md\` and \`MAP.md\`; set a positive integer to
+change one. Going over warns but saves, and pinned bodies arrive whole, not cut short.
+\`readonly:true\` is a soft lock, not security; explicitly set \`readonly:false\` to unlock,
+on its own or with your changes.
 
 - **\`CHEATSHEET.md\`** holds what you'll want next time — a rule, a warning, a grudge, a name,
   a phone number you'll regret losing. Nobody grades it. Keep it to five lines, or it grows fat

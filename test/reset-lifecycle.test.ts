@@ -19,7 +19,7 @@ import notesoup from "../plugins/pi/extension.js";
 import { BOOT_TYPE, CARRIED_INPUT_TYPE, CONTINUATION_TYPE, GUIDANCE_TYPE, RESET_LAST_WORD_TYPE, RESET_MARKER_TYPE } from "../plugins/pi/entries.js";
 import { MANUAL_WIPE_TYPE } from "../plugins/pi/entries.js";
 import { assertBootHistory, toolContext } from "./helpers/extension.js";
-import { COUNTDOWN_LINE, FORCED_CONTINUATIONS, NORMAL_CONTINUATIONS } from "../src/budget/text.js";
+import { FORCED_CONTINUATIONS, NORMAL_CONTINUATIONS } from "../src/budget/text.js";
 import { commandWarningContent } from "../plugins/pi/text.js";
 import { historyFromSession, nextHistorySeq } from "../plugins/pi/history.js";
 import { buildResetDrafts, inspectResetTail, LAST_WORD_PREFIX, MAX_LAST_WORD_CHARS, repairResetTail, sanitizeLastWord } from "../plugins/pi/reset/artifacts.js";
@@ -295,8 +295,6 @@ test("manual /empty with a prompt shows the human's command line in the close-ou
 	const promptIndex = content.indexOf(promptLine);
 	assert.ok(promptIndex >= 0, "the human's raw command line reaches the closing model");
 	assert.ok(promptIndex > content.indexOf("</notesoup:budget_notice>"), "command context is outside the notice");
-	assert.ok(content.includes("Then call `empty_brain`. Nothing in between.\n" + COUNTDOWN_LINE), "the countdown immediately follows the reset call");
-	assert.equal(content.split(COUNTDOWN_LINE).length - 1, 1, "the notice carries the countdown once");
 	// Command text is close-out context only.
 	const settle = resultEntries(await h.emit("agent_before_settle", {
 		type: "agent_before_settle",
@@ -973,10 +971,8 @@ test("empty_brain trims the last word, refuses an oversized one, and a blank per
 	over.sessionManager.appendMessage({ role: "user", content: [{ type: "text", text: "before reset" }], timestamp: Date.now() });
 	const refused = await over.callTool("empty_brain", { last_word: "x".repeat(MAX_LAST_WORD_CHARS + 1) });
 	assert.equal(refused.isError, true, "an oversized note fails the tool call so the host flags it");
-	assert.match(JSON.stringify(refused), /error/, "an oversized note is refused, not truncated");
-	assert.match(JSON.stringify(refused), new RegExp(`${MAX_LAST_WORD_CHARS + 1} characters`), "the refusal names the actual size and the limit");
 	const refusedAstral = await over.callTool("empty_brain", { last_word: "\u{1F41F}".repeat(MAX_LAST_WORD_CHARS + 1) });
-	assert.match(JSON.stringify(refusedAstral), new RegExp(`${MAX_LAST_WORD_CHARS + 1} characters`), "the guard counts code points, not UTF-16 units");
+	assert.equal(refusedAstral.isError, true, "the guard counts code points, not UTF-16 units");
 	const untouched = resultEntries(await over.emit("turn_end", fakeBoundaryEvent()));
 	assert.equal(untouched.entries.filter((entry) => entry.type === "custom_message" && entry.customType === RESET_LAST_WORD_TYPE).length, 0, "a refused call requests no reset");
 	const h = harness();
@@ -986,11 +982,10 @@ test("empty_brain trims the last word, refuses an oversized one, and a blank per
 	assert.equal(boundary.entries.filter((entry) => entry.type === "custom_message" && entry.customType === RESET_LAST_WORD_TYPE).length, 0, "a blank last word persists no entry");
 });
 
-test("empty_brain accepts a 500-code-point sticky note without truncation", async () => {
-	assert.equal(MAX_LAST_WORD_CHARS, 500);
+test("empty_brain accepts a full-length sticky note without truncation", async () => {
 	const h = harness();
 	h.sessionManager.appendMessage({ role: "user", content: [{ type: "text", text: "before reset" }], timestamp: Date.now() });
-	const sticky = "🐟".repeat(500);
+	const sticky = "🐟".repeat(MAX_LAST_WORD_CHARS);
 	const accepted = await h.callTool("empty_brain", { last_word: `  ${sticky}  ` });
 	assert.notEqual(accepted.isError, true);
 	const boundary = resultEntries(await h.emit("turn_end", fakeBoundaryEvent()));

@@ -56,43 +56,62 @@ test("frontmatter policy round-trips without materializing defaults; arbitrary e
 	assert.equal(persisted.body, "new index");
 });
 
+test("default budgets distinguish root index pages from ordinary notes, independently of pinning", async t => {
+	const { context, notes } = fixture(t);
+	for (const [address, budget, pinned] of [
+		["MAP", 2048, false],
+		["CHEATSHEET", 2048, undefined],
+		["ordinary", 4096, undefined],
+		["custom-pin", 4096, true],
+		["nested/MAP", 4096, undefined],
+		["nested/CHEATSHEET", 4096, undefined],
+	] as const) {
+		const written = data(await notesWrite.execute({ address, content: "body", pinned }, context));
+		assert.equal(written.budget, budget, address);
+		assert.equal((await notes.read(address))!.meta.budget, undefined, "defaults stay implicit");
+	}
+	await notes.write("ordinary", "replacement", { budget: 1234 });
+	await notes.write("ordinary", "another replacement");
+	assert.equal(data(await notesRead.execute({ address: "ordinary" }, context)).metadata.budget, 1234);
+});
+
 test("tools set policy, validate values, and visibly report effective policy and code-point warnings", async t => {
 	const { context, notes, file } = fixture(t);
 	for (const tool of [notesWrite, notesUpdate]) {
 		const required = tool === notesWrite ? { address: "x", content: "body" } : { address: "x" };
-		assert.equal(Check(tool.parameters, { ...required, pinned: false, budget: 2048, readonly: true }), true);
+		assert.equal(Check(tool.parameters, { ...required, pinned: false, budget: 2, readonly: true }), true);
 		for (const invalid of [{ pinned: "false" }, { readonly: 1 }, { budget: 0 }, { budget: 1.5 }, { budget: Number.MAX_SAFE_INTEGER + 1 }]) {
 			assert.equal(Check(tool.parameters, { ...required, ...invalid }), false);
 		}
 	}
-	const written = await notesWrite.execute({ address: "custom", content: "😀".repeat(2048), pinned: true, readonly: true }, context);
+	const written = await notesWrite.execute({ address: "custom", content: "😀".repeat(2), budget: 2, pinned: true, readonly: true }, context);
 	assert.equal(Check(notesWrite.outputSchema, wireResult(written)), true);
-	assert.deepEqual(data(written).warnings, [], "2048 astral characters are within budget");
-	assert.equal(data(written).budget, 2048);
-	assert.match(notesWrite.render(written), /pinned true \| budget 2048 \| readonly true/);
-	const updated = await notesUpdate.execute({ address: "custom", readonly: false, edits: [{ oldText: "😀".repeat(2048), newText: "😀".repeat(2049) }] }, context);
+	assert.deepEqual(data(written).warnings, [], "2 astral characters are within budget");
+	assert.equal(data(written).budget, 2);
+	assert.match(notesWrite.render(written), /pinned true \| budget 2 \| readonly true/);
+	const updated = await notesUpdate.execute({ address: "custom", readonly: false, edits: [{ oldText: "😀".repeat(2), newText: "😀".repeat(3) }] }, context);
 	assert.equal(Check(notesUpdate.outputSchema, wireResult(updated)), true);
 	assert.equal(data(updated).warnings.length, 1);
-	assert.match(notesUpdate.render(updated), /2049 Unicode code points, over budget 2048/);
-	assert.equal((await notes.read("custom"))!.body, "😀".repeat(2049), "over budget saves the entire body");
+	assert.match(notesUpdate.render(updated), /3 Unicode code points, over budget 2/);
+	assert.equal((await notes.read("custom"))!.body, "😀".repeat(3), "over budget saves the entire body");
 
 	const read = await notesRead.execute({ address: "custom", max_chars: 10 }, context);
 	assert.equal(Check(notesRead.outputSchema, wireResult(read)), true);
-	assert.deepEqual({ pinned: data(read).metadata.pinned, budget: data(read).metadata.budget, readonly: data(read).metadata.readonly }, { pinned: true, budget: 2048, readonly: false });
-	assert.match(notesRead.render(read), /pinned true \| budget 2048 \| readonly false/);
-	assert.match(notesRead.render(read), /Warning: note body is 2049/);
+	assert.deepEqual({ pinned: data(read).metadata.pinned, budget: data(read).metadata.budget, readonly: data(read).metadata.readonly }, { pinned: true, budget: 2, readonly: false });
+	assert.match(notesRead.render(read), /pinned true \| budget 2 \| readonly false/);
+	assert.match(notesRead.render(read), /Warning: note body is 3/);
 	const list = await notesList.execute({}, context);
 	assert.equal(Check(notesList.outputSchema, wireResult(list)), true);
 	assert.equal(data(list).files[0]!.pinned, true);
-	assert.match(notesList.render(list), /pinned true \| budget 2048 \| readonly false/);
-	assert.match(notesList.render(list), /Warning: note body is 2049/);
+	assert.match(notesList.render(list), /pinned true \| budget 2 \| readonly false/);
+	assert.match(notesList.render(list), /Warning: note body is 3/);
 	const search = await notesSearch.execute({ query: "😀", max_matches_per_file: 1 }, context);
 	assert.equal(Check(notesSearch.outputSchema, wireResult(search)), true);
-	assert.equal(data(search).files[0]!.budget, 2048);
-	assert.match(notesSearch.render(search), /pinned true \| budget 2048 \| readonly false/);
-	assert.match(notesSearch.render(search), /Warning: note body is 2049/);
+	assert.equal(data(search).files[0]!.budget, 2);
+	assert.match(notesSearch.render(search), /pinned true \| budget 2 \| readonly false/);
+	assert.match(notesSearch.render(search), /Warning: note body is 3/);
 
-	const larger = await notesUpdate.execute({ address: "custom", budget: 2050, pinned: false }, context);
+	const larger = await notesUpdate.execute({ address: "custom", budget: 4, pinned: false }, context);
 	assert.deepEqual(data(larger).warnings, []);
 	assert.equal(data(larger).change_kind, "metadata");
 	const before = readFileSync(file("custom.md"), "utf8");
@@ -102,7 +121,7 @@ test("tools set policy, validate values, and visibly report effective policy and
 		await assert.rejects(() => notes.update("custom", undefined, invalid), refused("invalid_policy"));
 		assert.equal(readFileSync(file("custom.md"), "utf8"), before);
 	}
-	writeFileSync(file("custom.md"), before.replace("budget: 2050", "budget: -1"));
+	writeFileSync(file("custom.md"), before.replace("budget: 4", "budget: -1"));
 	const badFrontmatter = await notesRead.execute({ address: "custom" }, context);
 	assert.equal(badFrontmatter.ok, false);
 	if (!badFrontmatter.ok) assert.equal(badFrontmatter.error.code, "invalid_policy");
@@ -195,7 +214,7 @@ test("moves resolve absent policy at the new path, preserving explicit false/tru
 	const { notes, file } = fixture(t);
 	await notes.write("MAP", "default");
 	await notes.rename("MAP", "ordinary");
-	assert.deepEqual(effectiveNotePolicy((await notes.read("ordinary"))!.meta, "ordinary.md"), { pinned: false, budget: 2048, readonly: false });
+	assert.deepEqual(effectiveNotePolicy((await notes.read("ordinary"))!.meta, "ordinary.md"), { pinned: false, budget: 4096, readonly: false });
 	await notes.rename("ordinary", "CHEATSHEET");
 	assert.equal(effectiveNotePolicy((await notes.read("CHEATSHEET"))!.meta, "CHEATSHEET.md").pinned, true);
 	assert.equal(parseNote(readFileSync(file("CHEATSHEET.md"), "utf8")).meta.pinned, undefined);
@@ -215,13 +234,13 @@ test("boot uses metadata pins, full bodies, explicit false and visible legacy ov
 	const { identity, notes, file } = fixture(t);
 	await notes.write("CHEATSHEET", "default rules");
 	await notes.write("MAP", "# Unpinned map\nMAP_NOT_INJECTED", { pinned: false });
-	await notes.write("custom", "😀".repeat(2049) + "TAIL_IS_HERE", { pinned: true });
+	await notes.write("custom", "😀".repeat(5) + "TAIL_IS_HERE", { pinned: true, budget: 4 });
 	await notes.write("nested/MAP", "# Nested map\nNESTED_NOT_INJECTED");
 	await notes.write("roomy", "R".repeat(3000), { pinned: true, budget: 3000 });
 	let rendered = await boot(identity);
 	assert.ok(rendered.indexOf("CHEATSHEET.md\n\n  default rules") < rendered.indexOf("custom.md\n\n"));
-	assert.ok(rendered.includes("😀".repeat(2049) + "TAIL_IS_HERE"));
-	assert.match(rendered, /Warning: note body is 2061 Unicode code points, over budget 2048/);
+	assert.ok(rendered.includes("😀".repeat(5) + "TAIL_IS_HERE"));
+	assert.match(rendered, /Warning: note body is 17 Unicode code points, over budget 4/);
 	assert.ok(rendered.includes("R".repeat(3000)));
 	assert.equal(rendered.includes("MAP_NOT_INJECTED"), false);
 	assert.equal(rendered.includes("NESTED_NOT_INJECTED"), false);

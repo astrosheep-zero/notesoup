@@ -19,7 +19,7 @@ const ORIGIN = Type.Optional(Type.Union([...ORIGIN_VALUES], {
 }));
 const POLICY_PARAMETERS = {
 	pinned: Type.Optional(Type.Boolean({ description: "Inject the full body at boot. At most 5 live pins per notebook; root CHEATSHEET.md/MAP.md default true, all others false. Explicit false overrides the default." })),
-	budget: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: "Body budget in Unicode code points (default 2048 for every note). Over budget warns but saves; boot does not truncate." })),
+	budget: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: "Body budget in Unicode code points (default 4096; root CHEATSHEET.md and MAP.md default 2048). Over budget warns but saves; boot does not truncate." })),
 	readonly: Type.Optional(Type.Boolean({ description: "Soft lock, not a security boundary. true locks changes; explicitly pass false to unlock, including in the same call as edits or overwrite." })),
 };
 const PolicySchema = {

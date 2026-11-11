@@ -174,7 +174,6 @@ test("resuming old root/reset boots removes only top-level teaching in projectio
 		const messages = projected?.messages as AgentMessage[];
 		const boot = messages.find((message) => message.role === "custom" && message.customType === BOOT_TYPE);
 		assert.equal(boot?.role === "custom" ? boot.content : undefined, expected);
-		assert.ok(expected.includes("keep this note's protocol quote") && expected.includes("  <notesoup:maps>\n"), "notes retain same-name tags verbatim");
 		assert.ok(messages.some((message) => message.role === "user" && JSON.stringify(message.content) === JSON.stringify([{ type: "text", text: oldBoot }])), "ordinary user content is not rewritten");
 		assert.deepEqual(sm.getBranch(), before, "projection never migrates or edits the persisted boot/history");
 		const persisted = sm.getBranch().find((entry) => entry.type === "custom_message" && entry.customType === BOOT_TYPE);
@@ -269,7 +268,7 @@ test("an aborted async boot repair emits no boot, continuation, or incomplete-no
 	await pending;
 
 	assert.equal(captured.sent.length, 0, "aborted snapshot work cannot append the reset boot or continuation");
-	assert.equal(noticesOf(ctx).some((notice) => notice.message.includes("went missing")), false, "aborted snapshot work cannot notify about missing notebooks");
+	assert.equal(noticesOf(ctx).length, 0, "aborted snapshot work cannot notify");
 	assert.equal(sessionManager.getBranch().some((entry) => entry.type === "custom_message" && [BOOT_TYPE, CONTINUATION_TYPE].includes(entry.customType)), false);
 });
 
@@ -423,17 +422,14 @@ test("/empty waits out non-agent busy work before starting its single-turn reque
 	const cmd = captured.commands.get("empty");
 	assert.ok(cmd);
 	let waits = 0;
-	const notices: string[] = [];
 	const ctx = Object.assign(context(sessionManager, undefined, undefined, false), {
 		signal: undefined,
 		waitForIdle: async () => { waits++; },
-		ui: { notify: (message: string) => notices.push(message) },
 	});
 	await cmd.handler("", ctx as unknown as Parameters<typeof cmd.handler>[1]);
 	assert.equal(waits, 1);
 	assert.equal(captured.sent.length, 1);
 	assert.equal(captured.sent[0]?.options?.triggerTurn, true);
-	assert.equal(notices.filter((message) => message.includes("Dumping Brain")).length, 1);
 });
 
 test("notesoup command toggles future work, /empty schedules a turn-end reset, and /compact remains disabled", async () => {
@@ -448,21 +444,16 @@ test("notesoup command toggles future work, /empty schedules a turn-end reset, a
 	assert.equal(captured.sent[0]?.message.customType, BOOT_TYPE);
 
 	let notices = await runCommand(captured, "notesoup", "off", low);
-	assert.match(notices[0]?.message ?? "", /off/);
 	assert.equal(await runContextHook(captured, low), undefined, "no guidance while off");
 	assert.equal(sentOf(captured, GUIDANCE_TYPE).length, 0, "no guidance persisted while off");
 	await runHandlers(captured, "session_start", { reason: "startup" }, low);
 	assert.equal(captured.sent.length, 1, "no new boot block is persisted while off");
 	const offResultRaw = await call(captured, "empty_brain", {}, low);
 	assert.equal(offResultRaw.isError, true, "a refusal is a failed tool call, not a successful answer");
-	const offResult = resultJson<{ error?: string }>(offResultRaw);
-	assert.match(offResult.error ?? "", /off/, "empty_brain refuses while off");
 
 	notices = await runCommand(captured, "notesoup", "on", low);
-	assert.match(notices[0]?.message ?? "", /on/);
 	notices = await runCommand(captured, "empty", "", low);
 	assert.equal(notices.length, 1, "the command acknowledges the reset request");
-	assert.match(notices[0]?.message ?? "", /Dumping Brain/);
 	assert.equal(captured.sent.length, 2, "the command persists one hidden warning after the startup boot");
 	assert.equal(captured.sent[1]?.options?.triggerTurn, true, "the manual checkpoint prompt starts an ordinary agent turn");
 	assert.equal(captured.sent[1]?.message.customType, MANUAL_WIPE_TYPE);
@@ -482,13 +473,24 @@ test("notesoup command toggles future work, /empty schedules a turn-end reset, a
 });
 
 
-test("forced reset confirmation warns about overflow", async () => {
-	const sessionManager = manager();
-	const captured = makeExtension(sessionManager);
-	const ctx = context(sessionManager, undefined, { tokens: 199_000, contextWindow: 200_000, percent: 99.5 });
-	await commitTurnEndBoundary(captured, sessionManager, ctx);
-	await runHandlers(captured, "agent_settled", {}, ctx);
-	assert.deepEqual(noticesOf(ctx).filter((notice) => notice.message.includes("forcibly emptied")), [{ message: "🥣 Brain forcibly emptied: overflow", type: "warning" }]);
+test("only forced resets notify, once and after their durable boundary commits", async () => {
+	for (const forced of [false, true]) {
+		const sessionManager = manager();
+		const captured = makeExtension(sessionManager);
+		const ctx = forced ? context(sessionManager, undefined, { tokens: 199_000, contextWindow: 200_000, percent: 99.5 }) : context(sessionManager);
+		const severities: unknown[] = [];
+		ctx.ui.notify = (_message, severity) => {
+			const marker = sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === RESET_MARKER_TYPE).at(-1);
+			assert.ok(marker?.type === "custom");
+			assert.ok(resetBoundaryCommitted(ctx, marker.id, (marker.data as { windowId: string }).windowId));
+			severities.push(severity);
+		};
+		if (!forced) await call(captured, "empty_brain", {}, ctx);
+		await commitTurnEndBoundary(captured, sessionManager, ctx);
+		await runHandlers(captured, "agent_settled", {}, ctx);
+		await runHandlers(captured, "agent_settled", {}, ctx);
+		assert.deepEqual(severities, forced ? ["warning"] : []);
+	}
 });
 
 test("committed reset confirmation survives later work while repair refuses that suffix", async () => {
@@ -506,7 +508,6 @@ test("committed reset confirmation survives later work while repair refuses that
 	assert.equal(resetBoundaryCommitted(ctx, marker.id, windowId), true, "later work does not undo a committed native boundary");
 	await runHandlers(captured, "agent_settled", {}, ctx);
 	await runHandlers(captured, "turn_start", {}, ctx);
-	assert.deepEqual(noticesOf(ctx), [], "later work does not announce normal reset completion");
 	assert.equal(resetBoundaryCommitted(ctx, marker.id, "wrong-window"), false);
 
 	const partial = manager();

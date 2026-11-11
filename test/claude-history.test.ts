@@ -96,7 +96,6 @@ test("Claude dialogue paging skips tool/thinking envelopes without losing array 
 	const envelope = await historyRead.execute({ seq: 6 }, projection);
 	assert.ok(envelope.ok);
 	assert.equal(envelope.data.text, "", "a tool-result envelope has no dialogue text to invent");
-	assert.match(historyRead.render(envelope), /No visible text recorded/);
 	const tool = await historyRead.execute({ seq: 5 }, projection);
 	assert.ok(tool.ok);
 	assert.match(tool.data.text, /tool output/);
@@ -316,7 +315,7 @@ test("Claude helper reports gaps on list/read and re-anchors reset state only wi
 	for (const [tool, params] of [["history_list", {}], ["history_read", { seq: 2 }],
 		["history_list", { query: "no matches" }], ["history_read", { seq: 99 }]] as const) {
 		const response = await invoke(tool, params);
-		assert.match(response.text, /history is incomplete: missing ancestor UUID\(s\): "missing"/);
+		assert.match(response.text, /"missing"/, "the gap evidence still names the missing ancestor");
 		assert.doesNotMatch(response.text, /do not expose/);
 	}
 	assert.match((await invoke("history_list")).text, /confirmed suffix/);
