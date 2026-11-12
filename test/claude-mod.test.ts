@@ -336,6 +336,15 @@ test("Claude limits derive from Claude's own auto-compact point, never a fixed p
   assert.ok(absurdMargin.reset > 0 && absurdMargin.warn > 0, "an absurd margin cannot zero the percent fallback either");
 });
 
+test("Claude caps the capacity before deriving the same warning and hard points", () => {
+  const facts = { usage: { window: 200_000 }, breakdown: { autoCompactThreshold: 167_000 }, capTokens: 100_000 };
+  assert.deepEqual(limitPoints(facts), { source: "window", unit: "tokens", autoCompact: true, native: 67_000, reset: 58_808, warn: 42_424 });
+  assert.equal(resolveClaudeLimits({ ...facts, capTokens: 1_000_000 }).reset, 158_808, "a cap never enlarges the model window");
+  assert.equal(resolveClaudeLimits({ usage: { window: 64_000 }, capTokens: 100_000 }).reset, 22_808, "a smaller model keeps its own limit");
+  assert.equal(resolveClaudeLimits({ ...facts, breakdown: { autoCompactThreshold: 50_000 } }).reset, 41_808, "an earlier native hard point still wins");
+  assert.equal(resolveClaudeLimits({ ...facts, settings: { autoCompactWindow: 80_000 }, breakdown: {} }).reset, 38_808, "a smaller configured window still wins");
+});
+
 test("Claude limits read margins from the notesoup settings shape and ignore garbage", () => {
   const base = { usage: { window: 200_000 }, breakdown: { autoCompactThreshold: 167_000, isAutoCompactEnabled: true } };
   assert.deepEqual(limitPoints({ ...base, settings: { notesoup: { resetMarginTokens: 10_000, warningRunwayTokens: 5_000 } } }),
@@ -636,7 +645,7 @@ test("Claude Mod hook delivers the helper's shared text, and marks only a refusa
 });
 
 
-test("Claude Mod crosses old reset thresholds without clearing and retains one fresh boot on request", async (t) => {
+test("Claude Mod clears at the shared hard point after successful settlement and retains one fresh boot", async (t) => {
   const home = mkdtempSync(join(tmpdir(), "claude-reset-home-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const { host, registered, notifications } = fakeEngine(home);
@@ -644,7 +653,7 @@ test("Claude Mod crosses old reset thresholds without clearing and retains one f
   (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
   const invoke = (name: string, event: Record<string, unknown> = {}) => handlers.get(name)!(host, event, async () => ({ sentinel: name }));
   assert.equal(handlers.has("session.measure"), false, "measure has no reset hook");
-  // The old proactive point was 158808; crossing it must no longer clear.
+  // Warning and automatic reset share the same native-derived points.
   let tokens: number | undefined = 140_000;
   let compactions = 0;
   let kept: Array<{ role: string; text: string }> = [];
@@ -677,16 +686,8 @@ test("Claude Mod crosses old reset thresholds without clearing and retains one f
   assert.equal(compactions, 0, "one token below the resolved reset point");
   await invoke("turn.start");
   tokens = 158_808;
-  assert.equal(compactions, 0, "measure cannot compact under a running turn");
+  assert.equal(compactions, 0, "measurement alone cannot compact under a running turn");
   assert.deepEqual(await invoke("turn.complete", turnComplete()), { sentinel: "turn.complete" });
-  assert.equal(compactions, 0, "the old reset point no longer clears at turn completion");
-  tokens = 190_000;
-  await invoke("turn.start");
-  await invoke("turn.complete", turnComplete());
-  assert.equal(compactions, 0, "even beyond the native threshold, only a native auto event or explicit request resets");
-  await invoke("turn.start");
-  await invoke("command.run", { command: "empty" });
-  await invoke("turn.complete", turnComplete());
   await settleHooks();
   assert.equal(compactions, 1);
   assert.equal(kept.length, 2, "the reset is the notes boot followed by the one reset message");
@@ -783,7 +784,7 @@ test("Claude headless resets through its own manual command, retries failure and
   assert.equal(kept.length, 2, "sticky is consumed once");
 });
 
-test("Claude headless warns without proactive resets and supports both manual aliases", async (t) => {
+test("Claude headless warns, automatically resets at the hard point, and supports both manual aliases", async (t) => {
   const home = mkdtempSync(join(tmpdir(), "claude-headless-auto-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const { host } = fakeEngine(home);
@@ -808,11 +809,8 @@ test("Claude headless warns without proactive resets and supports both manual al
   await invoke("turn.start");
   assert.equal(attempts, 0);
   await invoke("turn.complete", turnComplete());
-  assert.equal(attempts, 0, "the old reset threshold and turn completion do not clear");
-  await invoke("tool.call", { tool: "mcp__notesoup__empty_brain", tool_use_id: "explicit" });
-  await invoke("turn.complete", turnComplete());
   await settleHooks();
-  assert.equal(attempts, 1);
+  assert.equal(attempts, 1, "the hard point clears after successful settlement without a tool request");
   for (const command of ["empty", "fresh-window"]) {
     assert.deepEqual(await invoke("command.run", { command }), { text: "🥣 Dumping Brain" });
     await settleHooks();
@@ -902,7 +900,7 @@ test("Claude Mod manual reset uses one hidden close-out turn, then recovers its 
   };
   (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
   await invoke("session.start", { cwd: home, isInteractive: true });
-  assert.deepEqual(commands.sort(), ["empty", "fresh-window"], "only the new short name and the retained alias are registered");
+  assert.deepEqual(commands.sort(), ["empty", "fresh-window", "notesoup"], "the cap command and both reset aliases are registered");
   assert.deepEqual(await invoke("command.run", { command: "empty-brain" }), {}, "the retired spelling passes through instead of resetting");
   assert.equal(compactions, 0);
   const command = await invoke("command.run", { command: "empty" }) as { text: string };
@@ -1247,13 +1245,9 @@ test("Claude Mod retries an unresolvable warning threshold inside the same windo
 	host.session.usage = async () => ({ context: { tokens: 190_000, window: 200_000 } });
 	host.command.run = async ({ args }) => { compactions++; await nativeCompaction(host, handlers, args); return {}; };
 	await invoke("session.start", { cwd: home, isInteractive: true });
-	await invoke("turn.start");
-	await invoke("turn.complete", turnComplete());
 	await handlers.get("prompt.submit")!(host, { text: "continue" }, async e => e);
 	assert.equal(limitsCalls, 1, "the first limits round trip failed");
 	assert.equal(compactions, 0, "one failed resolution does not disable the window");
-	await invoke("turn.start");
-	await invoke("turn.complete", turnComplete());
 	const retried = await handlers.get("prompt.submit")!(host, { text: "continue" }, async e => e) as { context: string[] };
 	assert.deepEqual(retried.context, [CLAUDE_WARNING_PROMPT]);
 	assert.equal(limitsCalls, 2, "the retry runs in the same window");
@@ -1279,6 +1273,73 @@ async function retainedFixture(t: test.TestContext) {
   assert.deepEqual((await context()).blocks, [], "the existing boot is retained, not injected twice");
   return { home, host, invoke, context, boot, handlers, notifications };
 }
+
+test("Claude runtime cap warns and clears at a safe main batch boundary, then survives the reset", async (t) => {
+  const { host, invoke, handlers } = await retainedFixture(t);
+  let tokens: number | undefined = 42_423, window = 200_000, resets = 0;
+  const prompts: string[] = [];
+  const settings = { autoCompactWindow: 200_000 };
+  host.settings.read = async () => settings;
+  host.session.usage = async () => ({ context: { tokens, window, breakdown: { autoCompactThreshold: window - 33_000, isAutoCompactEnabled: true, model: "claude" } } });
+  host.prompt.submit = async ({ text }) => { prompts.push(text); return { text }; };
+  host.command.run = async ({ command, args }) => {
+    assert.equal(command, "compact", "the existing notes-only reset runs; /autocompact is never called");
+    resets++;
+    await nativeCompaction(host, handlers, args);
+    tokens = undefined;
+    return {};
+  };
+  const cap = async (args: string) => await invoke("command.run", { command: "notesoup", args }) as { text: string };
+  assert.match((await cap("cap 100k")).text, /100,000/);
+  for (const value of ["cap 0", "cap garbage", "cap 100k extra", "cap 1k"]) {
+    assert.match((await cap(value)).text, /Usage:|too small/);
+    assert.match((await cap("cap")).text, /100,000/, "a refused cap keeps the previous one");
+  }
+  assert.equal((await invoke("tool.call", { tool: "Read" }) as { context?: string[] }).context, undefined);
+  tokens = 42_424;
+  assert.deepEqual((await invoke("tool.call", { tool: "Read" }) as { context?: string[] }).context, [CLAUDE_WARNING_PROMPT]);
+  tokens = 58_807;
+  await invoke("turn.start", { turnId: "main" });
+  type Step = ($: HookEngine, e: Record<string, unknown>, next: (e: unknown) => AsyncGenerator<Record<string, unknown>, unknown>) => AsyncGenerator<Record<string, unknown>, unknown>;
+  const step = handlers.get("turn.step")! as unknown as Step;
+  const chunks = async (agentId?: string) => {
+    const result = [];
+    for await (const chunk of step(host, { turnId: "main", index: 1, ...(agentId ? { agentId } : {}) }, async function* () { yield { kind: "text", text: "model" }; return {}; })) result.push(chunk);
+    return result;
+  };
+  assert.deepEqual(await chunks(), [{ kind: "text", text: "model" }]);
+  tokens = 58_808;
+  await Promise.all([invoke("tool.call", { tool: "Read" }), invoke("tool.call", { tool: "Bash" })]);
+  assert.equal(resets, 0, "all sibling tool results finish before the hard point can act");
+  assert.deepEqual(await chunks("child"), [{ kind: "text", text: "model" }], "child steps never reset the main brain");
+  assert.deepEqual(await chunks(), [{ kind: "stop", stopReason: "end_turn", usage: null }]);
+  await invoke("turn.complete", turnComplete({ turnId: "main", reason: "error" }));
+  await settleHooks();
+  assert.equal(resets, 0, "a failed turn cannot commit a budget reset");
+  await invoke("turn.start", { turnId: "main" });
+  await chunks();
+  await invoke("turn.complete", turnComplete({ turnId: "main" }));
+  await settleHooks();
+  assert.equal(resets, 1);
+  assert.equal(prompts.length, 1, "a confirmed automatic reset continues exactly once");
+  assert.ok(FORCED_CONTINUATIONS.includes((await host.session.messages())[1]!.text), "only a real tool request uses the normal handoff pool");
+  assert.match((await cap("cap")).text, /100,000/, "cap survives notesoup rollover");
+  assert.deepEqual(settings, { autoCompactWindow: 200_000 }, "the user's settings stay untouched");
+  await cap("cap off");
+  tokens = 80_000;
+  await invoke("turn.start", { turnId: "main" });
+  assert.deepEqual(await chunks(), [{ kind: "text", text: "model" }], "off immediately restores the native budget");
+  window = 64_000;
+  tokens = 22_807;
+  await cap("cap 100k");
+  assert.deepEqual(await chunks(), [{ kind: "text", text: "model" }]);
+  tokens++;
+  await invoke("turn.complete", turnComplete({ turnId: "main" }));
+  await settleHooks();
+  assert.equal(resets, 2, "a smaller model clears at its own point, not at the cap's point");
+  await invoke("session.end");
+  assert.match((await cap("cap")).text, /cap off/, "a different session does not inherit the runtime cap");
+});
 
 test("Claude empty_brain stops at the batch boundary, carries last_word, and resumes once after commit", async (t) => {
   const { host, invoke, handlers } = await retainedFixture(t);

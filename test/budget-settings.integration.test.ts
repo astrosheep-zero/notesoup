@@ -8,6 +8,7 @@ import { DEFAULT_REMINDER_MARGIN_TOKENS, DEFAULT_RESERVE_TOKENS } from "../src/b
 import { tokenBudgetGuidance } from "../src/budget/text.js";
 import { GUIDANCE_TYPE, RESET_MARKER_TYPE, WARNING_TYPE } from "../plugins/pi/entries.js";
 import { deriveThresholds } from "../src/budget/policy.js";
+import { parseContextCap } from "../src/budget/cap.js";
 import { readThresholdSettings } from "../plugins/pi/thresholds.js";
 import { NOTESOUP_SETTINGS_KEY } from "../src/settings.js";
 import {
@@ -49,6 +50,50 @@ test("budget derivation preserves defaults and validates overrides independently
 	}
 	assert.deepEqual(deriveThresholds(32_768, { reserveTokens: 8192, warningRunwayTokens: null }).thresholds,
 		{ reserve: 8192, reminder: 32_768, warning: 24_576 }, "an invalid runway does not discard a valid reserve");
+});
+
+test("context caps accept whole tokens and decimal k/m suffixes without lossy rounding", () => {
+	for (const [text, tokens] of [["100k", 100_000], ["100000", 100_000], [" 1M ", 1_000_000], ["1.5k", 1500], ["off", null]] as const) {
+		assert.equal(parseContextCap(text), tokens);
+	}
+	for (const text of ["", "0", "-1k", "1.5", "NaN", "Infinity", "100k extra", "1e5", "9007199254740992"]) assert.equal(parseContextCap(text), undefined, text);
+});
+
+test("Pi cap controls warning, reported room and hard wipe, without changing the model or settings", async () => {
+	const sm = manager();
+	appendText(sm, "user", "ongoing work");
+	const settings = SettingsManager.inMemory(explicitBudgetSettings);
+	const captured = makeExtension(sm, settings);
+	const at = (tokens: number, window = 200_000) => {
+		const ctx = context(sm, undefined, { tokens, percent: tokens / window * 100, contextWindow: window });
+		ctx.model = { provider: "test", id: "cap-model", contextWindow: window } as NonNullable<typeof ctx.model>;
+		return ctx;
+	};
+	const native = at(0), beforeSettings = settings.getSettings();
+	const room = async (ctx = at(0)) => resultJson<{ remaining_tokens: number }>(await call(captured, "get_context_remaining", {}, ctx)).remaining_tokens;
+	await runCommand(captured, "notesoup", "cap 100k", native);
+	assert.equal(await room(), 83_616);
+	assert.equal(native.model?.contextWindow, 200_000);
+	assert.deepEqual(settings.getSettings(), beforeSettings);
+	for (const invalid of ["cap 0", "cap nonsense", "cap 100k extra", "cap 16k"]) {
+		assert.equal((await runCommand(captured, "notesoup", invalid, at(0)))[0]?.type, "error");
+		assert.equal(await room(), 83_616, "invalid caps leave the previous cap intact");
+	}
+	const warning = await runContextHook(captured, at(67_232));
+	assert.equal((warning?.messages[0] as { customType?: string })?.customType, WARNING_TYPE);
+	assert.equal(await room(at(83_615)), 1);
+	assert.equal((await commitTurnEndBoundary(captured, sm, at(83_615))).entries.some((e) => e.type === "custom" && e.customType === RESET_MARKER_TYPE), false);
+	const hard = await commitTurnEndBoundary(captured, sm, at(83_616));
+	assert.equal(hard.entries.filter((e) => e.type === "custom" && e.customType === RESET_MARKER_TYPE).length, 1);
+	assert.equal(await room(at(1000)), 82_616, "the cap survives a notesoup reset");
+	assert.equal(await room(at(1000, 64_000)), 46_616, "a cap cannot enlarge a smaller model window");
+	await runCommand(captured, "notesoup", "cap off", at(0));
+	assert.equal(await room(), 183_616);
+	await runCommand(captured, "notesoup", "cap 100k", at(0));
+	await runHandlers(captured, "model_select", {}, at(0, 64_000));
+	assert.equal(await room(at(0, 64_000)), 47_616, "switching models preserves the cap but uses the smaller window");
+	await runHandlers(captured, "session_start", {}, at(0));
+	assert.equal(await room(), 183_616, "a new/reloaded session does not inherit the runtime cap");
 });
 
 test("Pi budget settings merge per key without changing native compaction settings or enablement", async () => {

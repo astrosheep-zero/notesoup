@@ -50,6 +50,7 @@ pi -e npm:notesoup
 - **Migration (0.40.0)**: parameters renamed: `order` → `from`, `before`/`after` → `before_seq`/`after_seq`, `limit_chars` → `max_chars`, `wastebasket` → `crumpled`, `pattern` → `glob` (the standalone library's options included), and `notes_update`'s `change_kind` value `file` → `moved`. Old names are refused.
 
 - **Runtime toggle** — `/notesoup off` stops new automatic resets; `/notesoup on` re-enables them; bare `/notesoup` reports the state.
+- **Context cap (Pi and Claude)** — `/notesoup cap 100k` limits the capacity used by notesoup's budget to `min(model window, 100000)`. Existing reserves and warning margins are deducted from that capacity; 100k is not the used-token reset point. `/notesoup cap` shows the configured cap and `/notesoup cap off` removes it. Whole tokens and decimal `k`/`m` suffixes are accepted; caps too small for the host's reserves are refused. The cap applies only to the running session, survives notesoup resets and model changes, and is lost on reload/restart/session switch. It never writes host settings or environment variables, changes the provider's advertised model window, or enables disabled automatic resets.
 
 ## Per-note policy
 

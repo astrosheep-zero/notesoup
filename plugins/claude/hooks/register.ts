@@ -39,12 +39,16 @@ class ResetFlow {
     } else request.resume = false
     return first
   }
+  requestAutomatic() {
+    this.request ??= { resume: true }
+    this.cutoffTurnId = this.turnId
+  }
   input(turnId?: string) {
     if (turnId !== undefined) this.pendingInputTurnId = turnId
-    if (this.request?.tool) this.request.resume = false
+    if (this.request) this.request.resume = false
   }
   start(turnId: string) {
-    if (this.request?.tool) this.request.resume = false
+    if (this.request) this.request.resume = false
     this.turnId = turnId
     this.running = true
   }
@@ -73,7 +77,7 @@ class ResetFlow {
     if (auto && !request) return false
     this.cutoffTurnId = auto && request && !request.resume ? this.cutoffTurnId ?? (!request.tool ? this.turnId : undefined) : undefined
     this.request = undefined
-    return request?.tool !== undefined && request.resume
+    return request?.resume ?? false
   }
   cancel() {
     this.request = undefined
@@ -85,7 +89,7 @@ type ResetState = {
   headless: boolean; usageFailureLogged: boolean; commit?: { instructions: string; boot?: string; boundary: boolean; resolve: (kept: boolean) => void }; retainedBoot?: string
   continuation?: { window: number; text: string }
   compactDisabled: boolean; limitsFailureLogged: boolean; limitsAttempts: number; limitsKey?: string
-  limits?: ClaudeLimits; warnedWindow?: number; warningPending?: number; texts?: SharedTexts; settingsFailureLogged: boolean
+  capTokens?: number; limits?: ClaudeLimits; warnedWindow?: number; warningPending?: number; texts?: SharedTexts; settingsFailureLogged: boolean
 }
 type ResetWork = { kind: "closeout" | "reset"; generation: number }
 type ResetSignal = { wake?: (work: ResetWork) => void }
@@ -197,8 +201,10 @@ async function breakdownContext($: Engine): Promise<Record<string, unknown> | un
 }
 /** Threshold inputs only: changing fill must not invalidate the resolved points. */
 async function limitFacts($: Engine, state: ResetState, usage: ContextUsage): Promise<Record<string, unknown>> {
+  const capTokens = state.capTokens
   const breakdown = await breakdownContext($)
   return {
+    capTokens,
     usage: { window: usage.window },
     breakdown: { model: breakdown?.model, autoCompactThreshold: breakdown?.autoCompactThreshold, isAutoCompactEnabled: breakdown?.isAutoCompactEnabled },
     settings: await readSettings($, state),
@@ -236,6 +242,37 @@ function measuredValue(limits: ClaudeLimits, usage: ContextUsage): number | unde
   if (usage.tokens !== undefined) return usage.tokens
   return usage.percent !== undefined && usage.window !== undefined && usage.window > 0 ? (usage.percent / 100) * usage.window : undefined
 }
+/** The warning and hard clear share one policy; only a safe main-loop boundary acts on it. */
+async function hardResetDue($: Engine, state: ResetState): Promise<boolean> {
+  if (state.disabled || state.compactDisabled || !state.identity || state.commit) return false
+  const generation = state.generation, window = state.window, cap = state.capTokens
+  const usage = await contextUsage($, state)
+  if (generation !== state.generation || usage === undefined) return false
+  const limits = await limitsOf($, state, usage)
+  if (generation !== state.generation || window !== state.window || cap !== state.capTokens || !limits?.autoCompact) return false
+  const measured = measuredValue(limits, usage)
+  return measured !== undefined && measured >= limits.reset
+}
+
+/** Runtime-only capacity; never writes Claude's settings or its process environment. */
+async function capCommand($: Engine, state: ResetState, args: string): Promise<{ text: string }> {
+  if (!await refreshIdentity($, state)) return { text: "🥣 Different brain now · try /notesoup again" }
+  const parts = args.trim().toLowerCase().split(/\s+/)
+  if (parts[0] !== "" && (parts[0] !== "cap" || parts.length > 2)) return { text: "Usage: /notesoup cap [100k|1m|tokens|off]" }
+  if (parts.length === 2) {
+    const generation = state.generation
+    const usage = await contextUsage($, state) ?? {}
+    const facts = await limitFacts($, state, usage)
+    const result = await run($, { op: "cap", value: parts[1], facts })
+    if (generation !== state.generation) return { text: "🥣 Different brain now · try /notesoup again" }
+    if (!result.ok) return { text: result.error }
+    const cap = typeof result.result === "object" && result.result !== null ? (result.result as { cap?: unknown }).cap : undefined
+    if (cap !== null && (typeof cap !== "number" || !Number.isSafeInteger(cap) || cap <= 0)) return { text: "🥣 Invalid cap from helper" }
+    state.capTokens = cap ?? undefined
+  }
+  return { text: `🥣 notesoup · cap ${state.capTokens === undefined ? "off" : state.capTokens.toLocaleString("en-US")} · current session only` }
+}
+
 /** The shared reset prose: one helper round trip per session, retried until it lands. */
 async function loadTexts($: Engine, state: ResetState): Promise<SharedTexts | undefined> {
   if (state.texts) return state.texts
@@ -304,6 +341,7 @@ function forgetSession(state: ResetState) {
   state.commit?.resolve(false)
   state.commit = undefined
   state.retainedBoot = undefined
+  state.capTokens = undefined
   state.texts = state.limits = undefined
   state.continuation = undefined
   state.limitsAttempts = 0
@@ -412,6 +450,7 @@ export function register(on: On) {
     registered.clear()
     await loadTexts($, state)
     armReset($, state, resetSignal)
+    await $.command.register({ name: "notesoup", description: "Show or cap the notesoup context capacity: cap [100k|1m|tokens|off]", immediate: true })
     await $.command.register({ name: "empty", description: "Reset context to a fresh notes-only window", immediate: true })
     await $.command.register({ name: "fresh-window", description: "Reset context to a fresh notes-only window", immediate: true })
     const wipe = await $.tool.register({
@@ -460,6 +499,9 @@ export function register(on: On) {
   })
   on("turn.step", async function* ($, e, next) {
     if (state.disabled || e.agentId !== undefined) return yield* next(e)
+    // Like the warning, the hard point consumes the same resolved limits. This boundary
+    // follows the whole previous tool batch; no sibling tool or in-flight request is aborted.
+    if (await hardResetDue($, state)) state.flow.requestAutomatic()
     if (!state.flow.cutoff(e.turnId)) return yield* next(e)
     // This boundary follows the entire tool batch. A synthetic streamed stop
     // ends the main turn without aborting siblings or making an old-window request.
@@ -475,11 +517,15 @@ export function register(on: On) {
     // A failed turn proves nothing about whether its notes were saved.
     if (cancelled) log($, `Brain emptying cancelled · turn ended ${e.reason}; ask /fresh-window again`)
     if (!await refreshIdentity($, state)) return result
-    if (e.reason === "answer" && state.flow.request) resetSignal.wake?.({ kind: "reset", generation: state.generation })
+    if (e.reason === "answer") {
+      if (!state.flow.request && await hardResetDue($, state)) state.flow.requestAutomatic()
+      if (state.flow.request) resetSignal.wake?.({ kind: "reset", generation: state.generation })
+    }
     return result
   })
   on("command.run", async ($, e, next) => {
     if (state.disabled) return next(e)
+    if (e.command === "notesoup") return capCommand($, state, e.args)
     if (e.command !== "empty" && e.command !== "fresh-window") return next(e)
     if (!await refreshIdentity($, state)) return { text: "🥣 Different brain now · try /fresh-window again" }
     if (state.compactDisabled) return { text: `🥣 ${COMPACT_DISABLED}` }

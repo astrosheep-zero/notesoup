@@ -17,9 +17,9 @@ export const ContextRemainingOutputSchema = Type.Object({
 }, { additionalProperties: false });
 
 /** Remaining tokens in the provider's active window, or null without a usable estimate. */
-function remainingTokens(ctx: Pick<ExtensionContext, "sessionManager" | "getContextUsage" | "model">): number | null {
+function remainingTokens(ctx: Pick<ExtensionContext, "sessionManager" | "getContextUsage" | "model">, cap?: number): number | null {
 	const usage = windowUsage(ctx);
-	return !usage || usage.tokens === null ? null : Math.max(0, usage.contextWindow - usage.tokens);
+	return !usage || usage.tokens === null ? null : Math.max(0, Math.min(usage.contextWindow, cap ?? Infinity) - usage.tokens);
 }
 
 export function registerBudget(
@@ -27,6 +27,7 @@ export function registerBudget(
 	isEnabled: () => boolean,
 	settingsManager?: SettingsManager,
 ) {
+	let cap: number | undefined;
 	let cachedPolicy: { thresholds: ResolvedThresholds; automatic: boolean } | undefined;
 	const notifiedWarnings = new Set<string>();
 	const resolvePolicy = (ctx: ExtensionContext): ThresholdSettingsResolution => {
@@ -45,15 +46,16 @@ export function registerBudget(
 	const hardReserveDue = (ctx: ExtensionContext, preSendMessages?: AgentMessage[]): boolean => {
 		if (!automaticResetEnabled(ctx)) return false;
 		if (preSendMessages) {
-			const contextWindow = ctx.model?.contextWindow ?? ctx.getContextUsage()?.contextWindow;
-			if (!contextWindow || contextWindow <= 0) return false;
+			const nativeWindow = ctx.model?.contextWindow ?? ctx.getContextUsage()?.contextWindow;
+			if (!nativeWindow || nativeWindow <= 0) return false;
+			const contextWindow = Math.min(nativeWindow, cap ?? Infinity);
 			const { reserve } = thresholdsFor(ctx);
 			const estimate = estimateContextTokens(convertToLlm(preSendMessages));
 			if (estimate.lastUsageIndex !== null && contextWindow - estimate.usageTokens <= reserve) return false;
 			return contextWindow - estimate.tokens <= reserve;
 		}
-		const usage = windowUsage(ctx);
-		return usage !== undefined && usage.tokens !== null && usage.contextWindow - usage.tokens <= thresholdsFor(ctx).reserve;
+		const remaining = remainingTokens(ctx, cap);
+		return remaining !== null && remaining <= thresholdsFor(ctx).reserve;
 	};
 	let pendingGuidance: { windowId: string; content: string } | undefined;
 	let pendingWarning: { windowId: string; content: string } | undefined;
@@ -87,10 +89,10 @@ export function registerBudget(
 		}));
 	};
 
-	pi.on("session_start", (_event, ctx) => { resetForTransition(); thresholdsFor(ctx); });
+	pi.on("session_start", (_event, ctx) => { cap = undefined; resetForTransition(); thresholdsFor(ctx); });
 	pi.on("session_tree", resetForTransition);
 	pi.on("model_select", resetForTransition);
-	pi.on("session_shutdown", resetForTransition);
+	pi.on("session_shutdown", () => { cap = undefined; resetForTransition(); });
 	pi.on("agent_settled", clearStaged);
 	pi.on("context", (event, ctx) => {
 		if (!isEnabled()) return undefined;
@@ -104,7 +106,7 @@ export function registerBudget(
 		// measured for that request, and persists the same text at its successful turn_end.
 		// Without automatic reset nothing gets cleared, so there is nothing to remind about.
 		if (!automaticResetEnabled(ctx)) return result();
-		const remaining = remainingTokens(ctx);
+		const remaining = remainingTokens(ctx, cap);
 		if (remaining === null) return result();
 		const windowId = currentWindowId(ctx);
 		const { reminder, warning, reserve } = thresholdsFor(ctx);
@@ -139,7 +141,7 @@ export function registerBudget(
 		outputSchema: ContextRemainingOutputSchema,
 		async execute(_id, _params, _signal, _update, ctx) {
 			// Report room to the hard-reserve wipe, including the warning runway.
-			const remaining = remainingTokens(ctx);
+			const remaining = remainingTokens(ctx, cap);
 			const value = { remaining_tokens: remainingBudget(remaining, thresholdsFor(ctx as ExtensionContext).reserve) };
 			return { ...output(value), structuredContent: value };
 		},
@@ -150,7 +152,15 @@ export function registerBudget(
 		hardReserveDue,
 		consumeTurnEnd,
 		/** The same room before the hard-reserve wipe the model sees; null when usage is unknown. */
-		statusFor: (ctx: ExtensionContext): { remaining: number | null } => ({ remaining: remainingBudget(remainingTokens(ctx), thresholdsFor(ctx).reserve) }),
+		statusFor: (ctx: ExtensionContext) => ({ remaining: remainingBudget(remainingTokens(ctx, cap), thresholdsFor(ctx).reserve), cap }),
+		/** Runtime-only cap; reserve and all warning margins keep their existing meanings. */
+		setCap: (value: number | undefined, ctx: ExtensionContext): string | undefined => {
+			const reserve = thresholdsFor(ctx).reserve;
+			if (value !== undefined && value <= reserve) return `Cap must exceed the ${reserve.toLocaleString("en-US")}-token reset reserve`;
+			cap = value;
+			clearStaged();
+			return undefined;
+		},
 		clear: () => { clearStaged(); notifiedWindows.clear(); },
 	};
 }

@@ -17,6 +17,7 @@ import { buildBootMessage, sendBoot, type IncompleteNotesNotifier } from "./boot
 import { maybeSendMarker } from "./marker.js";
 import { nextHistorySeq } from "./history.js";
 import { errorMessage } from "../../src/error-message.js";
+import { parseContextCap } from "../../src/budget/cap.js";
 
 function readPackageVersion(): string {
 	for (const up of ["../../package.json", "../../../package.json"]) {
@@ -152,12 +153,23 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 	});
 
 	pi.registerCommand("notesoup", {
-		description: "Show loaded version/build and toggle notesoup context windows",
+		description: "Show notesoup status, toggle context windows, or cap their capacity",
 		getArgumentCompletions: (prefix) =>
-			["on", "off"].filter((a) => a.startsWith(prefix)).map((a) => ({ value: a, label: a })),
+			["on", "off", "cap", "cap off"].filter((a) => a.startsWith(prefix)).map((a) => ({ value: a, label: a })),
 		handler: async (args, cmdCtx) => {
 			const arg = args.trim().toLowerCase();
-			if (arg === "on") {
+			const parts = arg.split(/\s+/);
+			if (parts[0] === "cap") {
+				if (parts.length > 1) {
+					const value = parts.length === 2 ? parseContextCap(parts[1]!) : undefined;
+					if (value === undefined) {
+						cmdCtx.ui.notify("Usage: /notesoup cap [100k|1m|tokens|off]", "error");
+						return;
+					}
+					const error = budget.setCap(value ?? undefined, cmdCtx);
+					if (error) { cmdCtx.ui.notify(`🥣 ${error}`, "error"); return; }
+				}
+			} else if (arg === "on") {
 				enabled = true;
 				const generation = ++lifecycleGeneration;
 				await ensureBoot(pi, cmdCtx, notifyIncompleteNotes, () => generation === lifecycleGeneration && enabled);
@@ -170,11 +182,11 @@ export function registerContext(pi: ExtensionAPI, settingsManager?: SettingsMana
 				budget.clear();
 				resets.clear();
 			} else if (arg !== "") {
-				cmdCtx.ui.notify("Usage: /notesoup [on|off]", "error");
+				cmdCtx.ui.notify("Usage: /notesoup [on|off|cap [100k|1m|tokens|off]]", "error");
 				return;
 			}
-			const remaining = budget.statusFor(cmdCtx).remaining;
-			cmdCtx.ui.notify(`🥣 notesoup ${enabled ? "on" : "off"} · ${buildLabel} · Pi ${VERSION}${remaining === null ? "" : ` · ${remaining.toLocaleString("en-US")} tokens left`}`, "info");
+			const { remaining, cap } = budget.statusFor(cmdCtx);
+			cmdCtx.ui.notify(`🥣 notesoup ${enabled ? "on" : "off"} · ${buildLabel} · Pi ${VERSION} · cap ${cap === undefined ? "off" : cap.toLocaleString("en-US")}${remaining === null ? "" : ` · ${remaining.toLocaleString("en-US")} tokens left`}`, "info");
 		},
 	});
 

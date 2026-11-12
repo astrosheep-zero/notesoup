@@ -35,7 +35,7 @@ One public boundary draft contains, in order:
 
 Boundary drafts cannot contain ordinary user entries. Pi's public custom-message conversion supplies role `user` to the provider, including text/image arrays. Carried inputs are appended atomically with the reset artifacts, not queued as separate prompts; any carried input returns `continue: true`.
 
-The origin is `normal` for an actual tool request, otherwise `forced`; overflow recovery is always forced. Each origin has an approved complete-paragraph pool. Construction draws once and persists the paragraph verbatim; rendering, reads, reloads and repair never redraw an existing continuation. Legacy markers without a valid origin default to normal. Other hosts retain their own scheduling: dsh shares one draw across checkpoint and continuation; Claude caches its forced handoff per window.
+The origin is `normal` for an actual tool request, otherwise `forced`; overflow recovery is always forced. Each origin has an approved complete-paragraph pool. Construction draws once and persists the paragraph verbatim; rendering, reads, reloads and repair never redraw an existing continuation. Legacy markers without a valid origin default to normal. Other hosts retain their own scheduling: dsh shares one draw across checkpoint and continuation; Claude caches its forced handoff per window and feeds its warning and hard clear from the same resolved budget, as described in [Claude Code Mod](claude-code-mod.md).
 
 Raw session history remains available. The retain-none checkpoint excludes old conversational context while preserving Pi's empty summary wrapper and system/tool state. Marker-only legacy sessions use boot slicing as a compatibility fallback. A marker is checkpoint-backed only if it directly follows a self-retaining, empty native compaction.
 
@@ -59,6 +59,8 @@ Command state remains live during asynchronous notes acquisition so separately a
 After a manual safety reset, `context_with_system` checks the committed boundary before using public `ctx.abort()` to cancel an unavoidable empty tool follow-up with system-only context. Pending messages, ordinary user entries or carried inputs after the marker bypass cancellation. Later user prompts are not affected by the run-scoped stop latch.
 
 ## Warnings, projection and repair
+
+`/notesoup cap` is a runtime capacity ceiling, not a separate reset intent. Budget calculations use the smaller native window and cap, then deduct the same reserve and warning margins. Changing the cap does not enlarge a model window, enable disabled automatic resets, or change an already armed reset's continuation policy. The cap survives notesoup resets and model changes but not reload/session replacement.
 
 Budget reminders are staged once per window at reserve plus reminder margin, then reserve plus warning runway. Hard reserve remains independent. Budget and command warnings use different types. The final budget warning notifies at first provider injection, not durability; early guidance stays UI-silent. Budget drafts are instance-local and discarded on abort, failed turn, transition or window mismatch. Active-window usage and the exact public `SettingsManager` authority determine thresholds.
 

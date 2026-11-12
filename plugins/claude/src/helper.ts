@@ -13,6 +13,7 @@ import type { BootToolNames } from "../../../src/boot/text.js";
 import { selectContinuation } from "../../../src/budget/text.js";
 import { claudeHistoryGapNotice, claudeHistoryUnconfirmedSeq, CLAUDE_HISTORY_UNKNOWN_WINDOW, CLAUDE_HISTORY_UNAVAILABLE_SENTENCE, CLAUDE_WARNING_PROMPT } from "./text.js";
 import { resolveClaudeLimits } from "./thresholds.js";
+import { parseContextCap } from "../../../src/budget/cap.js";
 import { projectKey, snapshotNotesIdentity, type NotesIdentity } from "../../../src/notes/index.js";
 import type { Operation } from "../../../src/tools/result.js";
 import { notesToolContext, type NotesToolContext } from "../../../src/tools/notes-context.js";
@@ -70,6 +71,16 @@ function historySource(value: unknown, sessionId: string): ClaudeHistorySource {
 export async function dispatch(request: unknown, historyOptions: Pick<LocalHistoryOptions, "roots" | "home" | "env"> = {}): Promise<unknown> {
 	if (!request || typeof request !== "object" || Array.isArray(request)) throw new Error("malformed request");
 	const value = request as Record<string, unknown>;
+	if (value.op === "cap") {
+		const cap = typeof value.value === "string" ? parseContextCap(value.value) : undefined;
+		if (cap === undefined) throw new Error("Usage: /notesoup cap [100k|1m|tokens|off]");
+		if (cap !== null) {
+			const facts = value.facts && typeof value.facts === "object" ? value.facts as Record<string, unknown> : {};
+			const limits = resolveClaudeLimits({ ...facts, capTokens: undefined, usage: { window: cap }, breakdown: {} });
+			if (limits.reset <= 1) throw new Error("Cap is too small for Claude's output, compaction and reset reserves");
+		}
+		return { cap };
+	}
 	if (value.op === "schemas") return [...Object.entries(OPERATIONS), ...Object.entries(HISTORY_OPERATIONS)].map(([name, operation]) => ({ name, description: operation.description, inputSchema: JSON.parse(JSON.stringify(operation.parameters)) }));
 	// The shared reset prose lives here, not in the sandboxed hooks module, so Pi and Claude
 	// cannot drift apart. The hooks module caches one copy per session.
