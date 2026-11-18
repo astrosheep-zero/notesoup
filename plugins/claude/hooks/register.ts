@@ -609,12 +609,14 @@ async function callNotesTool($: Engine, state: ResetState, e: ToolCallInput): Pr
   if (name === "empty_brain") {
     if (agentId !== undefined) return errorResult("only the main agent can empty this brain")
     if (state.compactDisabled) return errorResult(COMPACT_DISABLED)
-    if (params.last_word !== undefined && typeof params.last_word !== "string") return errorResult("last_word must be a string")
-    if (params.terminate !== undefined && typeof params.terminate !== "boolean") return errorResult("terminate must be a boolean")
-    const lastWord = typeof params.last_word === "string" ? params.last_word.trim() || undefined : undefined
+    const lastWordInput = "last_word" in params ? params.last_word : undefined
+    const terminate = "terminate" in params ? params.terminate : undefined
+    if (lastWordInput !== undefined && typeof lastWordInput !== "string") return errorResult("last_word must be a string")
+    if (terminate !== undefined && typeof terminate !== "boolean") return errorResult("terminate must be a boolean")
+    const lastWord = lastWordInput?.trim() || undefined
     const length = lastWord ? Array.from(lastWord).length : 0
     if (length > 500) return errorResult(`last_word is ${length} characters; the sticky note holds 500. Shorten it and call again.`)
-    if (state.flow.requestReset({ lastWord, terminate: params.terminate === true })) state.continuation = undefined
+    if (state.flow.requestReset({ lastWord, terminate: terminate === true })) state.continuation = undefined
     return { result: `Brain reset requested. This tool batch will finish, then the turn stops before its next model request unless it has new user input to handle. Your notes and sticky note survive the reset.${state.flow.request!.resume ? " You will continue in a fresh window after the reset." : " No automatic continuation will be submitted."}` }
   }
   if (name.startsWith("history_") && agentId !== undefined) return errorResult("history is unavailable for subagents; main-session history is not their transcript")
