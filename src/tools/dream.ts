@@ -53,7 +53,7 @@ export function dreamingIdentity(identity: NotesIdentity, state: DreamState): No
 const NOT_DREAMING = "No dream is open; call dream_begin first.";
 
 export const dreamBeginParameters = Type.Object({
-	project: Type.Optional(Type.String({ description: "(optional, default this project) Project name, as in @projects/<name>/." })),
+	project: Type.Optional(Type.String({ description: "Which project's pages; leave it out for this one." })),
 }, { additionalProperties: false });
 
 export const DreamBeginDataSchema = Type.Object({
@@ -69,7 +69,7 @@ function renderBeginData(data: DreamBeginData): string {
 
 export const dreamBegin = {
 	name: "dream_begin", label: "Dream begin",
-	description: "Dream: open one project's notes for consolidation, one project at a time. Lists its @projects/<name>/ notes and every session note born in it, crumpled ones included. Until dream_end, notes_write/notes_update can edit those addresses and reads leave no access stamp. Holds the notes home's dream lock through dream_end so Git audits cannot interleave, and commits a baseline of the notes home.",
+	description: "Spread one project's pages across the table — its project shelf, every session page born there, crumpled balls included. Until `dream_end` your pen works on all of them; other sessions' pages can be rewritten, not added to.",
 	parameters: dreamBeginParameters, outputSchema: resultSchema(DreamBeginDataSchema),
 	async execute(params: Static<typeof dreamBeginParameters>, identity: NotesIdentity, state: DreamState): Promise<Outcome<DreamBeginData>> {
 		if (state.project !== undefined || state.pending !== undefined) {
@@ -123,13 +123,13 @@ export const dreamBegin = {
 	render: (result: Outcome<DreamBeginData>): string => renderOutcome(result, renderBeginData),
 } as const;
 
-export const dreamForgetParameters = Type.Object({ address: Type.String() }, { additionalProperties: false });
+export const dreamForgetParameters = Type.Object({ address: Type.String({ description: "Which crumpled page goes in the bin." }) }, { additionalProperties: false });
 export const DreamForgetDataSchema = Type.Object({ ...NoteIdentitySchema }, { additionalProperties: false });
 export type DreamForgetData = Static<typeof DreamForgetDataSchema>;
 
 export const dreamForget = {
 	name: "dream_forget", label: "Dream forget",
-	description: "Dream: permanently delete one crumpled note in the project being dreamed over, or in @human/, @self/, @model/. Crumple it first; live notes refuse.",
+	description: "Throw a crumpled page in the bin for good. Only crumpled pages go.",
 	parameters: dreamForgetParameters, outputSchema: resultSchema(DreamForgetDataSchema),
 	async execute(params: Static<typeof dreamForgetParameters>, identity: NotesIdentity, state: DreamState): Promise<Outcome<DreamForgetData>> {
 		if (state.project === undefined) return failure("not_dreaming", NOT_DREAMING);
@@ -148,7 +148,7 @@ export type DreamEndData = Static<typeof DreamEndDataSchema>;
 
 export const dreamEnd = {
 	name: "dream_end", label: "Dream end",
-	description: "Dream: close the open dream. Commits the dream's changes to the notes home's Git and releases the lock; the project's notes are read-only again and reads stamp access again.",
+	description: "Stack the pages, file them, close the drawer.",
 	parameters: dreamEndParameters, outputSchema: resultSchema(DreamEndDataSchema),
 	async execute(_params: Static<typeof dreamEndParameters>, identity: NotesIdentity, state: DreamState): Promise<Outcome<DreamEndData>> {
 		const project = state.project;

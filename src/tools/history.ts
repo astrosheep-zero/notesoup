@@ -92,25 +92,23 @@ function pageOutcome(result: HistoryPageResult): Outcome<HistoryPage> {
 
 /* ------------------------------------------------------------------ history_list */
 
-const sessionParameter = Type.Optional(Type.String({ minLength: 1, description: "(optional) Session ID or unique prefix, optionally pi:, claude:, codex:, or dsh:. Omit for this session. In history_list, * searches sessions with query or lists recent sessions without it; history_read needs one session." }));
-
 export const historyListParameters = Type.Object({
-	session: sessionParameter,
-	query: Type.Optional(searchQuery("(optional) Text, or a list of texts (any match). Empty text/list means no search filter; empty entries are ignored. Searches every role, tool arguments and output included; returns only hits.")),
+	session: Type.Optional(Type.String({ minLength: 1, description: "Whose record: a session ID or prefix (pi:, claude:, codex:, dsh: allowed). Leave it out for this one. `*` means every recent session." })),
+	query: Type.Optional(searchQuery("Text to look for, or a list (any match). Searches what was said, tool arguments and output.")),
 	roles: historyRoles(),
-	before_seq: Type.Optional(Type.Integer({ minimum: 1, description: "(optional) Only events with seq below this." })),
-	after_seq: Type.Optional(Type.Integer({ minimum: 0, description: "(optional) Only events with seq above this; 0 means from the start." })),
-	since: Type.Optional(Type.String({ minLength: 1, description: "(optional) ISO 8601 time; only events at or after it. UTC if no offset." })),
-	until: Type.Optional(Type.String({ minLength: 1, description: "(optional) ISO 8601 time; only events before it. UTC if no offset." })),
-	from: Type.Optional(Type.Union([Type.Literal("newest"), Type.Literal("oldest")], { description: "(optional) Which end `limit` counts from: newest or oldest (default oldest when `after_seq` is set, else newest). Results stay oldest first." })),
-	limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500, description: "(optional, default 20) Max events per page; folded runs don't count." })),
-	max_chars_per_item: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_READ_WINDOW_CHARS, description: `(optional, default ${HISTORY_PREVIEW_CHARS}) Max preview chars per event.` })),
+	before_seq: Type.Optional(Type.Integer({ minimum: 1, description: "Only entries before this seq." })),
+	after_seq: Type.Optional(Type.Integer({ minimum: 0, description: "Only entries after this seq; 0 starts from the first page." })),
+	since: Type.Optional(Type.String({ minLength: 1, description: "Only entries at or after this time (ISO 8601; UTC without an offset)." })),
+	until: Type.Optional(Type.String({ minLength: 1, description: "Only entries before this time (ISO 8601; UTC without an offset)." })),
+	from: Type.Optional(Type.Union([Type.Literal("newest"), Type.Literal("oldest")], { description: "Which end `limit` counts from: newest or oldest. Entries still read oldest first." })),
+	limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500, description: "How many entries per page; folded runs don't count." })),
+	max_chars_per_item: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_READ_WINDOW_CHARS, description: "How much of each entry to show." })),
 }, { additionalProperties: false });
 
 export const historyList: Operation<typeof historyListParameters, HistoryPage, [HistoryContext, HistoryTextWrapper?]> = {
 	name: "history_list",
 	label: "History list items",
-	description: "Browse or search events, a page at a time. Omit session for this session; pass an ID/prefix for another, or * to browse recent sessions across local harnesses (add query to search). Read one in full with `history_read`.",
+	description: "Flip back through the record, a page at a time. Another session: its ID. `*` pulls every recent session off the shelf; add `query` to search them.",
 	parameters: historyListParameters,
 	outputSchema: resultSchema(HistoryPageSchema),
 	async execute(params, context, wrapText = plainText) {
@@ -162,12 +160,12 @@ export const historyList: Operation<typeof historyListParameters, HistoryPage, [
 
 /* ------------------------------------------------------------------ history_read */
 
-export const historyReadParameters = Type.Object({ session: sessionParameter, seq: Type.Integer({ minimum: 1, description: "Event seq, from `history_list`. Pass its session too when present." }), ...TextWindowRequestSchema }, { additionalProperties: false });
+export const historyReadParameters = Type.Object({ session: Type.Optional(Type.String({ minLength: 1, description: "Whose record: a session ID or prefix. Leave it out for this one." })), seq: Type.Integer({ minimum: 1, description: "Which entry, by its seq from `history_list`; bring its session along if it had one." }), ...TextWindowRequestSchema }, { additionalProperties: false });
 
 export const historyRead: Operation<typeof historyReadParameters, HistoryReadData, [HistoryContext, HistoryTextWrapper?]> = {
 	name: "history_read",
 	label: "History read item",
-	description: "Read one event in full: tool arguments, output, and nested calls.",
+	description: "Open one entry: what was called, what came back, the calls nested inside. Long entries come in slices; follow `next_offset_chars`.",
 	parameters: historyReadParameters,
 	outputSchema: resultSchema(HistoryReadDataSchema),
 	async execute(params, context, wrapText = plainText) {

@@ -19,8 +19,6 @@ function hostSchema(schema: TSchema): JsonSchemaNode {
 	const value = JSON.parse(JSON.stringify(schema)) as Record<string, unknown>;
 	const result: Record<string, unknown> = {};
 	for (const key of ["type", "required", "additionalProperties", "enum", "const", "description", "title", "default", "examples"]) if (value[key] !== undefined) result[key] = value[key];
-	const bounds = ["minimum", "maximum", "minLength", "maxLength", "minItems", "maxItems"].filter((key) => value[key] !== undefined).map((key) => `${key}=${value[key]}`);
-	if (bounds.length) result.description = [value.description, bounds.join(", ")].filter(Boolean).join("; ");
 	if (Array.isArray(value.anyOf)) result.oneOf = value.anyOf.map((branch) => hostSchema(branch as TSchema));
 	if (value.properties) result.properties = Object.fromEntries(Object.entries(value.properties as Record<string, TSchema>).map(([key, child]) => [key, hostSchema(child)]));
 	if (value.items) result.items = hostSchema(value.items as TSchema);

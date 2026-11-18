@@ -388,6 +388,32 @@ test("an over-budget note search match is a marked prefix with an honest line ad
 	assert.ok(parts.join("").endsWith(hugeLine), "resuming across pages reconstructs the matched body line");
 });
 
+for (const [label, padding, cap] of [
+	["match cap", 0, 2],
+	["output budget", Math.floor(TOOL_OUTPUT_MAX_BYTES / 3), undefined],
+	["both limits", Math.floor(TOOL_OUTPUT_MAX_BYTES / 3), 6],
+	["shortened first line", TOOL_OUTPUT_MAX_BYTES * 2, undefined],
+] as const) {
+	test(`notes_search reports dropped lines after ${label}`, async () => {
+		const session = manager();
+		const captured = makeExtension(session);
+		const ctx = context(session);
+		const lines = Array.from({ length: padding > TOOL_OUTPUT_MAX_BYTES ? 3 : 8 }, (_, index) => `needle ${index}${"y".repeat(padding)}`);
+		resultData(await call(captured, "notes_write", { address: "matches.md", content: lines.join("\n") }, ctx));
+		const raw = await call(captured, "notes_search", { query: "needle", max_matches_per_file: cap }, ctx);
+		assertWithinBudget(raw, label);
+		const found = resultData<NotesSearchData>(raw);
+		assert.equal(found.more, 0, "line omissions are separate from omitted pages");
+		const [file] = found.files;
+		assert.ok(file);
+		assert.ok(file.matches.length > 0 && file.matches.length < lines.length);
+		if (cap !== undefined) assert.ok(file.matches.length <= cap);
+		if (padding > 0) assert.ok(file.matches.length < (cap ?? lines.length), "the output budget also drops lines");
+		assert.equal(file.more_matches, lines.length - file.matches.length);
+		assert.ok(textOf(raw).includes(`${file.more_matches} more lines`));
+	});
+}
+
 test("notes_search ignores case, treats queries literally, and preserves original Unicode offsets", async () => {
 	const session = manager();
 	const captured = makeExtension(session);
@@ -396,6 +422,7 @@ test("notes_search ignores case, treats queries literally, and preserves origina
 	const found = resultData<NotesSearchData>(await call(captured, "notes_search", { query: ["missing", "needle.*"], glob: "case-match.md" }, ctx));
 	assert.equal(found.files.length, 1);
 	assert.equal(found.files[0]!.matches.length, 1);
+	assert.equal(found.files[0]!.more_matches, undefined);
 	const hit = found.files[0]!;
 	const read = resultRead(await call(captured, "notes_read", { address: hit.address, offset_chars: hit.matches[0]!.offset_chars }, ctx));
 	assert.equal(read.content, "NeEdLe.* tail");

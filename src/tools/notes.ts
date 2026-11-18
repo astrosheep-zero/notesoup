@@ -15,12 +15,12 @@ import { notesIdentityForCall, type NotesToolContext } from "./notes-context.js"
 
 const ORIGIN_VALUES = [Type.Literal("user"), Type.Literal("self"), Type.Literal("external")] as const;
 const ORIGIN = Type.Optional(Type.Union([...ORIGIN_VALUES], {
-	description: "(optional) Who wrote it: user, self, or external. Omit to keep the existing origin; new notes default to self.",
+	description: "Whose handwriting: user, self, or external. Leave it out to keep what's there.",
 }));
 const POLICY_PARAMETERS = {
-	pinned: Type.Optional(Type.Boolean({ description: "Inject the full body at boot. At most 5 live pins per notebook; root CHEATSHEET.md/MAP.md default true, all others false. Explicit false overrides the default." })),
-	budget: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: "Body budget in Unicode code points (default 4096; root CHEATSHEET.md and MAP.md default 2048). Over budget warns but saves; boot does not truncate." })),
-	readonly: Type.Optional(Type.Boolean({ description: "Soft lock, not a security boundary. true locks changes; explicitly pass false to unlock, including in the same call as edits or overwrite." })),
+	pinned: Type.Optional(Type.Boolean({ description: "Tape the page inside the cover: read whole at every wake-up. Five per notebook, CHEATSHEET and MAP included." })),
+	budget: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: "How much paper the page gets. Writing past it still saves, with a warning. A page over budget gets boiled down: stale lines out, repeats merged, the rest said shorter. More paper is for a page already boiled down that still needs the room." })),
+	readonly: Type.Optional(Type.Boolean({ description: "A paperclip that keeps your own hands off. `false` takes it off — same call is fine." })),
 };
 const PolicySchema = {
 	pinned: Type.Boolean(), budget: Type.Integer(), readonly: Type.Boolean(),
@@ -36,13 +36,12 @@ function withWarnings(text: string, data: { warnings: string[] }): string {
 	return [text, ...data.warnings].join("\n");
 }
 
-const CRUMPLED_PARAMETER = Type.Optional(Type.Boolean({ description: "(optional) true = crumple (hide from list and search, still readable); false = restore." }));
-const CRUMPLED_LIST_PARAMETER = Type.Optional(Type.Boolean({ description: "(optional) true = list only crumpled notes." }));
-const FILE_LIMIT_PARAMETER = Type.Optional(Type.Integer({ minimum: 1, description: "(optional, default as many as fit) Max notes." }));
-const GLOB_PARAMETER = nullableString("(optional) Glob over full addresses, or @default for the current notebooks.");
-const CWD_PARAMETER = Type.Optional(Type.String({ minLength: 1, description: "(optional) Select the current project for this call. A relative path resolves against the host session cwd; the path must be an existing directory." }));
-const QUERY_NAMESPACES_DESCRIPTION = "Omit `glob` or use `@default` for this session and current shared notebooks; `**` searches all notebooks, `@sessions/*/**` searches all sessions.";
-const ADDRESS_DESCRIPTION = "Addresses: a bare path is this session's note; `@project/`, `@human/`, `@self/`, `@model/` are durable notebooks; `@projects/<name>/<path>` and `@sessions/<id>/<path>` read named project and session notes (read-only). Not file paths: never pass them to file tools.";
+const CRUMPLED_PARAMETER = Type.Optional(Type.Boolean({ description: "`true` balls the page up: gone from list and search, still readable. `false` smooths it flat again." }));
+const CRUMPLED_LIST_PARAMETER = Type.Optional(Type.Boolean({ description: "Only the crumpled balls." }));
+const FILE_LIMIT_PARAMETER = Type.Optional(Type.Integer({ minimum: 1, description: "How many pages at most." }));
+const GLOB_PARAMETER = nullableString("Which drawers to open. Leave it out for this session and your current notebooks. `@project/**` one shelf · `MAP.md` that page in every notebook · `**` everything · `@sessions/*/**` every session.");
+const CWD_PARAMETER = Type.Optional(Type.String({ minLength: 1, description: "Treat this directory's project as `@project/`." }));
+const ADDRESS_PARAMETER = Type.String({ description: "Which drawer the page sits in. `plan.md` — this session's desk, cleared when it ends. `@project/` this project's shelf · `@human/` your human's file · `@self/` your own notebook · `@model/` your brain's. `@projects/<name>/`, `@sessions/<id>/` — someone else's shelf: read only. Paper, not files: hand one to read/write/edit/bash and a real `@project` folder is born." });
 
 /**
  * Typed refusal. Every fact a caller needs is already in the message; there is no separate context.
@@ -158,7 +157,7 @@ const MatchSchema = Type.Object({
 
 const SearchedFileSchema = Type.Object({
 	...ListedFileSchema.properties,
-	matches: Type.Array(MatchSchema),
+	matches: Type.Array(MatchSchema), more_matches: Type.Optional(Type.Integer({ minimum: 1 })),
 }, { additionalProperties: false });
 
 export const SnapshotSchema = {
@@ -238,7 +237,7 @@ export function listedFile(row: Pick<NoteRow, "address" | "meta"> & { body?: str
 	return { ...noteIdentity(identity, row.address), ...policy, warnings: row.warnings ?? (row.body === undefined ? [] : noteBudgetWarnings(row.body, policy)), updated_at: localIso(row.meta.updatedAt), ...(row.meta.crumpledAt === undefined ? {} : { crumpled_at: row.meta.crumpledAt }) };
 }
 
-export const notesWriteParameters = Type.Object({ address: Type.String(), content: Type.String(), origin: ORIGIN, ...POLICY_PARAMETERS, cwd: CWD_PARAMETER }, { additionalProperties: false });
+export const notesWriteParameters = Type.Object({ address: ADDRESS_PARAMETER, content: Type.String({ description: "The whole page." }), origin: ORIGIN, ...POLICY_PARAMETERS, cwd: CWD_PARAMETER }, { additionalProperties: false });
 
 function renderWriteData(data: NotesWriteData): string {
 	return withWarnings(`${data.outcome} ${renderIdentity(data)} | ${renderPolicy(data)}`, data);
@@ -246,7 +245,7 @@ function renderWriteData(data: NotesWriteData): string {
 
 export const notesWrite = {
 	name: "notes_write", label: "Notes write",
-	description: `Create a note, or overwrite its whole body. Name it for what it holds and when to use it. ${ADDRESS_DESCRIPTION}`,
+	description: "Take a fresh page and write it — or rip out the old one and write it again. Title it for what's inside and when you'll reach for it.",
 	parameters: notesWriteParameters, outputSchema: resultSchema(NotesWriteDataSchema), executionMode: "sequential",
 	async execute(params: Static<typeof notesWriteParameters>, context: NotesToolContext): Promise<Outcome<NotesWriteData>> {
 		try {
@@ -259,13 +258,13 @@ export const notesWrite = {
 } as const;
 
 export const notesUpdateParameters = Type.Object({
-	address: Type.String(),
-	edits: Type.Optional(Type.Array(Type.Object({ oldText: Type.String(), newText: Type.String() }, { additionalProperties: false }))),
+	address: ADDRESS_PARAMETER,
+	edits: Type.Optional(Type.Array(Type.Object({ oldText: Type.String({ description: "The passage as it stands on the page." }), newText: Type.String({ description: "What goes in its place." }) }, { additionalProperties: false }), { description: "Pen strokes, in order. Each `oldText` is the exact passage — same case, found once — and `newText` is what goes in its place." })),
 	origin: ORIGIN,
 	...POLICY_PARAMETERS,
 	crumpled: CRUMPLED_PARAMETER,
-	replace_all: Type.Optional(Type.Boolean({ description: "(optional) true = replace every match of `oldText`." })),
-	rename_to: Type.Optional(Type.String({ description: "(optional) Move to this address, optionally with edits or metadata changes. Won't overwrite a live note; references aren't updated." })),
+	replace_all: Type.Optional(Type.Boolean({ description: "Strike every copy of `oldText`, not just one." })),
+	rename_to: Type.Optional(Type.String({ description: "Move the page to another address. Never lands on top of a live page; nothing pointing at it follows." })),
 	cwd: CWD_PARAMETER,
 }, { additionalProperties: false });
 
@@ -278,7 +277,7 @@ function renderUpdateData(data: NotesUpdateData): string {
 
 export const notesUpdate = {
 	name: "notes_update", label: "Notes update",
-	description: `Change part of a note's body, policy (pinned/budget/readonly), origin, crumpled state, or address. A readonly note requires explicit readonly:false before any change, or in the same call. When things change, replace the stale part in place; don't just tack an update onto the bottom. Each \`oldText\` must match exactly once unless \`replace_all\` is true. ${ADDRESS_DESCRIPTION}`,
+	description: "Work on a page you already have: cross out and rewrite lines, move it, pin it, lock it, give it more paper, crumple it. Keep every page true to now: wrong, stale, or no-longer-mattering lines get rewritten or struck where they stand. The page stays one page.",
 	parameters: notesUpdateParameters, outputSchema: resultSchema(NotesUpdateDataSchema), executionMode: "sequential",
 	async execute(params: Static<typeof notesUpdateParameters>, context: NotesToolContext, onChange?: (change: NoteChange) => void): Promise<Outcome<NotesUpdateData>> {
 		try {
@@ -296,7 +295,7 @@ export const notesUpdate = {
 	render: (result: Outcome<NotesUpdateData>): string => renderOutcome(result, renderUpdateData),
 } as const;
 
-export const notesReadParameters = Type.Object({ address: Type.String(), ...TextWindowRequestSchema, cwd: CWD_PARAMETER }, { additionalProperties: false });
+export const notesReadParameters = Type.Object({ address: ADDRESS_PARAMETER, ...TextWindowRequestSchema, cwd: CWD_PARAMETER }, { additionalProperties: false });
 
 function renderReadData(data: NotesReadData): string {
 	return withWarnings(`${renderIdentity(data)}\n${renderMetadata(data.metadata)}`, data) + `\n\n${renderTextWindow(data)}`;
@@ -304,7 +303,7 @@ function renderReadData(data: NotesReadData): string {
 
 export const notesRead = {
 	name: "notes_read", label: "Notes read",
-	description: `Read a note. ${ADDRESS_DESCRIPTION}`,
+	description: "Read a page. Long ones come a stretch at a time; follow `next_offset_chars`.",
 	parameters: notesReadParameters, outputSchema: resultSchema(NotesReadDataSchema),
 	async execute(params: Static<typeof notesReadParameters>, context: NotesToolContext): Promise<Outcome<NotesReadData>> {
 		try {
@@ -337,7 +336,7 @@ export function renderListData(data: Snapshot<NotesListData["files"][number] & {
 
 export const notesList = {
 	name: "notes_list", label: "Notes list",
-	description: `List notes, newest first. Not pageable; \`more\` counts the rest. ${QUERY_NAMESPACES_DESCRIPTION} ${ADDRESS_DESCRIPTION}`,
+	description: "Leaf through the drawers, newest pages on top. One pass; `more` counts pages left on the pile — narrow `glob`.",
 	parameters: notesListParameters, outputSchema: resultSchema(NotesListDataSchema),
 	async execute(params: Static<typeof notesListParameters>, context: NotesToolContext): Promise<Outcome<NotesListData>> {
 		try {
@@ -349,12 +348,12 @@ export const notesList = {
 	render: (result: Outcome<NotesListData>): string => renderOutcome(result, renderListData),
 } as const;
 
-export const notesSearchParameters = Type.Object({ query: Type.Optional(searchQuery()), glob: GLOB_PARAMETER, limit: FILE_LIMIT_PARAMETER, max_matches_per_file: Type.Optional(Type.Integer({ minimum: 1, description: "(optional, default all) Max matching lines per note." })), crumpled: CRUMPLED_LIST_PARAMETER, cwd: CWD_PARAMETER }, { additionalProperties: false });
+export const notesSearchParameters = Type.Object({ query: Type.Optional(searchQuery()), glob: GLOB_PARAMETER, limit: FILE_LIMIT_PARAMETER, max_matches_per_file: Type.Optional(Type.Integer({ minimum: 1, description: "How many hit lines per page at most." })), crumpled: CRUMPLED_LIST_PARAMETER, cwd: CWD_PARAMETER }, { additionalProperties: false });
 
 function renderSearchData(data: NotesSearchData): string {
 	const lines = [`${data.files.length} ${data.files.length === 1 ? "note" : "notes"}`];
 	for (const file of data.files) {
-		lines.push(`- ${renderIdentity(file)} | ${renderPolicy(file)} | updated ${file.updated_at} | ${file.matches.length} ${file.matches.length === 1 ? "match" : "matches"}`);
+		lines.push(`- ${renderIdentity(file)} | ${renderPolicy(file)} | updated ${file.updated_at} | ${file.matches.length} ${file.matches.length === 1 ? "match" : "matches"}${file.more_matches ? `, ${file.more_matches} more lines` : ""}`);
 		lines.push(...file.warnings.map(warning => `  ${warning}`));
 		for (const match of file.matches) lines.push(`  line ${match.line} at offset_chars ${match.offset_chars}: ${match.text}`);
 	}
@@ -364,6 +363,10 @@ function renderSearchData(data: NotesSearchData): string {
 }
 
 type SearchFile = NotesSearchData["files"][number];
+function keepMatches(file: SearchFile, count = file.matches.length): SearchFile {
+	const more = (file.more_matches ?? 0) + Math.max(0, file.matches.length - count);
+	return { ...file, matches: file.matches.slice(0, count), ...(more ? { more_matches: more } : {}) };
+}
 
 /** A shortened match line still ends with a marker, so its own text says it was cut. */
 export const MATCH_SHORTENED_MARKER = " [truncated]";
@@ -374,28 +377,27 @@ function fitSearchFile(file: SearchFile, fits: (candidate: SearchFile) => boolea
 	let high = file.matches.length;
 	while (low < high) {
 		const mid = Math.ceil((low + high) / 2);
-		if (fits({ ...file, matches: file.matches.slice(0, mid) })) low = mid;
+		if (fits(keepMatches(file, mid))) low = mid;
 		else high = mid - 1;
 	}
-	if (low > 0) return { ...file, matches: file.matches.slice(0, low) };
-	const first = file.matches[0];
-	if (!first) return file;
-	const withText = (text: string): SearchFile => ({ ...file, matches: [{ ...first, text: `${text}${MATCH_SHORTENED_MARKER}` }] });
+	if (low > 0 || file.matches.length === 0) return keepMatches(file, low);
+	const first = file.matches[0]!;
+	const withText = (text: string): SearchFile => ({ ...keepMatches(file, 1), matches: [{ ...first, text: `${text}${MATCH_SHORTENED_MARKER}` }] });
 	return withText(prefixFit(first.text, text => fits(withText(text))));
 }
 
 export const notesSearch = {
 	name: "notes_search", label: "Notes search",
-	description: `Search note bodies for literal text, case-insensitive. Without a query, lists notes with no match lines. Returns matching lines with offsets for \`notes_read\`. Not pageable; \`more\` counts the rest. ${QUERY_NAMESPACES_DESCRIPTION} ${ADDRESS_DESCRIPTION}`,
+	description: "Run a finger down every page for some text, case doesn't matter. Returns the lines it hits and where they sit; no query just lists the pages. One pass; `more` counts pages left on the pile — narrow `glob`.",
 	parameters: notesSearchParameters, outputSchema: resultSchema(NotesSearchDataSchema),
 	async execute(params: Static<typeof notesSearchParameters>, context: NotesToolContext): Promise<Outcome<NotesSearchData>> {
 		try {
 			const identity = notesIdentityForCall(context, params.cwd);
 			const { rows, status } = await createNotesStore(identity).searchWithStatus(searchQueries(params.query), { glob: params.glob ?? undefined, crumpled: params.crumpled });
-			const files: NotesSearchData["files"] = rows.sort((a, b) => b.meta.updatedAt - a.meta.updatedAt || a.address.localeCompare(b.address)).map(row => ({
+			const files = rows.sort((a, b) => b.meta.updatedAt - a.meta.updatedAt || a.address.localeCompare(b.address)).map(row => keepMatches({
 				...listedFile(row, identity),
-				matches: row.matches.slice(0, params.max_matches_per_file).map(match => ({ line: match.line, text: match.text, offset_chars: match.offsetChars })),
-			}));
+				matches: row.matches.map(match => ({ line: match.line, text: match.text, offset_chars: match.offsetChars })),
+			}, params.max_matches_per_file));
 			return snapshot(files, params.limit, status, renderSearchData, fitSearchFile);
 		} catch (error) { return failureOf(error); }
 	},

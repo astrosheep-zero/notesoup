@@ -50,8 +50,8 @@ export type TextWindow = Static<typeof TextWindowSchema>;
  * because `readTextWindow` already owns the defaults.
  */
 export const TextWindowRequestSchema = {
-	offset_chars: Type.Optional(Type.Integer({ description: "(optional, default 0) Start offset in chars; negative counts from the end." })),
-	max_chars: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_READ_WINDOW_CHARS, description: `(optional, default ${DEFAULT_READ_WINDOW_CHARS}) Max chars to return.` })),
+	offset_chars: Type.Optional(Type.Integer({ description: "Where on the page to start reading; negative counts from the end." })),
+	max_chars: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_READ_WINDOW_CHARS, description: "How much to read at once." })),
 };
 
 /**

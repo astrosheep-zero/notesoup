@@ -34,7 +34,7 @@ export function pinnedPageOrder(path: string): number {
 
 export function noteBudgetWarnings(body: string, policy: NotePolicy): string[] {
 	const count = Array.from(body).length;
-	return count > policy.budget ? [`Warning: note body is ${count} Unicode code points, over budget ${policy.budget}; the full body is kept.`] : [];
+	return count > policy.budget ? [`Warning: note body is ${count} Unicode code points, over budget ${policy.budget} — boil it down.`] : [];
 }
 
 export function assertNoteUnlocked(fields: NotePolicyFields, unlock?: boolean): void {

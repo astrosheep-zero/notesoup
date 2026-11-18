@@ -92,7 +92,7 @@ test("tools set policy, validate values, and visibly report effective policy and
 	const updated = await notesUpdate.execute({ address: "custom", readonly: false, edits: [{ oldText: "😀".repeat(2), newText: "😀".repeat(3) }] }, context);
 	assert.equal(Check(notesUpdate.outputSchema, wireResult(updated)), true);
 	assert.equal(data(updated).warnings.length, 1);
-	assert.match(notesUpdate.render(updated), /3 Unicode code points, over budget 2/);
+	assert.match(notesUpdate.render(updated), /3 Unicode code points, over budget 2 — boil it down\./);
 	assert.equal((await notes.read("custom"))!.body, "😀".repeat(3), "over budget saves the entire body");
 
 	const read = await notesRead.execute({ address: "custom", max_chars: 10 }, context);
@@ -110,6 +110,11 @@ test("tools set policy, validate values, and visibly report effective policy and
 	assert.equal(data(search).files[0]!.budget, 2);
 	assert.match(notesSearch.render(search), /pinned true \| budget 2 \| readonly false/);
 	assert.match(notesSearch.render(search), /Warning: note body is 3/);
+	const overflow = await notesWrite.execute({ address: "overflow", content: "😀".repeat(3), budget: 2 }, context);
+	for (const warnings of [data(overflow).warnings, data(read).warnings]) {
+		assert.ok(warnings.length > 0);
+		assert.ok(warnings.every(warning => warning.endsWith("— boil it down.")));
+	}
 
 	const larger = await notesUpdate.execute({ address: "custom", budget: 4, pinned: false }, context);
 	assert.deepEqual(data(larger).warnings, []);

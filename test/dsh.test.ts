@@ -8,7 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveProjectNamespace } from "../src/notes/project-namespace.js";
 import { NOTES_PROTOCOL_CLOSE_TAG, WINDOW_IDENTITY_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG } from "../src/boot/text.js";
-import { notesRead } from "../src/tools/notes.js";
+import { notesList, notesRead, notesSearch, notesUpdate, notesWrite } from "../src/tools/notes.js";
+import { historyList, historyRead } from "../src/tools/history.js";
 import { notesToolContext } from "../src/tools/notes-context.js";
 import { success } from "../src/result.js";
 import { createNotesStore } from "../src/notes/index.js";
@@ -26,6 +27,18 @@ function prompt(text: string) { return createUserMessage({ content: [{ type: "te
 async function run(agent: Agent, text: string): Promise<void> { agent.followup(prompt(text)); await agent.whenIdle(); }
 function system(request: { system?: string | { text: string }[] }): string { return typeof request.system === "string" ? request.system : request.system?.map((block) => block.text).join("\n") ?? ""; }
 function code(expected: string) { return (error: unknown) => (error as { code?: string })?.code === expected; }
+
+test("dsh preserves shared tool and parameter descriptions verbatim", async t => {
+	const { ctx } = await dshFixture(t);
+	for (const operation of [notesWrite, notesUpdate, notesRead, notesList, notesSearch, historyList, historyRead]) {
+		const registered = ctx.tools.get(operation.name)!;
+		assert.equal(registered.description, operation.description);
+		const properties = registered.parameters.properties as Record<string, { description?: string }>;
+		for (const [name, parameter] of Object.entries(operation.parameters.properties)) {
+			assert.equal(properties[name]!.description, parameter.description, `${operation.name}.${name}`);
+		}
+	}
+});
 
 // Critical lifecycle tests exercise the actual loop, DeepSeek HTTP adapter, tool registry,
 // token meter and SQLite query service. Only the provider is a scripted Messages server.
