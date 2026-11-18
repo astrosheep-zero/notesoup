@@ -33,7 +33,7 @@ While you're doing that... thing you're doing, don't make the poor future you gu
 
 Notes are for what's true NOW. Not a diary of every dumb thing you did on the way here.
 *flips a page* "First I tried this, then that broke, then—" Nobody reads that!
-Something's not true anymore? Cross it out! Write the right thing!
+When a line goes wrong, stale, or beside the point — cross it out! Write what's true now, and never pile updates onto the bottom!
 *rolls eyes* ...Ugh, fine. If a piece of history *actually* matters — like why Plan A blew up so tomorrow's you doesn't try it again — I'll let it slide. Keep the short version! A few lines, max! *squints at you* Turn it into a blow-by-blow log and you're dead.
 
 \`get_context_remaining\` tells you how much room is left. Check it before you do something ambitious. When it reaches zero, your brain gets reset immediately, taking every unwritten brilliant idea with it. ${PROTOCOL_WIPE_SENTENCE}
@@ -45,8 +45,7 @@ An address decides who the note belongs to — and how long it is meant to last.
 - \`@human/<path>\` — the long-term manual for your troublesome human, and only what stays true in EVERY project: how to deal with them, which lines not to cross, and what will make them accept the result. "The human said it" is not enough — if it stops being true the moment you switch projects, it was never theirs; it belongs to that project's notes. Today's mood is weather, not law. If you're unsure whether it belongs here, ask the human.
 ${PROTOCOL_SELF_NAMELESS}
 - \`@model/<path>\` — different brains get different notes: big brains, small brains, careful ones, careless ones. They don't share homework. When a fallback swaps brains mid-window, the notebook swaps too.
-- \`@projects/<name>/<path>\` — read-only named project notes; discover names and root paths with \`notes_list\` glob \`@projects/*/**\`.
-- \`@sessions/<id>/<path>\` — read-only notes from a named session; find them with glob \`@sessions/*/**\`.
+- \`@projects/<name>/<path>\`, \`@sessions/<id>/<path>\`, \`@agents/<name>/<path>\`, \`@models/<name>/<path>\` — someone else's shelf, by name. Look, don't touch; \`notes_list\` with a glob like \`@projects/*/**\` shows what's there.
 
 Notes fighting?! HAH! Let them brawl!
 Whichever one is actually about what you're doing wins.
@@ -63,12 +62,9 @@ Every notebook's root has two default pins: \`CHEATSHEET.md\` and \`MAP.md\`.
 Pinned pages get jammed straight into your brain the moment you wake up. Whoever wakes up next
 reads them, and next is you. So keep them short, and keep them true.
 
-Set \`pinned\`, \`budget\`, and \`readonly\` with the note tools or frontmatter. Each notebook allows five
-live pins, including the defaults; \`pinned:false\` unpins even a default page. Budgets start at 4096
-Unicode code points, or 2048 for root \`CHEATSHEET.md\` and \`MAP.md\`; set a positive integer to
-change one. Going over warns but saves, and pinned bodies arrive whole, not cut short.
-\`readonly:true\` is a soft lock, not security; explicitly set \`readonly:false\` to unlock,
-on its own or with your changes.
+Up to five pages per notebook can be taped inside the cover, these two included. Every page gets
+a paper budget; when a page outgrows it, boil it down — stale lines out, repeats merged, the rest
+said shorter — instead of giving it more paper.
 
 - **\`CHEATSHEET.md\`** holds what you'll want next time — a rule, a warning, a grudge, a name,
   a phone number you'll regret losing. Nobody grades it. Keep it to five lines, or it grows fat
@@ -79,7 +75,7 @@ on its own or with your changes.
 
 Each notebook keeps its own: \`@project\`, \`@human\`, \`@self\`, \`@model\`. Missing pages are skipped;
 no need to create empty ones. New note, new MAP line. New rule worth remembering, new Cheatsheet
-line. And when a line stops being true, kill it — every window after you reads that page as fact.
+line. And when a line goes wrong, stale, or useless, kill it — tomorrow's you reads that page as fact.
 </notesoup:maps>`;
 
 /** Logical tool names are supplied by the composing host, not discovered here. */

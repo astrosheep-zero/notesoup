@@ -4,7 +4,7 @@ import { assertVirtualPath, isSessionId, SLUG_PATTERN, type Scope } from "./path
 
 export type NoteAddress = { scope: Scope; path: string; who?: string };
 
-export const ADDRESS_FORMS = "Use <path> for this session, or @project/, @human/, @self/, or @model/ followed by a path; @projects/<name>/<path> and @sessions/<id>/<path> read named notebooks.";
+export const ADDRESS_FORMS = "Use <path> for this session, or @project/, @human/, @self/, or @model/ followed by a path; @projects/<name>/<path>, @sessions/<id>/<path>, @agents/<name>/<path>, and @models/<name>/<path> read named notebooks.";
 
 /** The one namespace-head vocabulary: the scope each public `@head` names, and the directory family a head with `dir` lists. */
 export const NAMESPACE_HEADS: ReadonlyMap<string, { readonly scope: Scope; readonly dir?: "sessions" | "project" | "agents" | "models" }> = new Map([

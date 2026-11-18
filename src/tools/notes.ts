@@ -41,7 +41,7 @@ const CRUMPLED_LIST_PARAMETER = Type.Optional(Type.Boolean({ description: "Only 
 const FILE_LIMIT_PARAMETER = Type.Optional(Type.Integer({ minimum: 1, description: "How many pages at most." }));
 const GLOB_PARAMETER = nullableString("Which drawers to open. Leave it out for this session and your current notebooks. `@project/**` one shelf · `MAP.md` that page in every notebook · `**` everything · `@sessions/*/**` every session.");
 const CWD_PARAMETER = Type.Optional(Type.String({ minLength: 1, description: "Treat this directory's project as `@project/`." }));
-const ADDRESS_PARAMETER = Type.String({ description: "Which drawer the page sits in. `plan.md` — this session's desk, cleared when it ends. `@project/` this project's shelf · `@human/` your human's file · `@self/` your own notebook · `@model/` your brain's. `@projects/<name>/`, `@sessions/<id>/` — someone else's shelf: read only. Paper, not files: hand one to read/write/edit/bash and a real `@project` folder is born." });
+const ADDRESS_PARAMETER = Type.String({ description: "Which drawer the page sits in. `plan.md` — this session's desk, cleared when it ends. `@project/` this project's shelf · `@human/` your human's file · `@self/` your own notebook · `@model/` your brain's. `@projects/<name>/`, `@sessions/<id>/`, `@agents/<name>/`, `@models/<name>/` — someone else's shelf: read only. Paper, not files: hand one to read/write/edit/bash and a real `@project` folder is born." });
 
 /**
  * Typed refusal. Every fact a caller needs is already in the message; there is no separate context.
