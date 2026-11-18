@@ -523,10 +523,9 @@ export function register(on: On) {
     }
     return result
   })
-  on("command.run", async ($, e, next) => {
+  on("command.run", { command: ["notesoup", "empty", "fresh-window"] }, async ($, e, next) => {
     if (state.disabled) return next(e)
     if (e.command === "notesoup") return capCommand($, state, e.args)
-    if (e.command !== "empty" && e.command !== "fresh-window") return next(e)
     if (!await refreshIdentity($, state)) return { text: "🥣 Different brain now · try /fresh-window again" }
     if (state.compactDisabled) return { text: `🥣 ${COMPACT_DISABLED}` }
     const first = state.flow.requestReset()

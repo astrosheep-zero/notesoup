@@ -108,7 +108,7 @@ async function loadHookModule(t: test.TestContext): Promise<{ register: (on: (ev
   const hooks = await import(pathToFileURL(module).href) as { register: (on: (event: string, matcherOrHandler: Record<string, unknown> | HookHandler, handler?: HookHandler) => void) => void };
   return { register: (on) => hooks.register((event, matcherOrHandler, handler) => {
     if (typeof matcherOrHandler === "function") on(event, matcherOrHandler);
-    else on(event, ($, e, next) => Object.entries(matcherOrHandler).every(([key, value]) => e[key] === value) ? handler!($, e, next) : next(e));
+    else on(event, ($, e, next) => Object.entries(matcherOrHandler).every(([key, value]) => Array.isArray(value) ? value.includes(e[key]) : e[key] === value) ? handler!($, e, next) : next(e));
   }) };
 }
 
