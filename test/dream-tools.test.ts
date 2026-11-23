@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { execFileSync } from "node:child_process";
+import { once } from "node:events";
+import { execFileSync, spawn } from "node:child_process";
 import { Check } from "typebox/value";
-import { createNotesStore, type NotesIdentity } from "../src/notes/index.js";
+import { createNotesStore, projectKey, type NotesIdentity } from "../src/notes/index.js";
 import { abandonDream, dreamBegin, dreamEnd, dreamForget, dreamingIdentity, type DreamState } from "../src/tools/dream.js";
 import { notesRead, notesUpdate, notesWrite } from "../src/tools/notes.js";
 import { notesToolContext } from "../src/tools/notes-context.js";
@@ -48,7 +49,6 @@ test("a dream opens one other project, writes its notes, deletes only crumpled o
 	assert.ok(begun.data.files.every(f => typeof f.last_accessed === "string"), "the dream's list shows each note's last access");
 	assert.match(dreamBegin.render(begun), /\| accessed /);
 	assert.equal((await dreamBegin.execute({}, me, state)).ok, false, "only one dream at a time");
-	assert.ok(existsSync(join(home, ".dream.lock")), "the notes-home lock is held");
 	assert.equal((await dreamBegin.execute({ project: "beta" }, as("other", "alpha"), {})).ok, false, "another session can't dream the same project");
 
 	assert.ok((await notesWrite.execute({ address: "@projects/beta/rule", content: "merged" }, ident())).ok);
@@ -69,14 +69,13 @@ test("a dream opens one other project, writes its notes, deletes only crumpled o
 
 	const ended = await dreamEnd.execute({}, me, state);
 	assert.ok(ended.ok && ended.data.commit && ended.data.commit !== begun.data.baseline, "dream_end commits the changes");
-	assert.equal(existsSync(join(home, ".dream.lock")), false, "the lock is released");
 	assert.equal(execFileSync("git", ["status", "--porcelain"], { cwd: home, encoding: "utf8" }), "", "the audit leaves a clean tree");
 	assert.equal((await notesWrite.execute({ address: "@projects/beta/rule", content: "x" }, ident())).ok, false, "closed again");
 	assert.equal((await dreamEnd.execute({}, me, state)).ok, false);
 });
 
 test("pending openings exclude concurrent begins and stale cleanup preserves a newer generation", async (t) => {
-	const { home, as } = fixture(t);
+	const { as } = fixture(t);
 	const me = as("s", "alpha");
 	const state: DreamState = {};
 	const old = dreamBegin.execute({}, me, state);
@@ -89,20 +88,18 @@ test("pending openings exclude concurrent begins and stale cleanup preserves a n
 	assert.equal(state.pending, pending);
 
 	abandonDream(state);
-	assert.equal(existsSync(join(home, ".dream.lock")), false);
 	const newer = dreamBegin.execute({ project: "beta" }, me, state);
 	const newerPending = state.pending;
 	assert.ok(newerPending && newerPending.generation > pending.generation);
-	const token = readFileSync(join(home, ".dream.lock"), "utf8");
 	const cancelled = await old;
 	assert.ok(!cancelled.ok && cancelled.error.code === "cancelled");
-	assert.equal(readFileSync(join(home, ".dream.lock"), "utf8"), token);
+	const refused = await dreamBegin.execute({}, me, {});
+	assert.ok(!refused.ok && refused.error.code === "already_dreaming");
 	const begun = await newer;
 	assert.ok(begun.ok);
 	assert.equal(state.project, "beta");
 	assert.equal(state.pending, undefined);
 	assert.ok((await dreamEnd.execute({}, me, state)).ok);
-	assert.equal(existsSync(join(home, ".dream.lock")), false);
 });
 
 test("a thrown scan releases pending ownership before propagating the defect", async (t) => {
@@ -117,10 +114,9 @@ test("a thrown scan releases pending ownership before propagating the defect", a
 	syncBuiltinESMExports();
 	t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
 	await assert.rejects(dreamBegin.execute({}, as("s", "alpha"), state), error => error === sentinel);
-	assert.equal(existsSync(join(home, ".dream.lock")), false);
 	assert.equal(state.pending, undefined);
 	assert.equal(state.project, undefined);
-	assert.equal(state.lock, undefined);
+	assert.equal(state.release, undefined);
 	t.mock.restoreAll();
 	syncBuiltinESMExports();
 	assert.ok((await dreamBegin.execute({}, as("s", "alpha"), state)).ok, "the same state can retry after a failed scan");
@@ -134,10 +130,9 @@ test("baseline failure releases pending ownership and permits a retry", async (t
 	writeFileSync(join(home, ".git"), "not a Git repository");
 	const failed = await dreamBegin.execute({}, me, state);
 	assert.ok(!failed.ok && failed.error.code === "audit_failed");
-	assert.equal(existsSync(join(home, ".dream.lock")), false);
 	assert.equal(state.pending, undefined);
 	assert.equal(state.project, undefined);
-	assert.equal(state.lock, undefined);
+	assert.equal(state.release, undefined);
 	const ended = await dreamEnd.execute({}, me, state);
 	assert.ok(!ended.ok && ended.error.code === "not_dreaming");
 	rmSync(join(home, ".git"));
@@ -245,11 +240,43 @@ test("named-project mutation receipts carry their project metadata and fit their
 	assert.ok((await dreamEnd.execute({}, me, state)).ok);
 });
 
+test("a killed dream releases its lock without blocking project claims or note writes", { timeout: 20_000 }, async t => {
+	const { as } = fixture(t);
+	const script = `
+		import { dreamBegin } from ${JSON.stringify(new URL("../src/tools/dream.js", import.meta.url).href)};
+		globalThis.dream = {};
+		const result = await dreamBegin.execute({}, JSON.parse(process.argv[1]), globalThis.dream);
+		if (!result.ok) throw new Error(result.error.message);
+		process.send("open");
+		setInterval(() => {}, 60000);
+	`;
+	const child = spawn(process.execPath, ["--input-type=module", "-e", script, JSON.stringify(as("child", "alpha"))], { stdio: ["ignore", "ignore", "inherit", "ipc"] });
+	t.after(() => { child.kill("SIGKILL"); });
+	const exit = once(child, "exit");
+	assert.equal(await Promise.race([once(child, "message").then(([message]) => message), exit]), "open");
+	const next = as("next", "beta");
+	const state: DreamState = {};
+	const refused = await dreamBegin.execute({}, next, state);
+	assert.ok(!refused.ok && refused.error.code === "already_dreaming");
+	assert.equal(projectKey("/work/another", next.home), "another");
+	await createNotesStore(next).write("@project/live", "still writable");
+
+	assert.ok(child.kill("SIGKILL"));
+	assert.deepEqual(await exit, [null, "SIGKILL"]);
+	assert.ok((await dreamBegin.execute({}, next, state)).ok);
+	assert.equal((await createNotesStore(next).read("@project/live"))?.body, "still writable");
+	assert.ok((await dreamEnd.execute({}, next, state)).ok);
+});
+
 test("a notes-home lock prevents interleaved dream Git audits", async (t) => {
 	const { home, as } = fixture(t);
 	const alpha = as("alpha-session", "alpha"), beta = as("beta-session", "beta");
 	await createNotesStore(alpha).write("@project/note", "before alpha");
 	await createNotesStore(beta).write("@project/note", "before beta");
+	// A crashed project claim may leave a staged marker. Neither it nor the lock DB belongs in Git.
+	const staged = mkdtempSync(join(home, ".project-pending-"));
+	writeFileSync(join(staged, ".project"), "{}");
+	projectKey("/work/another", home);
 	const alphaState: DreamState = {}, betaState: DreamState = {};
 	const begun = await dreamBegin.execute({ project: "alpha" }, alpha, alphaState);
 	assert.ok(begun.ok);
@@ -264,6 +291,9 @@ test("a notes-home lock prevents interleaved dream Git audits", async (t) => {
 	const ended = await dreamEnd.execute({}, alpha, alphaState);
 	assert.ok(ended.ok && ended.data.commit !== undefined);
 	assert.notEqual(ended.data.commit, begun.data.baseline);
+	for (const commit of [begun.data.baseline, ended.data.commit]) {
+		assert.equal(execFileSync("git", ["ls-tree", "--name-only", commit], { cwd: home, encoding: "utf8" }), "project\n");
+	}
 	const changed = execFileSync("git", ["show", "--format=", "--name-only", ended.data.commit], { cwd: home, encoding: "utf8" });
 	assert.match(changed, /project\/alpha\/note\.md/);
 	assert.doesNotMatch(changed, /project\/beta\/note\.md/);

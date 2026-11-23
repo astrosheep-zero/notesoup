@@ -31,7 +31,7 @@ function fixture(t: TestContext) {
 }
 
 // Each participant imports the real built module and operates on the same disk.
-// Optional pauses widen publication/snapshot windows without faking fs outcomes.
+// Pause immediately before publication, with the real writer transaction held.
 const claimWorker = `
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -45,35 +45,25 @@ function wait(name) {
 		Atomics.wait(sleep, 0, 0, 5);
 	}
 }
-function paused() { fs.writeFileSync(join(control, "paused"), ""); wait("continue"); }
 if (pause) {
-	const mkdir = fs.mkdirSync, readdir = fs.readdirSync, read = fs.readFileSync;
-	fs.mkdirSync = function(path, ...args) {
-		const result = mkdir(path, ...args);
-		if (pause === "publication" && path === join(home, "project", "api")) paused();
-		return result;
-	};
-	fs.readdirSync = function(path, ...args) {
-		const result = readdir(path, ...args);
-		if (pause === "snapshot" && path === join(home, "project") && args.length === 0) paused();
-		return result;
-	};
-	fs.readFileSync = function(path, ...args) {
-		try { return read(path, ...args); } catch (error) {
-			if (path === join(home, "project", "api", ".project") && error.code === "ENOENT") fs.writeFileSync(join(control, "missing"), "");
-			throw error;
+	const rename = fs.renameSync;
+	fs.renameSync = function(from, to) {
+		if (to === join(home, "project", "api")) {
+			fs.writeFileSync(join(control, "paused"), "");
+			wait("continue");
 		}
+		return rename(from, to);
 	};
 	syncBuiltinESMExports();
 }
-const { projectKey } = await import(${JSON.stringify(new URL("../src/notes/project-namespace.js", import.meta.url).href)});
+const { projectKey, createNotesStore } = await import(${JSON.stringify(new URL("../src/notes/index.js", import.meta.url).href)});
 fs.writeFileSync(join(control, "ready"), "");
 wait("start");
 const key = projectKey(cwd, home);
-const dir = join(home, "project", key);
-const probe = join(dir, "probe-" + process.pid);
-fs.writeFileSync(probe, "usable");
-console.log(JSON.stringify({ key, marker: JSON.parse(fs.readFileSync(join(dir, ".project"), "utf8")), probe: fs.readFileSync(probe, "utf8") }));
+const notes = createNotesStore({ home, projectKey: key, sessionId: "session", agent: "test", model: "test" });
+const probe = "@project/probe-" + process.pid;
+await notes.write(probe, "usable");
+console.log(JSON.stringify({ key, marker: JSON.parse(fs.readFileSync(join(home, "project", key, ".project"), "utf8")), probe: (await notes.read(probe)).body }));
 `;
 
 async function waitForFile(path: string): Promise<void> {
@@ -97,6 +87,7 @@ function racer(t: TestContext, root: string, cwd: string, home: string, pause = 
 	});
 	return {
 		result,
+		kill: () => child.kill("SIGKILL"),
 		wait: (stage: string) => waitForFile(join(control, stage)),
 		release: (stage: string) => writeFileSync(join(control, stage), ""),
 	};
@@ -121,7 +112,6 @@ test("sixteen first claimants converge on one usable notebook for root and remot
 		assert.equal(new Set(keys).size, 1);
 		assert.deepEqual(readdirSync(join(home, "project")), [keys[0]]);
 		assert.equal(marker(keys[0]).id, remote ? "host/team/api" : cwd);
-		assert.equal(existsSync(join(home, ".project-claim")), false);
 	});
 });
 
@@ -137,68 +127,28 @@ test("different concurrent identities retain distinct suffixes", async t => {
 	assert.deepEqual(readdirSync(join(home, "project")).sort(), ["api", "api-1"]);
 });
 
-test("a claimant waits for another process between directory creation and marker publication", async t => {
+test("a killed claimant releases its transaction without publishing a partial notebook", async t => {
 	const { root, home, repo } = fixture(t);
 	const cwd = repo("api");
-	const first = racer(t, root, cwd, home, "publication");
-	await first.wait("ready"); first.release("start");
-	await first.wait("paused");
-	assert.equal(existsSync(join(home, "project/api/.project")), false);
-	const second = racer(t, root, cwd, home);
-	await second.wait("ready"); second.release("start");
-	await delay(100);
-	assert.deepEqual(readdirSync(join(home, "project")), ["api"]);
-	first.release("continue");
-	for (const result of await Promise.all([first.result, second.result])) {
-		assert.equal(result.code, 0, result.stderr);
-		assert.equal(JSON.parse(result.stdout).key, "api");
-	}
-});
+	const stable = repo("stable");
+	assert.equal(projectKey(stable, home), "stable");
+	const holder = racer(t, root, cwd, home, "publication");
+	await holder.wait("ready"); holder.release("start");
+	await holder.wait("paused");
 
-test("a directory appearing after the snapshot waits for its marker before adoption or suffixing", async t => {
-	for (const same of [true, false]) await t.test(same ? "adopt matching root as remote" : "suffix a different identity", async t => {
-		const { root, home, repo, marker } = fixture(t);
-		const cwd = repo("api", "https://host/team/api");
-		const worker = racer(t, root, cwd, home, "snapshot");
-		await worker.wait("ready"); worker.release("start");
-		await worker.wait("paused");
-		mkdirSync(join(home, "project/api"));
-		worker.release("continue");
-		await worker.wait("missing");
-		writeFileSync(join(home, "project/api/.project"), JSON.stringify({ id: same ? cwd : "host/other/api", path: "/old/root" }));
-		const result = await worker.result;
-		assert.equal(result.code, 0, result.stderr);
-		const key = same ? "api" : "api-1";
-		assert.equal(JSON.parse(result.stdout).key, key);
-		assert.deepEqual(marker(key), { id: "host/team/api", path: cwd });
-		if (!same) assert.deepEqual(marker("api"), { id: "host/other/api", path: "/old/root" });
-	});
-});
+	// An unchanged identity needs no writer lock. Another claimant cannot steal it.
+	assert.equal(projectKey(stable, home), "stable");
+	assert.throws(() => projectKey(cwd, home), /Timed out waiting for project claim/);
+	assert.deepEqual(readdirSync(join(home, "project")), ["stable"]);
 
-test("an unfinished claim times out without silently allocating another notebook", async t => {
-	const { root, home, repo } = fixture(t);
-	const worker = racer(t, root, repo("api"), home, "snapshot");
-	await worker.wait("ready"); worker.release("start");
-	await worker.wait("paused");
-	mkdirSync(join(home, "project/api"));
-	worker.release("continue");
-	const result = await worker.result;
-	assert.notEqual(result.code, 0);
-	assert.match(result.stderr, /Timed out waiting for project claim.*api/);
-	assert.deepEqual(readdirSync(join(home, "project")), ["api"]);
-	assert.equal(existsSync(join(home, ".project-claim")), false);
-});
-
-test("a stuck claim lock has a bounded timeout and is never stolen", async t => {
-	const { root, home, repo } = fixture(t);
-	mkdirSync(join(home, ".project-claim"), { recursive: true });
-	const worker = racer(t, root, repo("api"), home);
-	await worker.wait("ready"); worker.release("start");
-	const result = await worker.result;
-	assert.notEqual(result.code, 0);
-	assert.match(result.stderr, /Timed out waiting for project claim.*\.project-claim/);
-	assert.deepEqual(readdirSync(join(home, "project")), []);
-	assert.equal(existsSync(join(home, ".project-claim")), true);
+	assert.ok(holder.kill());
+	assert.equal((await holder.result).code, null);
+	const next = racer(t, root, cwd, home);
+	await next.wait("ready"); next.release("start");
+	const result = await next.result;
+	assert.equal(result.code, 0, result.stderr);
+	assert.deepEqual(JSON.parse(result.stdout), { key: "api", marker: { id: cwd, path: cwd }, probe: "usable" });
+	assert.deepEqual(readdirSync(join(home, "project")).sort(), ["api", "stable"]);
 });
 
 test("malformed marker evidence refuses instead of becoming an unmarked legacy notebook", t => {
@@ -210,7 +160,6 @@ test("malformed marker evidence refuses instead of becoming an unmarked legacy n
 		assert.throws(() => projectKey(cwd, home), /Invalid project marker.*api/);
 		assert.equal(readFileSync(join(home, "project/api/.project"), "utf8"), raw);
 		assert.deepEqual(readdirSync(join(home, "project")), ["api"]);
-		assert.equal(existsSync(join(home, ".project-claim")), false);
 	}
 });
 

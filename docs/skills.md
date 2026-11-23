@@ -18,10 +18,6 @@ One session dreams over one project at a time. New session notes record their pr
 
 ## The dream lock and Git audit
 
-`dream_begin` takes one exclusive `.dream.lock` for the whole notes home with a single O_CREAT|O_EXCL creation, then commits a baseline of that home to its Git repository (initialized on first use). The lock is home-wide, not per-project: concurrent dreams cannot interleave changes in the shared Git history. `dream_end` commits the dream's changes and releases the lock, so `git show` reviews a dream and `git revert` rolls it back. A session shutdown releases the lock without the final commit.
+`dream_begin` takes a SQLite writer transaction on `<home>/.dream.lock.sqlite` and commits a Git baseline. Only one dream can run per notes home, even across projects; competing dreams refuse immediately. This lock is separate from project claims and does not block ordinary note reads or writes. The baseline and end commits snapshot the whole home, so they can include ordinary edits made by other sessions as well as edits made by the dream.
 
-An existing lock refuses a new dream regardless of its age. If a Pi process crashed mid-dream, remove the stale lock by hand after confirming no dream is running:
-
-```sh
-rm "${NOTESOUP_HOME:-$HOME/.agents/notes}/.dream.lock"
-```
+`dream_end` commits and releases the lock. Session shutdown releases it without a final commit. If the process dies, the OS releases the lock; completed note edits stay on disk. Leave the SQLite file in place. Stop older processes sharing this home when upgrading: the old existence lock and the transaction lock do not coordinate.

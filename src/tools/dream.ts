@@ -1,17 +1,18 @@
 /** Dream operations: open one project's notes for consolidation, delete crumpled notes, close. */
+import { join } from "node:path";
 import { Type, type Static } from "typebox";
 import { localIso } from "../notes/frontmatter.js";
 import { createNotesStore, noteIdentity, type NoteRow, type NotesIdentity } from "../notes/index.js";
 import { projectNamespaces } from "../notes/project-namespace.js";
 import { gitCommit } from "../dream/git.js";
-import { acquireDreamLock, dreamLockPath, releaseDreamLock, type DreamLock } from "../dream/lock.js";
+import { trySqliteLock } from "../sqlite-lock.js";
 import { failure, success, type Outcome } from "../result.js";
 import { renderOutcome, resultSchema } from "./result.js";
 import { failureOf, listedFile, ListedFileSchema, NoteIdentitySchema, renderListData, snapshot, SnapshotSchema } from "./notes.js";
 
 /** The one open dream per session; the host owns where it lives. */
-type DreamOpening = { project: string; lock: DreamLock; generation: number };
-export type DreamState = { project?: string; lock?: DreamLock; pending?: DreamOpening; generation?: number };
+type DreamOpening = { project: string; release: () => void; generation: number };
+export type DreamState = { project?: string; release?: () => void; pending?: DreamOpening; generation?: number };
 
 function currentOpening(state: DreamState, opening: DreamOpening): boolean {
 	return state.pending === opening && state.generation === opening.generation;
@@ -25,19 +26,19 @@ function nextGeneration(state: DreamState): number {
 
 /** Drop an open dream without an end commit, e.g. when its session shuts down. */
 export function abandonDream(state: DreamState): void {
-	const pending = state.pending;
-	if (pending) releaseDreamLock(pending.lock);
-	if (state.lock && state.lock !== pending?.lock) releaseDreamLock(state.lock);
+	state.pending?.release();
+	state.release?.();
 	nextGeneration(state);
 	delete state.project;
-	delete state.lock;
+	delete state.release;
 	delete state.pending;
 }
 
 /** Release an opening without disturbing a newer opening in the same state. */
 function releaseOpening(state: DreamState, opening: DreamOpening): void {
-	releaseDreamLock(opening.lock);
-	if (currentOpening(state, opening)) delete state.pending;
+	if (!currentOpening(state, opening)) return;
+	opening.release();
+	delete state.pending;
 }
 
 function cancelledOpening(state: DreamState, opening: DreamOpening): Outcome<never> {
@@ -80,10 +81,10 @@ export const dreamBegin = {
 		if (project !== identity.projectKey && !projectNamespaces(identity.home).some(namespace => namespace.name === project)) {
 			return failure("not_found", `No project named ${JSON.stringify(project)}; notes_list with glob @projects/*/** shows the names.`);
 		}
-		const lock = acquireDreamLock(dreamLockPath(identity.home));
-		if (!lock) return failure("already_dreaming", `Another dream holds ${dreamLockPath(identity.home)}. If none is running, delete that file by hand.`);
-		// Publish ownership before the first await. Shutdown can therefore release this exact token.
-		const opening: DreamOpening = { project, lock, generation: nextGeneration(state) };
+		const release = trySqliteLock(join(identity.home, ".dream.lock.sqlite"), 0);
+		if (!release) return failure("already_dreaming", "Another dream is open in this notes home.");
+		// Publish ownership before the first await so shutdown can release this transaction.
+		const opening: DreamOpening = { project, release, generation: nextGeneration(state) };
 		state.pending = opening;
 		try {
 			const store = createNotesStore({ ...identity, dreaming: project });
@@ -111,7 +112,7 @@ export const dreamBegin = {
 			}
 			if (!currentOpening(state, opening)) return cancelledOpening(state, opening);
 			state.project = opening.project;
-			state.lock = opening.lock;
+			state.release = opening.release;
 			delete state.pending;
 			return success({ project, baseline: baseline.commit, ...listed.data });
 		} catch (error) {

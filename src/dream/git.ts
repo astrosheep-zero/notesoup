@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { errorMessage } from "../error-message.js";
 
@@ -9,18 +9,18 @@ export type AuditResult =
 	| { ok: false; error: string };
 
 /** Lock runtime artifacts are not notes and must not appear in snapshots or `git status`. */
-const RUNTIME_IGNORE = ".dream.lock*";
+const RUNTIME_IGNORE = ["/.dream.lock*", "/.project-claim.sqlite", "/.project-claim.sqlite-*", "/.project-pending-*/"];
 
-/** Add the runtime-artifact pattern to the repository's local exclude, once. */
+/** Install root-only excludes before staging; fail the audit rather than snapshot runtime files. */
 function ensureRuntimeIgnored(home: string): void {
-	try {
-		const exclude = join(home, ".git", "info", "exclude");
-		const current = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
-		if (current.split(/\r?\n/).includes(RUNTIME_IGNORE)) return;
-		mkdirSync(dirname(exclude), { recursive: true });
-		const prefix = current.length > 0 && !current.endsWith("\n") ? `${current}\n` : current;
-		writeFileSync(exclude, `${prefix}${RUNTIME_IGNORE}\n`);
-	} catch { /* best effort: an unignored lock only adds noise to the audit */ }
+	const exclude = join(home, ".git", "info", "exclude");
+	const current = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
+	const lines = new Set(current.split(/\r?\n/));
+	const missing = RUNTIME_IGNORE.filter(pattern => !lines.has(pattern));
+	if (!missing.length) return;
+	mkdirSync(dirname(exclude), { recursive: true });
+	const prefix = current.length && !current.endsWith("\n") ? "\n" : "";
+	appendFileSync(exclude, prefix + missing.join("\n") + "\n");
 }
 
 /** Snapshot at begin and end; a repository without HEAD gets an empty baseline commit. */

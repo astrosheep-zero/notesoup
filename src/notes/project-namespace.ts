@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
+import { trySqliteLock } from "../sqlite-lock.js";
 import { slugify } from "./paths.js";
 
 export type ProjectMarker = { id: string; path: string };
@@ -115,70 +116,47 @@ function updateMarker(namespace: ProjectNamespace, marker: ProjectMarker): Proje
 	return { ...namespace, ...marker };
 }
 
-const claimSleep = new Int32Array(new SharedArrayBuffer(4));
-
-function awaitClaim<T>(path: string, attempt: () => T | undefined): T {
-	const deadline = performance.now() + 5_000;
-	for (;;) {
-		const result = attempt();
-		if (result !== undefined) return result;
-		const remaining = deadline - performance.now();
-		if (remaining <= 0) throw new Error(`Timed out waiting for project claim at ${path}`);
-		Atomics.wait(claimSleep, 0, 0, Math.min(10, remaining));
-	}
+function checkoutMarker(cwd: string): ProjectMarker {
+	const path = canonicalRoot(cwd);
+	return { id: originRemote(path) ?? path, path };
 }
 
 /** Resolve and claim the readable notebook for one repository identity. */
 export function resolveProjectNamespace(cwd: string, home: string): ProjectNamespace {
-	mkdirSync(projectRoot(home), { recursive: true });
-	// Serialize the scan as well as publication: an unmarked directory seen under
-	// this lock is legacy, not another resolver between mkdir and marker write.
-	const lock = join(home, ".project-claim");
-	awaitClaim(lock, () => {
-		try { mkdirSync(lock); return true; } catch (error) {
-			if (errno(error) === "EEXIST") return undefined;
-			throw error;
-		}
-	});
-	try { return claimProjectNamespace(cwd, home); } finally { rmdirSync(lock); }
-}
+	const expected = checkoutMarker(cwd);
+	const current = projectNamespaces(home).find(candidate => candidate.id === expected.id);
+	if (current?.path === expected.path) return current;
 
-function claimProjectNamespace(cwd: string, home: string): ProjectNamespace {
-	const root = canonicalRoot(cwd);
-	const remote = originRemote(root);
-	const id = remote ?? root;
-	const markerRoot = projectRoot(home);
-	mkdirSync(markerRoot, { recursive: true });
-	const namespaces = projectNamespaces(home);
-	let found = namespaces.find(candidate => candidate.id === id);
-	if (!found && remote) {
-		found = namespaces.find(candidate => candidate.id === root);
-		if (found) found = updateMarker(found, { id: remote, path: root });
-	}
-	if (found) {
-		if (found.path !== root) found = updateMarker(found, { id: found.id, path: root });
-		return found;
-	}
+	const root = projectRoot(home);
+	mkdirSync(root, { recursive: true });
+	const lockPath = join(home, ".project-claim.sqlite");
+	const release = trySqliteLock(lockPath, 5000);
+	if (!release) throw new Error(`Timed out waiting for project claim at ${lockPath}`);
+	try {
+		// The checkout may have gained an origin and a peer may have already adopted it.
+		const marker = checkoutMarker(cwd);
+		const { id, path } = marker;
+		const namespaces = projectNamespaces(home);
+		const found = namespaces.find(candidate => candidate.id === id) ?? namespaces.find(candidate => candidate.id === path);
+		if (found) return found.id === id && found.path === path ? found : updateMarker(found, marker);
 
-	const base = slugify(basename(root));
-	// The claim lock makes this a stable snapshot of legacy, unmarked names.
-	const taken = new Set(readdirSync(markerRoot));
-	for (let suffix = 0; ; suffix++) {
-		const name = suffix === 0 ? base : `${base}-${suffix}`;
-		if (taken.has(name)) continue;
-		const dir = join(markerRoot, name);
-		try {
-			mkdirSync(dir);
-		} catch (error) {
-			if (errno(error) !== "EEXIST") throw error;
-			// A writer outside this protocol may have won after the snapshot.
-			// Never mistake its incomplete publication for a different identity.
-			let winner = awaitClaim(join(dir, ".project"), () => readMarker(dir));
-			if (winner.id !== id && !(remote && winner.id === root)) continue;
-			if (winner.id !== id || winner.path !== root) winner = updateMarker(winner, { id, path: root });
-			return winner;
+		const base = slugify(basename(path));
+		for (let suffix = 0; ; suffix++) {
+			const name = suffix === 0 ? base : `${base}-${suffix}`;
+			const dir = join(root, name);
+			if (lstatSync(dir, { throwIfNoEntry: false })) continue; // Includes unmarked legacy names.
+			const staged = mkdtempSync(join(home, ".project-pending-"));
+			try {
+				writeFileSync(join(staged, ".project"), JSON.stringify(marker));
+				renameSync(staged, dir);
+			} catch (error) {
+				rmSync(staged, { recursive: true, force: true });
+				throw error;
+			}
+			return { name, dir, ...marker };
 		}
-		return updateMarker({ name, dir, id, path: root }, { id, path: root });
+	} finally {
+		release();
 	}
 }
 

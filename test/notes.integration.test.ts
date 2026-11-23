@@ -48,7 +48,6 @@ for (const scanFails of [false, true]) {
 		const otherCtx = context(manager(), undefined, undefined, true, join(testEnvironment.cwd, "other-project"));
 		const other = notesIdentityFromPi(otherCtx);
 		assert.notEqual(other.projectKey, me.projectKey);
-		const lockPath = join(me.home, ".dream.lock");
 		const original = fs.readdir;
 		let enter!: () => void;
 		let release!: () => void;
@@ -69,21 +68,18 @@ for (const scanFails of [false, true]) {
 
 		const opening = call(captured, "dream_begin", {}, ctx);
 		await entered;
-		assert.ok(existsSync(lockPath), "begin acquired ownership before the controlled scan await");
+		assert.equal(resultError(await call(captured, "dream_begin", {}, otherCtx)).code, "already_dreaming");
 		assert.equal(resultError(await call(captured, "dream_begin", {}, ctx)).code, "already_dreaming");
 		await runHandlers(captured, "session_shutdown", { type: "session_shutdown" }, ctx);
-		assert.equal(existsSync(lockPath), false, "the registered shutdown handler releases pending ownership");
 		assert.equal(resultError(await call(captured, "dream_end", {}, ctx)).code, "not_dreaming");
 
 		const newer = resultData<DreamBeginData>(await call(captured, "dream_begin", {}, otherCtx));
 		assert.equal(newer.project, other.projectKey, "another project can immediately begin after shutdown");
-		const newerToken = readFileSync(lockPath, "utf8");
 		release();
 		assert.equal(resultError(await opening).code, "cancelled", "the stale opener cannot return success or resurrect state");
-		assert.equal(readFileSync(lockPath, "utf8"), newerToken, "stale cleanup cannot release the newer owner's token");
+		assert.equal(resultError(await call(captured, "dream_begin", {}, ctx)).code, "already_dreaming", "stale cleanup cannot unlock the newer dream");
 		assert.equal(resultError(await call(captured, "dream_end", {}, ctx)).code, "not_dreaming");
 		resultData(await call(captured, "dream_end", {}, otherCtx));
-		assert.equal(existsSync(lockPath), false);
 	});
 }
 
