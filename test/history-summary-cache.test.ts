@@ -144,7 +144,7 @@ test("search, roles, time filters and explicit sessions bypass the summary while
 	await historyList.execute({ session: "pi:*" }, ctx);
 	for (const query of ["", [], ["", ""]]) await historyList.execute({ session: "pi:*", query }, ctx);
 	assert.equal(reads.length, 1);
-	for (const filters of [{ roles: ["assistant"] as ["assistant"] }, { since: "2026-10-07" }, { until: "2026-10-07" }, { query: "later" }, { session: "pi:offline" }]) {
+	for (const filters of [{ roles: ["assistant"] as ["assistant"] }, { after: AT }, { before: "2026-10-07" }, { query: "later" }, { session: "pi:offline" }]) {
 		const before = reads.length;
 		const params = { session: "pi:*", ...filters };
 		const result = await historyList.execute(params, ctx);
@@ -152,8 +152,8 @@ test("search, roles, time filters and explicit sessions bypass the summary while
 		const plain: HistoryContext = { current: () => projection("live"), corpus: { currentHarness: "dsh", sessions: async (harness) => (await f.corpus().sessions(harness)).map(({ loadRepresentative: _cache, ...session }) => session) } };
 		assert.deepEqual(result, await historyList.execute(params, plain));
 	}
-	assert.equal(data(await historyList.execute({ session: "pi:*", since: "2026-10-07" }, ctx)).items.length, 1);
-	assert.equal(data(await historyList.execute({ session: "pi:*", until: AT }, ctx)).items.length, 0, "until is exclusive");
+	assert.equal(data(await historyList.execute({ session: "pi:*", after: AT }, ctx)).items.length, 1);
+	assert.equal(data(await historyList.execute({ session: "pi:*", before: AT }, ctx)).items.length, 0, "before is exclusive");
 });
 
 test("corrupt cache/schema and unwritable roots fall back; a warm cache cannot hide malformed or unsupported transcripts", async (t) => {

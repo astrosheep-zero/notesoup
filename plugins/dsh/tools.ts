@@ -4,7 +4,7 @@ import { HarnessError } from "@deepseek-ai/dsh-llm";
 import { defineTool, type JsonSchemaNode, type ObjectJsonSchema, type ToolRunContext } from "@deepseek-ai/dsh-tools";
 import type { Static, TSchema } from "typebox";
 import { Check, Errors } from "typebox/value";
-import { notesList, notesRead, notesSearch, notesUpdate, notesWrite } from "../../src/tools/notes.js";
+import { notesList, notesRead, notesUpdate, notesWrite } from "../../src/tools/notes.js";
 import { historyList, historyRead } from "../../src/tools/history.js";
 import { success } from "../../src/result.js";
 import type { Operation } from "../../src/tools/result.js";
@@ -75,7 +75,6 @@ export function registerTools(ctx: Context, engine: NotesoupCompactionEngine): v
 	register(ctx, notesUpdate, (agent) => [toolContext(agent)] as const);
 	register(ctx, notesRead, (agent) => [toolContext(agent)] as const);
 	register(ctx, notesList, (agent) => [toolContext(agent)] as const);
-	register(ctx, notesSearch, (agent) => [toolContext(agent)] as const);
 	register(ctx, historyList, (agent) => [historyContext(ctx, agent.session.id)] as const);
 	register(ctx, historyRead, (agent) => [historyContext(ctx, agent.session.id)] as const);
 	ctx.tools.register(defineTool({

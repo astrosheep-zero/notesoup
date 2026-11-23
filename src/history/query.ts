@@ -1,11 +1,11 @@
 /** Stable-anchor paging, folding and literal matching. The operation supplies the full-response budget check. */
 import { Type, type Static } from "typebox";
-import { failure, success, type Outcome } from "../result.js";
-import { earliestMatchOffsetChars, InvalidQueryError, prefixFit, searchQueries } from "../text-match.js";
-import { eventDocument, filteredItems, visibleItem, HistoryFoldedRowSchema, HistoryPageItemSchema, MAX_FOLD_TOOL_NAMES, MAX_FOLD_TOOL_NAME_CHARS, type HistoryEvent, type HistoryFilter, type HistoryFoldedRow, type HistoryPageItem, type HistoryProjection } from "./history.js";
+import { success, type Outcome } from "../result.js";
+import { earliestMatchOffsetChars, prefixFit } from "../text-match.js";
+import { eventDocument, filteredItems, matchesFilter, visibleItem, HistoryFoldedRowSchema, HistoryPageItemSchema, MAX_FOLD_TOOL_NAMES, MAX_FOLD_TOOL_NAME_CHARS, type HistoryEvent, type HistoryFilter, type HistoryFoldedRow, type HistoryPageItem, type HistoryProjection } from "./history.js";
 
-type Candidate = { event: HistoryEvent; session?: string; matchOffset?: number; preview?: HistoryPageItem; before?: HistoryFoldedRow };
-type PreparedSelection = { candidates: Candidate[]; tail?: HistoryFoldedRow; session?: string; multi?: boolean; discarded?: boolean; from?: HistoryOrder };
+type Candidate = { event: HistoryEvent; session?: string; matchOffset?: number; preview?: HistoryPageItem; before?: HistoryFoldedRow; neighbors?: { events: HistoryEvent[]; index: number } };
+type PreparedSelection = { candidates: Candidate[]; tail?: HistoryFoldedRow; multi?: boolean; discarded?: boolean; forward?: boolean };
 const multiPages = new WeakSet<HistoryPage>();
 export function isMultiPage(page: HistoryPage): boolean { return multiPages.has(page); }
 export function markMultiPage(page: HistoryPage): HistoryPage {
@@ -13,46 +13,7 @@ export function markMultiPage(page: HistoryPage): HistoryPage {
 	return page;
 }
 
-/** Which end of one selection `limit` is taken from; page items always come back ascending. */
-export type HistoryOrder = "newest" | "oldest";
-
-/**
- * What one list call selects. `before_seq`/`after_seq` choose a seq range and `since`/`until` a time
- * range; `from` chooses the end `limit` counts from; a `query` keeps only matching events, across
- * every role, with no folded rows.
- */
-export type HistorySelection = HistoryFilter & {
-	session?: string;
-	from?: HistoryOrder;
-	limit?: number;
-	query?: string | string[];
-	since?: string;
-	until?: string;
-	max_chars_per_item?: number;
-};
-
-/** ISO 8601 date or date-time; the offset is optional (group 1) and a missing one is read as UTC. */
-const ISO_8601 = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?(Z|[+-]\d{2}:?\d{2})?$/;
-
-/** Epoch ms for one optional time param, or a refusal naming it. */
-function timeBound(name: "since" | "until", value: string | undefined): Outcome<number | undefined> {
-	if (value === undefined) return success(undefined);
-	const match = ISO_8601.exec(value);
-	const at = match === null ? undefined : Date.parse(match[1] === undefined ? `${value}Z` : value);
-	return at === undefined || Number.isNaN(at) ? failure("invalid_time", `\`${name}\` isn't an ISO 8601 time: "${value}".`) : success(at);
-}
-
-/** Parse `since`/`until`; a malformed or inverted pair refuses here. */
-function resolveTimeBounds(params: HistorySelection): Outcome<{ sinceMs?: number; untilMs?: number }> {
-	const since = timeBound("since", params.since);
-	if (!since.ok) return since;
-	const until = timeBound("until", params.until);
-	if (!until.ok) return until;
-	if (since.data !== undefined && until.data !== undefined && since.data >= until.data) {
-		return failure("invalid_time", "`since` must be earlier than `until`.");
-	}
-	return success({ ...(since.data === undefined ? {} : { sinceMs: since.data }), ...(until.data === undefined ? {} : { untilMs: until.data }) });
-}
+export type HistorySelection = HistoryFilter & { session?: string; limit?: number; query?: string[]; context?: number };
 
 export const HistoryPageSchema = Type.Object({
 	notice: Type.Optional(Type.String()),
@@ -97,24 +58,32 @@ function foldedRun(events: HistoryEvent[], session?: string): HistoryFoldedRow |
 	return { ...(session === undefined ? {} : { session }), first_seq: events[0]!.seq, last_seq: events.at(-1)!.seq, count: events.length, tools };
 }
 
-/** Filter and order once. Conversation candidates own the folded gap immediately before them. */
+// Tool/thinking-only envelopes are not dialogue, even with explicit roles.
+const visible = (event: HistoryEvent) => (event.role !== "user" && event.role !== "assistant") || eventDocument(event) !== "";
+
+function* queryHits(projection: HistoryProjection, params: HistorySelection, session?: string): Generator<Candidate> {
+	const { query, context } = params;
+	const events = filteredItems(projection, context ? {} : params).filter(visible);
+	for (const [index, event] of events.entries()) {
+		if (context && !matchesFilter(event, params)) continue;
+		const matchOffset = earliestMatchOffsetChars(eventDocument(event), query!);
+		if (matchOffset >= 0) yield { event, session, matchOffset, neighbors: context ? { events, index } : undefined };
+	}
+}
+
 function prepareSelection(projection: HistoryProjection, params: HistorySelection): PreparedSelection {
-	const folds = !params.roles && params.query === undefined;
+	const { query, roles, session } = params;
+	if (query) return { candidates: [...queryHits(projection, params, session)] };
 	const candidates: Candidate[] = [];
 	let run: HistoryEvent[] = [];
-	for (const event of filteredItems(projection, params)) {
-		if (folds && (event.role === "tool" || event.role === "context")) {
-			run.push(event);
-			continue;
+	for (const event of filteredItems(projection, params).filter(visible)) {
+		if (!roles && (event.role === "tool" || event.role === "context")) run.push(event);
+		else {
+			candidates.push({ event, session, before: foldedRun(run, session) });
+			run = [];
 		}
-		// Tool/thinking-only envelopes are not dialogue, even with explicit roles.
-		if ((event.role === "user" || event.role === "assistant") && eventDocument(event) === "") continue;
-		const matchOffset = params.query === undefined ? undefined : earliestMatchOffsetChars(eventDocument(event), params.query as string[]);
-		if (matchOffset !== undefined && matchOffset < 0) continue;
-		candidates.push({ event, ...(params.session === undefined ? {} : { session: params.session }), matchOffset, before: foldedRun(run, params.session) });
-		run = [];
 	}
-	return { candidates, session: params.session, tail: foldedRun(run, params.session) };
+	return { candidates, tail: foldedRun(run, session) };
 }
 
 /** Assemble only the admitted interval. Edge folds belong only to a page reaching that edge. */
@@ -129,52 +98,56 @@ function pageData(prepared: PreparedSelection, start: number, end: number, maxCh
 	const page = {
 		items,
 		...(end === candidates.length && tail ? { folded_after: tail } : {}),
-		has_older: (start > 0 && start < end) || (!!prepared.discarded && prepared.from !== "oldest"),
-		has_newer: (end < candidates.length && start < end) || (!!prepared.discarded && prepared.from === "oldest"),
+		has_older: (start > 0 && start < end) || (!!prepared.discarded && !prepared.forward),
+		has_newer: (end < candidates.length && start < end) || (!!prepared.discarded && !!prepared.forward),
 	};
 	return prepared.multi ? markMultiPage(page) : page;
 }
 
-/**
- * Resolve the time bounds once, then filter and fold against the same [sinceMs, untilMs) window.
- * Grow the page in selection order; shorten the first preview only when no full row fits.
- */
-function resolveSelection(params: HistorySelection): Outcome<HistorySelection> {
-	const bounds = resolveTimeBounds(params);
-	if (!bounds.ok) return bounds;
-	try {
-		const queries = searchQueries(params.query);
-		return success({ ...params, ...bounds.data, query: queries.length ? queries : undefined });
-	} catch (error) {
-		if (error instanceof InvalidQueryError) return failure("invalid_query", error.message);
-		throw error;
-	}
-}
-
 export function selectPage(projection: HistoryProjection, params: HistorySelection, fits: (page: HistoryPage) => boolean, maxChars: number): HistoryPageResult {
-	const scoped = resolveSelection(params);
-	if (!scoped.ok) return scoped;
-	return selectPrepared(prepareSelection(projection, scoped.data), scoped.data, fits, maxChars);
-}
-
-/** Validate before corpus discovery or I/O: per-session seqs cannot bound a multi-session search. */
-export function corpusSelection(params: HistorySelection): Outcome<HistorySelection> {
-	if (params.before_seq !== undefined || params.after_seq !== undefined) return failure("invalid_bounds", "`before_seq` and `after_seq` are per-session; omit them for wildcard session search.");
-	return resolveSelection(params);
+	return selectPrepared(prepareSelection(projection, params), params, fits, maxChars);
 }
 
 /** One topic per session, after role/time filtering; empty dialogue envelopes are not visible. */
 export function sessionRepresentative(projection: HistoryProjection, scoped: HistorySelection): HistoryEvent | undefined {
-	const events = filteredItems(projection, scoped).filter((event) =>
-		(event.role !== "user" && event.role !== "assistant") || eventDocument(event) !== "");
+	const events = filteredItems(projection, scoped).filter(visible);
 	if (scoped.roles) return events.at(-1);
 	return events.find((event) => event.role === "user")
 		?? events.filter((event) => event.role === "assistant").at(-1)
 		?? events.at(-1);
 }
 
-const eventTime = (event: HistoryEvent) => event.createdAt === undefined || Number.isNaN(Date.parse(event.createdAt)) ? -Infinity : Date.parse(event.createdAt);
-const compareCorpus = (a: Candidate, b: Candidate) => eventTime(a.event) - eventTime(b.event) || a.session!.localeCompare(b.session!) || a.event.seq - b.event.seq;
+function eventTime(timestamp?: string | null): number {
+	const at = Date.parse(timestamp ?? "");
+	return Number.isNaN(at) ? -Infinity : at;
+}
+const compareCorpus = (a: Candidate, b: Candidate) => eventTime(a.event.createdAt) - eventTime(b.event.createdAt) || a.session!.localeCompare(b.session!) || a.event.seq - b.event.seq;
+
+/** Fill the remaining budget nearest first. Shared session/seq keys merge overlapping windows. */
+function addContext(page: HistoryPage, hits: Candidate[], radius: number, fits: (page: HistoryPage) => boolean, maxChars: number): void {
+	const key = (session: string | undefined, seq: number) => `${session ?? ""}\0${seq}`;
+	const seen = new Set(page.items.map(item => key(item.session, item.seq)));
+	const compare = (a: HistoryPageItem, b: HistoryPageItem) => (isMultiPage(page) ? eventTime(a.created_at) - eventTime(b.created_at) || a.session!.localeCompare(b.session!) : 0) || a.seq - b.seq;
+	for (let distance = 1; distance <= radius; distance++) {
+		let found = false;
+		for (const { neighbors, session } of hits) {
+			if (!neighbors) continue;
+			for (const index of [neighbors.index - distance, neighbors.index + distance]) {
+				const event = neighbors.events[index];
+				if (!event) continue;
+				found = true;
+				const id = key(session, event.seq);
+				if (seen.has(id)) continue;
+				const item: HistoryPageItem = { ...visibleItem(event, maxChars), ...(session === undefined ? {} : { session }), context: true };
+				const previous = page.items;
+				page.items = [...previous, item].sort(compare);
+				if (!fits(page)) { page.items = previous; return; }
+				seen.add(id);
+			}
+		}
+		if (!found) return;
+	}
+}
 
 /** Keep only the requested end of the globally ordered selection while sessions are released. */
 export class CorpusCollector {
@@ -195,7 +168,7 @@ export class CorpusCollector {
 		}
 		if (this.candidates.length === this.limit) {
 			this.discarded = true;
-			if (this.scoped.from === "oldest") {
+			if (this.scoped.after) {
 				if (low === this.limit) return;
 				this.candidates.pop();
 			} else {
@@ -217,25 +190,19 @@ export class CorpusCollector {
 	/** Returns whether this session contributes an overview representative. */
 	add(session: string, projection: HistoryProjection): boolean {
 		if (this.scoped.query === undefined) return this.addRepresentative(session, sessionRepresentative(projection, this.scoped));
-		for (const event of filteredItems(projection, this.scoped)) {
-			const document = eventDocument(event);
-			if ((event.role === "user" || event.role === "assistant") && document === "") continue;
-			const matchOffset = earliestMatchOffsetChars(document, this.scoped.query as string[]);
-			if (matchOffset >= 0) this.admit({ session, event, matchOffset });
-		}
+		for (const hit of queryHits(projection, this.scoped, session)) this.admit(hit);
 		return true;
 	}
 
 	page(fits: (page: HistoryPage) => boolean, maxChars: number, unvisited = false): HistoryPageResult {
-		return selectPrepared({ candidates: this.candidates, multi: true, discarded: this.discarded || unvisited, from: this.scoped.from }, this.scoped, fits, maxChars);
+		return selectPrepared({ candidates: this.candidates, multi: true, discarded: this.discarded || unvisited, forward: !!this.scoped.after }, this.scoped, fits, maxChars);
 	}
 }
 
 function selectPrepared(prepared: PreparedSelection, scoped: HistorySelection, fits: (page: HistoryPage) => boolean, maxChars: number): HistoryPageResult {
 	const { candidates } = prepared;
 	// Grow a contiguous interval from the requested end; even a byte-limited newest page stays ascending.
-	const from = scoped.from ?? (scoped.after_seq !== undefined ? "oldest" : "newest");
-	const newest = from === "newest";
+	const newest = scoped.after === undefined;
 	let start = newest ? candidates.length : 0;
 	let end = start;
 	const limit = Math.max(1, scoped.limit ?? 20);
@@ -257,5 +224,6 @@ function selectPrepared(prepared: PreparedSelection, scoped: HistorySelection, f
 	}
 	const page = pageData(prepared, start, end, maxChars);
 	if (!fits(page)) return { ok: false, pageTooLarge: { count: page.items.length, multi: prepared.multi === true } };
+	if (scoped.context) addContext(page, candidates.slice(start, end), scoped.context, fits, maxChars);
 	return success(page);
 }

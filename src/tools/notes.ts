@@ -10,7 +10,7 @@ import { TOOL_OUTPUT_LIMIT } from "./output.js";
 import { failure, success, type Outcome } from "../result.js";
 import { InvalidQueryError, prefixFit, searchQueries } from "../text-match.js";
 import { fitsResult, resultSchema, readTextWindow, renderOutcome, renderTextWindow, structuredBytes, TextWindowRequestSchema, TextWindowSchema } from "./result.js";
-import { nullableString, searchQuery } from "./schema.js";
+import { searchQuery } from "./schema.js";
 import { notesIdentityForCall, type NotesToolContext } from "./notes-context.js";
 
 const ORIGIN_VALUES = [Type.Literal("user"), Type.Literal("self"), Type.Literal("external")] as const;
@@ -39,7 +39,7 @@ function withWarnings(text: string, data: { warnings: string[] }): string {
 const CRUMPLED_PARAMETER = Type.Optional(Type.Boolean({ description: "`true` balls the page up: gone from list and search, still readable. `false` smooths it flat again." }));
 const CRUMPLED_LIST_PARAMETER = Type.Optional(Type.Boolean({ description: "Only the crumpled balls." }));
 const FILE_LIMIT_PARAMETER = Type.Optional(Type.Integer({ minimum: 1, description: "How many pages at most." }));
-const GLOB_PARAMETER = nullableString("Which drawers to open. Leave it out for this session and your current notebooks. `@project/**` one shelf · `MAP.md` that page in every notebook · `**` everything · `@sessions/*/**` every session.");
+const GLOB_PARAMETER = Type.Optional(Type.String({ minLength: 1, description: "Which drawers to open. Leave it out for this session and your current notebooks. `@project/**` one shelf · `MAP.md` that page in every notebook · `**` everything · `@sessions/*/**` every session." }));
 const CWD_PARAMETER = Type.Optional(Type.String({ minLength: 1, description: "Treat this directory's project as `@project/`." }));
 const ADDRESS_PARAMETER = Type.String({ description: "Which drawer the page sits in. `plan.md` — this session's desk, cleared when it ends. `@project/` this project's shelf · `@human/` your human's file · `@self/` your own notebook · `@model/` your brain's. `@projects/<name>/`, `@sessions/<id>/`, `@agents/<name>/`, `@models/<name>/` — someone else's shelf: read only. Paper, not files: hand one to read/write/edit/bash and a real `@project` folder is born." });
 
@@ -155,11 +155,6 @@ const MatchSchema = Type.Object({
 	offset_chars: Type.Integer(),
 }, { additionalProperties: false });
 
-const SearchedFileSchema = Type.Object({
-	...ListedFileSchema.properties,
-	matches: Type.Array(MatchSchema), more_matches: Type.Optional(Type.Integer({ minimum: 1 })),
-}, { additionalProperties: false });
-
 export const SnapshotSchema = {
 	more: Type.Integer({ description: "How many more were left out." }),
 	namespaces_unavailable: Type.Array(Type.String(), { description: "Unreadable notebooks or notes." }),
@@ -191,16 +186,15 @@ export const NotesReadDataSchema = Type.Object({
 export type NotesReadData = Static<typeof NotesReadDataSchema>;
 
 export const NotesListDataSchema = Type.Object({
-	files: Type.Array(ListedFileSchema),
+	files: Type.Array(Type.Object({
+		...ListedFileSchema.properties,
+		matches: Type.Optional(Type.Array(MatchSchema)), more_matches: Type.Optional(Type.Integer({ minimum: 1 })),
+	}, { additionalProperties: false })),
 	...SnapshotSchema,
 }, { additionalProperties: false });
 export type NotesListData = Static<typeof NotesListDataSchema>;
-
-export const NotesSearchDataSchema = Type.Object({
-	files: Type.Array(SearchedFileSchema),
-	...SnapshotSchema,
-}, { additionalProperties: false });
-export type NotesSearchData = Static<typeof NotesSearchDataSchema>;
+type ListedFile = Static<typeof ListedFileSchema>;
+type SearchFile = ListedFile & { matches: Static<typeof MatchSchema>[]; more_matches?: number };
 
 type Snapshot<T> = Omit<NotesListData, "files"> & { files: T[] };
 
@@ -232,7 +226,7 @@ export function snapshot<T extends { address: string }>(
 	return fitsResult(outcome, render) ? outcome : failure("output_too_large", `The list of unreachable notebooks is itself over ${TOOL_OUTPUT_LIMIT}; narrow \`glob\` to fewer notebooks.`);
 }
 
-export function listedFile(row: Pick<NoteRow, "address" | "meta"> & { body?: string; warnings?: string[] }, identity: NotesIdentity): NotesListData["files"][number] {
+export function listedFile(row: Pick<NoteRow, "address" | "meta"> & { body?: string; warnings?: string[] }, identity: NotesIdentity): ListedFile {
 	const policy = policyAt(row.meta, row.address);
 	return { ...noteIdentity(identity, row.address), ...policy, warnings: row.warnings ?? (row.body === undefined ? [] : noteBudgetWarnings(row.body, policy)), updated_at: localIso(row.meta.updatedAt), ...(row.meta.crumpledAt === undefined ? {} : { crumpled_at: row.meta.crumpledAt }) };
 }
@@ -321,48 +315,31 @@ export const notesRead = {
 	render: (result: Outcome<NotesReadData>): string => renderOutcome(result, renderReadData),
 } as const;
 
-export const notesListParameters = Type.Object({ glob: GLOB_PARAMETER, limit: FILE_LIMIT_PARAMETER, crumpled: CRUMPLED_LIST_PARAMETER, cwd: CWD_PARAMETER }, { additionalProperties: false });
+export const notesListParameters = Type.Object({
+	glob: GLOB_PARAMETER,
+	query: Type.Optional(searchQuery()),
+	max_matches_per_file: Type.Optional(Type.Integer({ minimum: 1, description: "How many hit lines per note at most; requires a query." })),
+	crumpled: CRUMPLED_LIST_PARAMETER,
+	limit: FILE_LIMIT_PARAMETER,
+	cwd: CWD_PARAMETER,
+}, { additionalProperties: false });
 
 export function renderListData(data: Snapshot<NotesListData["files"][number] & { last_accessed?: string }>): string {
 	const lines = [`${data.files.length} ${data.files.length === 1 ? "note" : "notes"}`];
 	for (const file of data.files) {
-		lines.push(`- ${renderIdentity(file)} | ${renderPolicy(file)} | updated ${file.updated_at}${file.last_accessed === undefined ? "" : ` | accessed ${file.last_accessed}`}${file.crumpled_at === undefined ? "" : ` | crumpled ${file.crumpled_at}`}`);
+		const fields = [`- ${renderIdentity(file)}`, renderPolicy(file), `updated ${file.updated_at}`];
+		if (file.last_accessed !== undefined) fields.push(`accessed ${file.last_accessed}`);
+		if (file.crumpled_at !== undefined) fields.push(`crumpled ${file.crumpled_at}`);
+		if (file.matches) fields.push(`${file.matches.length} ${file.matches.length === 1 ? "match" : "matches"}${file.more_matches ? `, ${file.more_matches} more lines` : ""}`);
+		lines.push(fields.join(" | "));
 		lines.push(...file.warnings.map(warning => `  ${warning}`));
+		for (const match of file.matches ?? []) lines.push(`  line ${match.line} at offset_chars ${match.offset_chars}: ${match.text}`);
 	}
 	if (data.more > 0) lines.push(`${data.more} more matching notes omitted; narrow with glob`);
 	for (const namespace of data.namespaces_unavailable) lines.push(`${namespace} could not be read`);
 	return lines.join("\n");
 }
 
-export const notesList = {
-	name: "notes_list", label: "Notes list",
-	description: "Leaf through the drawers, newest pages on top. One pass; `more` counts pages left on the pile — narrow `glob`.",
-	parameters: notesListParameters, outputSchema: resultSchema(NotesListDataSchema),
-	async execute(params: Static<typeof notesListParameters>, context: NotesToolContext): Promise<Outcome<NotesListData>> {
-		try {
-			const identity = notesIdentityForCall(context, params.cwd);
-			const { rows, status } = await createNotesStore(identity).listWithStatus({ glob: params.glob ?? undefined, crumpled: params.crumpled });
-			return snapshot(rows.map(row => listedFile(row, identity)), params.limit, status, renderListData);
-		} catch (error) { return failureOf(error); }
-	},
-	render: (result: Outcome<NotesListData>): string => renderOutcome(result, renderListData),
-} as const;
-
-export const notesSearchParameters = Type.Object({ query: Type.Optional(searchQuery()), glob: GLOB_PARAMETER, limit: FILE_LIMIT_PARAMETER, max_matches_per_file: Type.Optional(Type.Integer({ minimum: 1, description: "How many hit lines per page at most." })), crumpled: CRUMPLED_LIST_PARAMETER, cwd: CWD_PARAMETER }, { additionalProperties: false });
-
-function renderSearchData(data: NotesSearchData): string {
-	const lines = [`${data.files.length} ${data.files.length === 1 ? "note" : "notes"}`];
-	for (const file of data.files) {
-		lines.push(`- ${renderIdentity(file)} | ${renderPolicy(file)} | updated ${file.updated_at} | ${file.matches.length} ${file.matches.length === 1 ? "match" : "matches"}${file.more_matches ? `, ${file.more_matches} more lines` : ""}`);
-		lines.push(...file.warnings.map(warning => `  ${warning}`));
-		for (const match of file.matches) lines.push(`  line ${match.line} at offset_chars ${match.offset_chars}: ${match.text}`);
-	}
-	if (data.more > 0) lines.push(`${data.more} more matching notes omitted; narrow with glob`);
-	for (const namespace of data.namespaces_unavailable) lines.push(`${namespace} could not be read`);
-	return lines.join("\n");
-}
-
-type SearchFile = NotesSearchData["files"][number];
 function keepMatches(file: SearchFile, count = file.matches.length): SearchFile {
 	const more = (file.more_matches ?? 0) + Math.max(0, file.matches.length - count);
 	return { ...file, matches: file.matches.slice(0, count), ...(more ? { more_matches: more } : {}) };
@@ -386,20 +363,28 @@ function fitSearchFile(file: SearchFile, fits: (candidate: SearchFile) => boolea
 	return withText(prefixFit(first.text, text => fits(withText(text))));
 }
 
-export const notesSearch = {
-	name: "notes_search", label: "Notes search",
-	description: "Run a finger down every page for some text, case doesn't matter. Returns the lines it hits and where they sit; no query just lists the pages. One pass; `more` counts pages left on the pile — narrow `glob`.",
-	parameters: notesSearchParameters, outputSchema: resultSchema(NotesSearchDataSchema),
-	async execute(params: Static<typeof notesSearchParameters>, context: NotesToolContext): Promise<Outcome<NotesSearchData>> {
+export const notesList = {
+	name: "notes_list", label: "Notes list",
+	description: "List or search notes, newest pages on top. A query matches literal text (ignoring case) and returns hit lines and read offsets. One pass; `more` counts pages left on the pile — narrow `glob`.",
+	parameters: notesListParameters, outputSchema: resultSchema(NotesListDataSchema),
+	async execute(params: Static<typeof notesListParameters>, context: NotesToolContext): Promise<Outcome<NotesListData>> {
 		try {
+			const queries = searchQueries(params.query);
+			const { glob, crumpled, limit } = params;
+			if (!queries.length && params.max_matches_per_file !== undefined) return failure("invalid_params", "`max_matches_per_file` requires a non-empty `query`.");
 			const identity = notesIdentityForCall(context, params.cwd);
-			const { rows, status } = await createNotesStore(identity).searchWithStatus(searchQueries(params.query), { glob: params.glob ?? undefined, crumpled: params.crumpled });
+			const store = createNotesStore(identity);
+			if (!queries.length) {
+				const { rows, status } = await store.listWithStatus({ glob, crumpled });
+				return snapshot(rows.map(row => listedFile(row, identity)), limit, status, renderListData);
+			}
+			const { rows, status } = await store.searchWithStatus(queries, { glob, crumpled });
 			const files = rows.sort((a, b) => b.meta.updatedAt - a.meta.updatedAt || a.address.localeCompare(b.address)).map(row => keepMatches({
 				...listedFile(row, identity),
 				matches: row.matches.map(match => ({ line: match.line, text: match.text, offset_chars: match.offsetChars })),
 			}, params.max_matches_per_file));
-			return snapshot(files, params.limit, status, renderSearchData, fitSearchFile);
+			return snapshot(files, limit, status, renderListData, fitSearchFile);
 		} catch (error) { return failureOf(error); }
 	},
-	render: (result: Outcome<NotesSearchData>): string => renderOutcome(result, renderSearchData),
+	render: (result: Outcome<NotesListData>): string => renderOutcome(result, renderListData),
 } as const;

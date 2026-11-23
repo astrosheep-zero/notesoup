@@ -110,7 +110,7 @@ test("Claude dialogue paging skips tool/thinking envelopes without losing array 
 		compact("boundary", "last"), row("boot", "boundary", "user", bootText(1))];
 	const projection = project(rows, "boot");
 	assert.equal(projection.highestSeq, 10);
-	const listed = await historyList.execute({ before_seq: 9, roles: ["user", "assistant"], limit: 3 }, projection);
+	const listed = await historyList.execute({ before: 9, roles: ["user", "assistant"], limit: 3 }, projection);
 	assert.ok(listed.ok);
 	assert.deepEqual(listed.data.items.map((item) => "seq" in item ? [item.seq, item.content] : []), [[1, "human question"], [2, "assistant answer"], [8, "human followup"]]);
 	const read = await historyRead.execute({ seq: 2 }, projection);
@@ -210,7 +210,7 @@ test("Claude native compaction and reset keep pre-reset history, preserved rewri
 	assert.equal(allItems(projection).find((event) => event.text === "before first reset")?.windowId, `claude:${sessionId}:0`);
 	assert.equal(allItems(projection).find((event) => event.text === "after first reset")?.windowId, `claude:${sessionId}:1`);
 	assert.equal(projection.highestSeq, 8);
-	const earlier = await historyList.execute({ after_seq: 4, before_seq: 6, roles: ["assistant"] }, projection);
+	const earlier = await historyList.execute({ after: 4, before: 6, roles: ["assistant"] }, projection);
 	assert.ok(earlier.ok);
 	assert.deepEqual(earlier.data.items.map((item) => "content" in item ? item.content : ""), ["after first reset"]);
 	assert.equal(projection.windows[0]?.items[0]?.seq, 1);
@@ -225,7 +225,7 @@ test("Claude reset crosses native turn_duration graph metadata with no message c
 	assert.equal(projection.highestSeq, 5, "duration metadata does not allocate a message address");
 	assert.equal(projection.windows.length, 2);
 	assert.ok(allItems(projection).some((event) => event.text === "marker before reset"));
-	assert.ok((await historyList.execute({ before_seq: 3 }, projection)).ok);
+	assert.ok((await historyList.execute({ before: 3 }, projection)).ok);
 	assert.ok((await historyRead.execute({ seq: 2 }, projection)).ok);
 });
 
@@ -244,7 +244,7 @@ test("Claude api_error retry metadata keeps compact ancestry without allocating 
 	assert.deepEqual(project([...prefix, { ...rows[3]!, logicalParentUuid: "old" }, ...rows.slice(4)], "after"), projection, "metadata leaves all addresses and windows unchanged");
 	assert.doesNotMatch(allItems(projection).map(eventDocument).join("\n"), /PRIVATE_RETRY_PAYLOAD|ECONNRESET|request_retry/);
 	assert.ok((await historyList.execute({}, projection)).ok);
-	const earlier = await historyList.execute({ before_seq: 3 }, projection);
+	const earlier = await historyList.execute({ before: 3 }, projection);
 	assert.ok(earlier.ok);
 	assert.match(JSON.stringify(earlier), /before retry|finished turn/);
 	assert.ok((await historyRead.execute({ seq: 2 }, projection)).ok);
@@ -346,7 +346,6 @@ test("Claude helper reports gaps on list/read and re-anchors reset state only wi
 	assert.equal(excluded.ok, false);
 	assert.match(excluded.text, /outside the confirmed selected history/);
 	await assert.rejects(invoke("history_list", { window_id: "anything" }), /invalid history_list parameters:.*window_id/);
-	await assert.rejects(invoke("history_list", { before_seq: "invalid" }), /invalid history_list parameters: before_seq/);
 	await assert.rejects(invoke("history_read", { seq: "2" }), /invalid history_read parameters: seq/);
 	await assert.rejects(dispatch({ op: "history_state", identity, history }), /cannot determine the current window ordinal/);
 
@@ -369,7 +368,7 @@ test("Claude helper reports gaps on list/read and re-anchors reset state only wi
 	rows.push(compact("next", "after"), row("next-boot", "next", "user", bootText(9)), user("latest", "next-boot", "latest"));
 	writeFileSync(transcriptPath, jsonl(rows));
 	history.headUuid = "latest";
-	const earlier = await invoke("history_list", { after_seq: 5, before_seq: 7 });
+	const earlier = await invoke("history_list", { after: 5, before: 7 });
 	assert.ok(earlier.ok);
 	assert.match(earlier.text, /after anchored reset/);
 	assert.doesNotMatch(earlier.text, /confirmed suffix/);

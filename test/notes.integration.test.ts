@@ -17,7 +17,7 @@ import { listNotes, physicalPath, scopeDir } from "./helpers/notes.js";
 import { MAX_READ_WINDOW_CHARS, TOOL_OUTPUT_MAX_BYTES } from "../src/tools/output.js";
 import { notesUpdate } from "../src/tools/notes.js";
 import { notesToolContext } from "../src/tools/notes-context.js";
-import type { NotesListData, NotesReadData, NotesSearchData, NotesUpdateData } from "../src/tools/notes.js";
+import type { NotesListData, NotesReadData, NotesUpdateData } from "../src/tools/notes.js";
 import {
 	assertWithinBudget,
 	call,
@@ -87,7 +87,7 @@ for (const scanFails of [false, true]) {
 	});
 }
 
-test("notes_list and notes_search are recent-first snapshots with narrowing hints", async () => {
+test("notes_list browses and searches recent-first snapshots", async () => {
 	const session = manager();
 	const captured = makeExtension(session);
 	const ctx = context(session);
@@ -100,15 +100,18 @@ test("notes_list and notes_search are recent-first snapshots with narrowing hint
 	};
 	put("old.md", base + 1);
 	put("new.md", base + 3);
-	put("@project/design.md", base + 2);
+	put("@project/design.md", base + 2, "design\nThe NEEDLE");
+	put("unrelated.md", base + 4, "not a hit");
 
 	const listed = resultData<NotesListData>(await call(captured, "notes_list", { limit: 2 }, ctx));
-	assert.deepEqual(listed.files.map((file) => file.address), ["new.md", "@project/design.md"]);
-	assert.equal(listed.more, 1);
-	assert.deepEqual(Object.keys(listed).sort(), ["files", "more", "namespaces_unavailable"]);
+	assert.deepEqual(listed.files.map((file) => file.address), ["unrelated.md", "new.md"]);
+	assert.equal(listed.more, 2);
 
-	const searched = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle", limit: 2 }, ctx));
-	assert.deepEqual(searched.files.map((file) => file.address), ["new.md", "@project/design.md"]);
+	const searched = resultData<NotesListData>(await call(captured, "notes_list", { query: "needle", limit: 2 }, ctx));
+	assert.deepEqual(searched.files.map((file) => [file.address, file.matches]), [
+		["new.md", [{ line: 1, text: "needle", offset_chars: 0 }]],
+		["@project/design.md", [{ line: 2, text: "The NEEDLE", offset_chars: 11 }]],
+	]);
 	assert.equal(searched.more, 1);
 
 	const narrowed = resultData<NotesListData>(await call(captured, "notes_list", { glob: "@project/**" }, ctx));
@@ -128,17 +131,9 @@ test("empty notes queries list scoped notes without fabricated matches", async (
 	for (const crumpled of [false, true]) {
 		const filters = { glob: "empty-query/**", crumpled, limit: 1 };
 		const listed = resultData<NotesListData>(await call(captured, "notes_list", filters, ctx));
-		const expected = { ...listed, files: listed.files.map(file => ({ ...file, matches: [] })) };
-		for (const query of [undefined, "", [], ["", ""]]) {
-			assert.deepEqual(resultData<NotesSearchData>(await call(captured, "notes_search", { ...filters, query }, ctx)), expected);
-		}
+		assert.deepEqual(resultData<NotesListData>(await call(captured, "notes_list", { ...filters, query: [] }, ctx)), listed);
 	}
-	const filters = { glob: "empty-query/**" };
-	assert.deepEqual(
-		resultData<NotesSearchData>(await call(captured, "notes_search", { ...filters, query: ["", "needle"] }, ctx)),
-		resultData<NotesSearchData>(await call(captured, "notes_search", { ...filters, query: "needle" }, ctx)),
-	);
-	assert.equal(resultError(await call(captured, "notes_search", { query: [42] }, ctx)).code, "invalid_query");
+	assert.match(resultError(await call(captured, "notes_list", { max_matches_per_file: 1 }, ctx)).message, /requires a non-empty `query`/);
 });
 
 test("notes_list reports omitted files when the wire budget truncates the snapshot", async () => {
@@ -199,10 +194,10 @@ test("notes are real files that persist across sessions and round-trip Unicode",
 	const read = resultRead(rawRead);
 	assert.equal(read.address, "@human/checkpoint/进度.md");
 	assert.equal(read.content, "Café", "a negative offset reads the body tail in one call");
-	const searched = resultData<NotesSearchData>(
-		await call(restoredCaptured, "notes_search", { glob: "@human/**", query: "Café" }, restoredCtx),
+	const searched = resultData<NotesListData>(
+		await call(restoredCaptured, "notes_list", { glob: "@human/**", query: "Café" }, restoredCtx),
 	);
-	assert.equal(searched.files[0]?.matches[0]?.line, 2);
+	assert.equal(searched.files[0]?.matches?.[0]?.line, 2);
 	const listedFiles = resultData<NotesListData>(
 		await call(restoredCaptured, "notes_list", { glob: "@human/checkpoint/**" }, restoredCtx),
 	);
@@ -337,7 +332,7 @@ test("an over-budget note is delivered as a bounded prefix and resumed by next_o
 		await call(captured, "notes_write", { address: "@project/receipt", content: "body" }, ctx),
 		await call(captured, "notes_update", { address: "@project/receipt", edits: [{ oldText: "body", newText: "changed" }] }, ctx),
 		await call(captured, "notes_list", { glob: "@project/**" }, ctx),
-		await call(captured, "notes_search", { query: "changed", glob: "@project/**" }, ctx),
+		await call(captured, "notes_list", { query: "changed", glob: "@project/**" }, ctx),
 		await call(captured, "notes_read", { address: "@project/receipt" }, ctx),
 	]) {
 		assert.equal(JSON.stringify(result).includes(root), false, "notes receipts never expose the absolute home");
@@ -358,17 +353,15 @@ test("an over-budget note search match is a marked prefix with an honest line ad
 	const hugeLine = `${'p'.repeat(500)}needle ${"y".repeat(TOOL_OUTPUT_MAX_BYTES * 2)}`;
 	await call(captured, "notes_write", { address: "a.md", content: "needle small" }, ctx);
 	await call(captured, "notes_write", { address: "search.md", content: hugeLine }, ctx);
-	const pages: Array<{ address: string; matches: Array<{ line: number; text: string; offset_chars: number }> }> = [];
-	const rawFound = await call(captured, "notes_search", { query: "needle", limit: 10 }, ctx);
-	const found = resultData<NotesSearchData>(rawFound);
+	const rawFound = await call(captured, "notes_list", { query: "needle", limit: 10 }, ctx);
+	const found = resultData<NotesListData>(rawFound);
 	assert.ok(Buffer.byteLength(JSON.stringify(found), "utf8") <= TOOL_OUTPUT_MAX_BYTES, "the structured match result stays within budget");
 	assert.match(textOf(rawFound), /\[truncated\]/, "the model-facing match line carries the same marker");
-	pages.push(...found.files);
 	assert.equal(found.more, 1, "the oversized result names the omitted matching file");
-	assert.deepEqual(pages.map((file) => file.address), ["search.md"], "the snapshot keeps the most recently updated match");
-	const oversized = pages[0]!;
-	assert.equal(oversized.matches.length, 1);
-	const match = oversized.matches[0]!;
+	assert.deepEqual(found.files.map((file) => file.address), ["search.md"], "the snapshot keeps the most recently updated match");
+	const matches = found.files[0]!.matches!;
+	assert.equal(matches.length, 1);
+	const match = matches[0]!;
 	assert.ok(match.text.endsWith(" [truncated]"), "a shortened match line ends with the ellipsis marker");
 	assert.ok(hugeLine.startsWith(match.text.slice(0, -" [truncated]".length)), "the match text is a plain prefix of the line plus its marker");
 	assert.equal(match.line, 1, "the informational line number survives");
@@ -394,18 +387,18 @@ for (const [label, padding, cap] of [
 	["both limits", Math.floor(TOOL_OUTPUT_MAX_BYTES / 3), 6],
 	["shortened first line", TOOL_OUTPUT_MAX_BYTES * 2, undefined],
 ] as const) {
-	test(`notes_search reports dropped lines after ${label}`, async () => {
+	test(`notes_list reports dropped match lines after ${label}`, async () => {
 		const session = manager();
 		const captured = makeExtension(session);
 		const ctx = context(session);
 		const lines = Array.from({ length: padding > TOOL_OUTPUT_MAX_BYTES ? 3 : 8 }, (_, index) => `needle ${index}${"y".repeat(padding)}`);
 		resultData(await call(captured, "notes_write", { address: "matches.md", content: lines.join("\n") }, ctx));
-		const raw = await call(captured, "notes_search", { query: "needle", max_matches_per_file: cap }, ctx);
+		const raw = await call(captured, "notes_list", { query: "needle", max_matches_per_file: cap }, ctx);
 		assertWithinBudget(raw, label);
-		const found = resultData<NotesSearchData>(raw);
+		const found = resultData<NotesListData>(raw);
 		assert.equal(found.more, 0, "line omissions are separate from omitted pages");
 		const [file] = found.files;
-		assert.ok(file);
+		assert.ok(file?.matches);
 		assert.ok(file.matches.length > 0 && file.matches.length < lines.length);
 		if (cap !== undefined) assert.ok(file.matches.length <= cap);
 		if (padding > 0) assert.ok(file.matches.length < (cap ?? lines.length), "the output budget also drops lines");
@@ -414,31 +407,30 @@ for (const [label, padding, cap] of [
 	});
 }
 
-test("notes_search ignores case, treats queries literally, and preserves original Unicode offsets", async () => {
+test("notes_list treats queries literally and preserves original Unicode offsets", async () => {
 	const session = manager();
 	const captured = makeExtension(session);
 	const ctx = context(session);
 	await call(captured, "notes_write", { address: "case-match.md", content: "😀İ NeEdLe.* tail" }, ctx);
-	const found = resultData<NotesSearchData>(await call(captured, "notes_search", { query: ["missing", "needle.*"], glob: "case-match.md" }, ctx));
+	const found = resultData<NotesListData>(await call(captured, "notes_list", { query: ["missing", "needle.*"], glob: "case-match.md" }, ctx));
 	assert.equal(found.files.length, 1);
-	assert.equal(found.files[0]!.matches.length, 1);
-	assert.equal(found.files[0]!.more_matches, undefined);
 	const hit = found.files[0]!;
-	const read = resultRead(await call(captured, "notes_read", { address: hit.address, offset_chars: hit.matches[0]!.offset_chars }, ctx));
+	assert.equal(hit.matches?.length, 1);
+	const read = resultRead(await call(captured, "notes_read", { address: hit.address, offset_chars: hit.matches![0]!.offset_chars }, ctx));
 	assert.equal(read.content, "NeEdLe.* tail");
-	const absent = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle.+", glob: "case-match.md" }, ctx));
+	const absent = resultData<NotesListData>(await call(captured, "notes_list", { query: "needle.+", glob: "case-match.md" }, ctx));
 	assert.deepEqual(absent.files, []);
 });
 
-test("notes_search scopes by glob; a non-matching glob is an empty page, not an error", async () => {
+test("notes_list scopes queries by glob", async () => {
 	const session = manager();
 	const captured = makeExtension(session);
 	const ctx = context(session);
 	await call(captured, "notes_write", { address: "deep/nested/a.md", content: "needle here" }, ctx);
 	await call(captured, "notes_write", { address: "top.md", content: "needle there" }, ctx);
-	const scoped = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle", glob: "deep/**" }, ctx));
+	const scoped = resultData<NotesListData>(await call(captured, "notes_list", { query: "needle", glob: "deep/**" }, ctx));
 	assert.deepEqual(scoped.files.map((file) => file.address), ["deep/nested/a.md"], "a glob scopes the search to the subtree");
-	const none = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle", glob: "absent/**" }, ctx));
+	const none = resultData<NotesListData>(await call(captured, "notes_list", { query: "needle", glob: "absent/**" }, ctx));
 	assert.deepEqual(none.files, [], "a non-matching glob is an empty page, not a refusal");
 });
 

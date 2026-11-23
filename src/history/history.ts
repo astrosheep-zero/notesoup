@@ -46,7 +46,8 @@ export type HistoryWindow = { windowId: string; createdAt?: string; items: Histo
 /** Paired result seqs stay on the branch but redirect readers to the call's event. */
 export type HistoryProjection = { windows: HistoryWindow[]; highestSeq: number; branchSeqs: Set<number>; pairedResults: Map<number, number> };
 /** The filters one selection applies before paging: roles, seq bounds, and parsed epoch-ms time bounds. */
-export type HistoryFilter = { roles?: HistoryRole[] | null; after_seq?: number; before_seq?: number; sinceMs?: number; untilMs?: number };
+export type HistoryBound = { seq: number } | { at: number };
+export type HistoryFilter = { roles?: HistoryRole[]; after?: HistoryBound; before?: HistoryBound };
 
 /** Native entries after the adapter allocates seqs and selects the active branch. */
 export type DecodedHistoryItem = {
@@ -221,6 +222,7 @@ export type HistoryFoldedRow = Static<typeof HistoryFoldedRowSchema>;
 export const HistoryPageItemSchema = Type.Object({
 	session: Type.Optional(Type.String()),
 	folded_before: Type.Optional(HistoryFoldedRowSchema),
+	context: Type.Optional(Type.Literal(true, { description: "A neighbor of a search hit, not a hit in this page." })),
 	seq: Type.Integer({ minimum: 1 }),
 	role: HistoryRoleSchema,
 	created_at: Type.Union([Type.String(), Type.Null()]),
@@ -260,23 +262,16 @@ export function allItems(projection: HistoryProjection): HistoryEvent[] {
 	return projection.windows.flatMap((current) => current.items);
 }
 
-/**
- * Whether one event is inside the selection: its seq bounds, and a half-open
- * [sinceMs, untilMs) window on created_at. A bounded time window drops events with no recorded
- * time or a time that cannot be read.
- */
-export function inSelection(event: HistoryEvent, params: HistoryFilter): boolean {
-	if (params.after_seq !== undefined && event.seq <= params.after_seq) return false;
-	if (params.before_seq !== undefined && event.seq >= params.before_seq) return false;
-	if (params.sinceMs === undefined && params.untilMs === undefined) return true;
-	if (event.createdAt === undefined) return false;
-	const at = Date.parse(event.createdAt);
-	return !Number.isNaN(at) && (params.sinceMs === undefined || at >= params.sinceMs) && (params.untilMs === undefined || at < params.untilMs);
+function compareBound(event: HistoryEvent, bound: HistoryBound): number {
+	return "seq" in bound ? event.seq - bound.seq : Date.parse(event.createdAt ?? "") - bound.at;
+}
+
+export function matchesFilter(event: HistoryEvent, { after, before, roles }: HistoryFilter): boolean {
+	return (!after || compareBound(event, after) > 0) && (!before || compareBound(event, before) < 0)
+		&& (!roles || roles.includes(event.role));
 }
 
 /** Ordered events inside the requested seq/time range and optional roles, before folding. */
 export function filteredItems(projection: HistoryProjection, params: HistoryFilter): HistoryEvent[] {
-	return allItems(projection)
-		.filter((item) => inSelection(item, params) && (!params.roles || params.roles.includes(item.role)))
-		.sort((a, b) => a.seq - b.seq);
+	return allItems(projection).filter(event => matchesFilter(event, params)).sort((a, b) => a.seq - b.seq);
 }

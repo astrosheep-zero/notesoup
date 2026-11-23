@@ -31,13 +31,10 @@ async function populate(t: test.TestContext) {
 	return { ...fixtureData, current, all };
 }
 
-test("default spellings stay local while explicit ** lists and searches each notebook once", async (t) => {
+test("omitted glob stays local while explicit ** lists and searches each notebook once", async (t) => {
 	const { notes, current, all, identity } = await populate(t);
 	assert.deepEqual(addresses(await notes.list()), current);
-	for (const glob of [null, "", "@default"]) {
-		assert.deepEqual(addresses(await notes.list({ glob })), current);
-		assert.deepEqual(addresses(await notes.search(["needle"], { glob })), current);
-	}
+	assert.deepEqual(addresses(await notes.search(["needle"])), current);
 	const rows = await notes.list({ glob: "**" });
 	assert.deepEqual(addresses(rows), all);
 	assert.deepEqual(addresses(await notes.list({ glob: "*" })), all);
@@ -45,7 +42,6 @@ test("default spellings stay local while explicit ** lists and searches each not
 	assert.deepEqual(addresses(await notes.search(["needle"], { glob: "*" })), all);
 	assert.equal(new Set(rows.map(row => row.address)).size, rows.length);
 	for (const row of rows) assert.equal((await notes.read(row.address))?.body.startsWith("needle"), true, "every result is a real readable address");
-	assert.deepEqual(await notes.list({ glob: "@default/**" }), [], "@default is a bare selector, not an address prefix");
 	assert.deepEqual(addresses(await notes.list({ glob: "@project/**" })), ["@project/shared.md"]);
 	assert.deepEqual(addresses(await notes.list({ glob: "@self/**" })), ["@self/shared.md"]);
 	assert.deepEqual(addresses(await notes.list({ glob: "@model/**" })), ["@model/shared.md"]);

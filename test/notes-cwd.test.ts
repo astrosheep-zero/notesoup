@@ -6,7 +6,7 @@ import test, { type TestContext } from "node:test";
 import { Check } from "typebox/value";
 import { createNotesStore, projectKey, snapshotNotesIdentity, type NotesIdentity } from "../src/notes/index.js";
 import { parseNote } from "../src/notes/frontmatter.js";
-import { notesList, notesRead, notesSearch, notesUpdate, notesWrite } from "../src/tools/notes.js";
+import { notesList, notesRead, notesUpdate, notesWrite } from "../src/tools/notes.js";
 import { notesToolContext } from "../src/tools/notes-context.js";
 import type { Outcome } from "../src/result.js";
 
@@ -35,11 +35,11 @@ function refusal(result: Outcome<unknown>): { code: string; message: string } {
 	return result.error;
 }
 
-test("all five notes schemas accept one optional non-empty cwd", () => {
-	for (const operation of [notesWrite, notesUpdate, notesRead, notesList, notesSearch]) {
+test("all notes schemas accept one optional non-empty cwd", () => {
+	for (const operation of [notesWrite, notesUpdate, notesRead, notesList]) {
 		const base = operation === notesWrite ? { address: "a", content: "x" }
 			: operation === notesUpdate ? { address: "a", edits: [{ oldText: "x", newText: "y" }] }
-			: operation === notesSearch ? { query: "x" }
+			: operation === notesList ? { query: "x" }
 			: operation === notesRead ? { address: "a" } : {};
 		assert.equal(Check(operation.parameters, { ...base, cwd: "../other" }), true, operation.name);
 		assert.equal(Check(operation.parameters, { ...base, cwd: "" }), false, `${operation.name} rejects empty cwd`);
@@ -73,7 +73,7 @@ test("one relative cwd retargets every operation without changing later calls", 
 	const listed = data(await notesList.execute({ glob: "@project/**", cwd }, context));
 	assert.deepEqual(listed.files.map(file => file.address).sort(), ["@project/other.md", "@project/renamed.md"]);
 	assert.ok(listed.files.every(file => file.project_key === beta.projectKey));
-	const searched = data(await notesSearch.execute({ query: "needle", glob: "@project/**", cwd }, context));
+	const searched = data(await notesList.execute({ query: "needle", glob: "@project/**", cwd }, context));
 	assert.deepEqual(searched.files.map(file => file.address), ["@project/other.md"]);
 
 	// The captured context is unchanged: omitting cwd still means alpha.

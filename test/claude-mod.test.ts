@@ -163,9 +163,9 @@ test("Claude notes survive removal of the session's worktree cwd", async (t) => 
   }
 });
 
-test("Claude helper exposes the seven shared notes/history schemas", async () => {
+test("Claude helper exposes the shared notes/history schemas", async () => {
   const schemas = await dispatch({ op: "schemas" }) as Array<{ name: string; description: string; inputSchema: { type: string } }>;
-  assert.deepEqual(schemas.map((schema) => schema.name), ["notes_write", "notes_update", "notes_read", "notes_list", "notes_search", "history_list", "history_read"]);
+  assert.deepEqual(schemas.map((schema) => schema.name), ["notes_write", "notes_update", "notes_read", "notes_list", "history_list", "history_read"]);
   assert.ok(schemas.every((schema) => schema.description.length > 20 && schema.inputSchema.type === "object"));
 });
 
@@ -392,7 +392,7 @@ test("Claude Mod helper runs from a standalone copied plugin directory", () => {
     })) as { ok: boolean; result?: Array<{ name: string }>; error?: string };
     const schemas = run('{"op":"schemas"}');
     assert.equal(schemas.ok, true);
-    assert.equal(schemas.result?.length, 7);
+    assert.equal(schemas.result?.length, 6);
     assert.equal(run("not json").ok, false);
   } finally {
     rmSync(fixture, { recursive: true, force: true });
@@ -598,7 +598,7 @@ test("Claude Mod hook delivers the helper's shared text, and marks only a refusa
   const handlers = new Map<string, HookHandler>();
   hooks.register((event, handler) => handlers.set(event, handler));
   await handlers.get("session.start")!(host, { cwd: home, isInteractive: true }, async (event: unknown) => event);
-  assert.deepEqual(registered.map((spec) => spec.name), ["empty_brain", "notes_write", "notes_update", "notes_read", "notes_list", "notes_search", "history_list", "history_read"]);
+  assert.deepEqual(registered.map((spec) => spec.name), ["empty_brain", "notes_write", "notes_update", "notes_read", "notes_list", "history_list", "history_read"]);
   for (const spec of registered) {
     assert.equal(spec.isDeferred, false, `${spec.name} is available from the start without tool search`);
     assert.ok(spec.description.length > 20);
@@ -667,7 +667,6 @@ test("Claude Mod clears at the shared hard point after successful settlement and
     return {};
   };
   await invoke("session.start", { cwd: home, isInteractive: true });
-  assert.equal(registered.length, 8);
   const initial = await handlers.get("prompt.context")!(host, {}, async () => ({ blocks: [] })) as { blocks: Array<{ name: string; text: string }> };
   assert.equal(initial.blocks.length, 1, "below the warn point no warning joins the boot");
   assert.match(initial.blocks[0]!.text, /Current context window id: claude:hook-session:0/);
@@ -1847,7 +1846,7 @@ test("Claude serves every registered notes tool to subagents without leaking eve
   assert.match((await call("notes_read", { address: "child.md" })).result, /child body/);
   assert.equal((await call("notes_update", { address: "child.md", edits: [{ oldText: "child body", newText: "updated body" }] })).isError, undefined);
   assert.match((await call("notes_list", {})).result, /child\.md/);
-  assert.match((await call("notes_search", { query: "updated body" })).result, /child\.md/);
+  assert.match((await call("notes_list", { query: "updated body" })).result, /child\.md/);
   assert.equal((await call("notes_read", { address: "absent.md" })).isError, true, "refusals retain the error discriminator in subagents");
 });
 
@@ -1959,7 +1958,7 @@ test("Claude history keeps classic transcript_path across startup, confirms appe
   // Real order: classic -> startup attachment appends -> typed session.start.
   await invoke("session.append", { uuid: "startup" }, { uuid: "startup", message: {} });
   await invoke("session.start", { cwd: home, isInteractive: true });
-  assert.equal(registered.length, 8);
+  assert.ok(registered.some((tool) => tool.name === "history_list"));
   const listed = await call("history_list", { roles: ["user", "context"] });
   assert.equal(listed.isError, undefined, listed.result);
   assert.match(listed.result, /old request/);

@@ -1,7 +1,6 @@
 import { Type, type TSchema } from "typebox";
 import { Errors } from "typebox/value";
 import { HistoryRoleSchema } from "../history/history.js";
-export const nullableString = (description?: string) => Type.Optional(Type.Union([Type.String(), Type.Null()], description === undefined ? {} : { description }));
 export const historyRoles = () => Type.Optional(Type.Array(HistoryRoleSchema, { minItems: 1, description: "Only these voices: user, assistant, tool, context. Without roles or query, tool and context runs fold into one line." }));
 
 /** First parameter violation; skip false subschemas so additionalProperties can name the field. */

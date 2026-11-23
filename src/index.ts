@@ -42,7 +42,7 @@ export type { BootToolNames } from "./boot/text.js";
 
 // Operations: the schemas and typed outcomes a host registers as its own tools, over a
 // host-supplied notes tool context or decoded history projection/lazy corpus context.
-export { notesList, notesRead, notesSearch, notesUpdate, notesWrite } from "./tools/notes.js";
+export { notesList, notesRead, notesUpdate, notesWrite } from "./tools/notes.js";
 export { notesIdentityForCall, notesToolContext, type NotesToolContext } from "./tools/notes-context.js";
 export { historyList, historyRead } from "./tools/history.js";
 export { projectHistory } from "./history/history.js";

@@ -177,7 +177,7 @@ test("a copied plugin without src or node_modules still initializes and lists al
 	const listed = await client.listTools();
 	assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [
 		"history_list", "history_read",
-		"notes_list", "notes_read", "notes_search", "notes_update", "notes_write",
+		"notes_list", "notes_read", "notes_update", "notes_write",
 	]);
 	for (const tool of listed.tools) {
 		const schema = tool.outputSchema as Record<string, unknown> | undefined;
@@ -214,7 +214,6 @@ test("bundled Codex MCP reads another harness and wildcard results retain their 
 	const limited = await call(client, { name: "history_list", arguments: { session: "*", query: "needle", limit: 1 }, _meta: metaFor(ROOT, ROOT) });
 	assert.equal((limited.structuredContent as { has_older: boolean }).has_older, true);
 	assert.equal((limited.structuredContent as { items: unknown[] }).items.length, 1, "the limit bounds the page to one item");
-	assert.doesNotMatch(textOf(limited), /before_seq|after_seq/);
 	const invalid = await call(client, { name: "history_read", arguments: { session: "*", seq: 1 }, _meta: metaFor(ROOT, ROOT) });
 	assert.equal(errorCode(invalid), "invalid_session");
 });

@@ -5,7 +5,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult, typ
 import { Check } from "typebox/value";
 import { paramProblem } from "../../../src/tools/schema.js";
 import type { TSchema } from "typebox";
-import { notesList, notesRead, notesSearch, notesUpdate, notesWrite } from "../../../src/tools/notes.js";
+import { notesList, notesRead, notesUpdate, notesWrite } from "../../../src/tools/notes.js";
 import { historyList, historyRead } from "../../../src/tools/history.js";
 import type { Outcome } from "../../../src/result.js";
 import { wireResult, type Operation } from "../../../src/tools/result.js";
@@ -25,7 +25,6 @@ const OPERATIONS: Record<string, Bound> = {
 	notes_update: { operation: notesUpdate as unknown as Bound["operation"], history: false },
 	notes_read: { operation: notesRead as unknown as Bound["operation"], history: false },
 	notes_list: { operation: notesList as unknown as Bound["operation"], history: false },
-	notes_search: { operation: notesSearch as unknown as Bound["operation"], history: false },
 	history_list: { operation: historyList as unknown as Bound["operation"], history: true },
 	history_read: { operation: historyRead as unknown as Bound["operation"], history: true },
 };

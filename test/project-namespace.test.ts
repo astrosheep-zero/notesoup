@@ -9,7 +9,7 @@ import { Check } from "typebox/value";
 import { createNotesStore, type NotesIdentity } from "../src/notes/index.js";
 import { assertAddress } from "../src/notes/address.js";
 import { normalizeRemote, projectKey } from "../src/notes/project-namespace.js";
-import { notesList, notesRead, notesSearch, notesUpdate, notesWrite } from "../src/tools/notes.js";
+import { notesList, notesRead, notesUpdate, notesWrite } from "../src/tools/notes.js";
 import { success, type Outcome } from "../src/result.js";
 import { notesToolContext } from "../src/tools/notes-context.js";
 
@@ -306,9 +306,9 @@ test("named projects read/list/search with root and sibling receipts, without to
 	const listed = data(await notesList.execute({ glob: "@projects/*/**" }, toolContext(own)));
 	assert.deepEqual(listed.files.map(row => [row.address, row.project_root]).sort(), [["@projects/api-1/decision.md", second], ["@projects/api/decision.md", first]].sort());
 	assert.equal(Check(notesList.outputSchema, listed), true);
-	const searched = data(await notesSearch.execute({ glob: "@projects/api-1/**", query: "needle" }, toolContext(own)));
+	const searched = data(await notesList.execute({ glob: "@projects/api-1/**", query: "needle" }, toolContext(own)));
 	assert.equal(searched.files[0]?.project_root, second);
-	assert.equal(Check(notesSearch.outputSchema, searched), true);
+	assert.equal(Check(notesList.outputSchema, searched), true);
 	assert.equal(readFileSync(file, "utf8"), before, "named-notebook reads never rewrite access metadata");
 });
 

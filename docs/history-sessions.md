@@ -15,7 +15,7 @@ history_read({ session: "claude:full-session-id", seq: 42 })
 
 Within the requested harness an exact ID wins over prefixes. Without a harness, resolution checks the current harness first (exact ID, then prefixes); only if it has no matches are the other harnesses checked. No match returns `unknown_session`. Multiple matches return `ambiguous_session` with up to five qualified candidates; specify a harness or a longer ID rather than guessing.
 
-Explicit targeting always returns the canonical `session: "<harness>:<full-id>"`, even when the target happens to be the current session. Headers become `session <harness>:<id> | seq <seq> | <role>`. Paging footers, folded-row `expand`, and read `neighborhood` recipes carry that same canonical selector. Structured pages expose `has_older` and `has_newer`; use the first or last item’s seq as the next `before_seq` or `after_seq`, respectively, together with its session. The newer footer is `→ newer: {"session":"<harness>:<full-id>","after_seq":...}`. When `after_seq` is set, omitted `from` defaults to `oldest`; otherwise, it defaults to `newest`. Explicit `from` takes precedence. Copy it into subsequent `history_read` calls, including reads continued with `next_offset_chars`.
+Explicit targeting always returns the canonical `session: "<harness>:<full-id>"`, even when the target is the current session. Headers become `session <harness>:<id> | seq <seq> | <role>`. Copy that session into `history_read` and any continuation reads. Paging, `expand` and `neighborhood` recipes already carry it. Structured pages expose `has_older` and `has_newer`; use the first or last non-context row's seq as `before` or `after`, respectively. For example: `→ newer: {"session":"<harness>:<full-id>","after":42}`. An `after` bound pages forward; otherwise the page starts at the newest eligible end. See [tool results](tool-results.md#bounds-and-continuation) for query context and bounds.
 
 ## Browse or search across sessions
 
@@ -24,16 +24,15 @@ Any selector containing `*` selects multiple sessions; `*` matches any string an
 ```js
 history_list({ session: "*" }) // Recent sessions, one opening prompt/topic each
 history_list({ session: "*", query: ["deployment", "rollback"], limit: 20 })
-history_list({ session: "codex:*", query: "migration", roles: ["tool"], since: "2026-10-01" })
+history_list({ session: "codex:*", query: "migration", roles: ["tool"], after: "2026-10-01", context: 1 })
 ```
 
 - With a non-empty `query`, matching is literal, case-insensitive, and ORs a list of texts, as in one-session search. Local files are conservatively pre-filtered before full decoding: JSON escapes, Unicode case folding, generated event text and inherited Codex history must not lose hits. Uncertain cases use the full decoder. A possible hit in a Pi or Claude file stops the prefilter early: the strict decoder will read and validate the file next.
-- Without `query` (including empty strings/lists or lists containing only empty entries), return a recent-sessions overview. Sessions are considered newest-modified first, or oldest-modified first with `from: "oldest"`; loading stops once `limit` sessions (default 20) produce a representative. Apply `roles`, `since` and `until` before choosing each representative: without roles, prefer the first visible user event, falling back to the latest visible dialogue event or latest event of any role; with roles, choose the latest matching visible event. Sort the chosen representatives by event time, oldest first. There are no folded rows.
-- `before_seq` and `after_seq` refuse with `invalid_bounds`: seqs from different sessions cannot define a common range.
-- `history_read` refuses wildcard selectors with `invalid_session`; take a specific `session` and `seq` from a search hit instead.
-- With a query, every role is searched, including tool arguments/output and context; `roles` can narrow this. There are no folded rows.
-- `since` is inclusive and `until` exclusive. Time-bounded searches exclude events with no usable timestamp.
-- Search hits are merged by event time, oldest first, with a deterministic session/seq tie-break; untimed events sort before timed events. For query searches, `limit` counts from the newest event end by default, or the oldest with `from: "oldest"`. The complete text and structured result still share the 32 KiB budget, so large previews can reduce the admitted page.
+- Without a non-empty `query`, return a recent-sessions overview. Consider sessions newest-modified first, or oldest-modified first with `after`; stop loading once `limit` sessions (default 20) produce a representative. Apply `roles`, `after` and `before` before choosing a representative. Without roles, prefer the first visible user event, falling back to the latest visible assistant event or the latest event of any role. With roles, choose the latest matching visible event. Return the representatives oldest first by event time.
+- Wildcard bounds take only ISO 8601 times, both exclusive. Seqs from different sessions cannot define a common range. Time bounds exclude events with no usable timestamp.
+- `history_read` refuses wildcard selectors with `invalid_session`; take a specific `session` and `seq` from the result instead.
+- A query searches all roles, including tool arguments/output and injected context; `roles` can narrow the hits. `context: N` includes up to N neighbors on each side from the hit’s own session, even outside the hit bounds. There are no folded rows.
+- Hits and context are merged oldest first by event time, with a deterministic session/seq tie-break; untimed events sort first. `limit` counts hits from the newest end by default or from the oldest end with `after`. The complete text and structured result still share the 32 KiB budget.
 - Each event carries its canonical `session`. `has_older` and `has_newer` indicate more matching results beyond the page; an overview with unvisited sessions may have more even if those sessions have no representative. Narrow by session pattern, query, roles or time rather than trying to page across per-session seqs.
 
 ## Local discovery and limits
@@ -51,7 +50,7 @@ The default roots respect `PI_CODING_AGENT_DIR` (Pi agent directory), `CLAUDE_CO
 
 ## Strict recent-session cache
 
-Only an unfiltered wildcard overview uses the persistent offline representative cache: no nonempty query and no `roles`, `since`, or `until`. Empty queries still mean an overview. Explicit session reads/lists, searches, filtered overviews, DSH service descriptors and the current live binding do not use this cache. Session discovery, modified-time ordering, representative ordering, output budgeting and full event-preview limits are unchanged.
+Only an unfiltered wildcard overview uses the persistent offline representative cache: no nonempty query and no `roles`, `after`, or `before`. Empty queries still mean an overview. Explicit session reads/lists, searches, filtered overviews, DSH service descriptors and the current live binding do not use this cache. Session discovery, modified-time ordering, representative ordering, output budgeting and full event-preview limits are unchanged.
 
 A cold miss deliberately reads and strictly decodes the whole transcript, including selected Codex ancestry. It saves only the complete selected event, canonical session identity, notice and source metadata—not a projection, header-only approximation or full-text index. Entries are versioned with the decoder/selection contract; decoder or presentation changes must bump that version. The key includes the canonical root transcript path, harness and session ID. Every source has a `dev`/`ino`/size/nanosecond mtime/ctime fingerprint taken before reading and checked after decoding. Codex records the actual root and ancestor files, and cache hits re-run native lineage discovery so newly ambiguous or missing sources cannot be hidden by unchanged file fingerprints. The fingerprint list must exactly match the root and lineage witness list.
 

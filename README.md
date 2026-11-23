@@ -31,23 +31,9 @@ pi -e npm:notesoup
 - **Durable context windows.** `/fresh-window` (alias `/empty`) clears and stops, with any command text available for close-out notes. Separate human input received during emptying continues in the fresh window. The model can also request a window itself with `empty_brain`, and a budget close-out fires automatically before the window runs out. Abort and ordinary errors never count as completion; the raw conversation stays in the session, just out of the next context.
 - **A boot block at every window head.** Pi keeps the window identity and notes snapshot in a hidden user-role boot; its fixed recovery protocol and pinned-page teaching live in a named system section. Every note body, including `@human` pins, stays user-role data. Claude, Codex and dsh keep their existing combined boot injection.
 - **`get_context_remaining`** — how much room the brain has left before the hard-reserve wipe, including the warning runway.
-- **Seven history/notes tools**, flattened from the original Codex actions:
-
-| Codex action | Pi tool |
-| --- | --- |
-| `history.list_items` | `history_list` |
-| `history.read_item` | `history_read` |
-| `history.search_contents` | `history_list` (`query`) |
-| `notes.write` | `notes_write` |
-| `notes.update` | `notes_update` |
-| `notes.rename` | `notes_update` (`rename_to`) |
-| `notes.read` | `notes_read` |
-| `notes.list` | `notes_list` |
-| `notes.search` | `notes_search` |
-
-- **Migration**: `history_search` is gone; pass `query` to `history_list`.
-- **Cross-session history**: both history tools accept `session: "<id-or-prefix>"` or `"<harness>:<id>"` (`pi`, `claude`, `codex`, `dsh`). `history_list({ session: "*", query: "phrase" })` searches local transcripts across harnesses; hits carry the session to copy into `history_read`. Omit `session` for unchanged current-session behavior. See [cross-session history](docs/history-sessions.md) for discovery roots, refusals and offline limits.
-- **Migration (0.40.0)**: parameters renamed: `order` → `from`, `before`/`after` → `before_seq`/`after_seq`, `limit_chars` → `max_chars`, `wastebasket` → `crumpled`, `pattern` → `glob` (the standalone library's options included), and `notes_update`'s `change_kind` value `file` → `moved`. Old names are refused.
+- **Notes:** `notes_list` browses current notebooks by default. Add `glob` to select notebooks or paths and `query` for literal, case-insensitive matches with lines and read offsets. Open a page with `notes_read`, create or replace one with `notes_write`, and edit, move or crumple it with `notes_update`.
+- **History:** `history_list` browses or searches with `query`. Page with exclusive `after` / `before` seqs or ISO 8601 times; add `context` to see neighboring events around hits. `history_read` opens one event by seq.
+- **Cross-session history:** both history tools accept `session: "<id-or-prefix>"` or `"<harness>:<id>"` (`pi`, `claude`, `codex`, `dsh`). `history_list({ session: "*", query: "phrase" })` searches local transcripts across harnesses; hits carry the session to copy into `history_read`. Omit `session` to use the current session. See [cross-session history](docs/history-sessions.md) for discovery roots, refusals and offline limits.
 
 - **Runtime toggle** — `/notesoup off` stops new automatic resets; `/notesoup on` re-enables them; bare `/notesoup` reports the state.
 - **Context cap (Pi and Claude)** — `/notesoup cap 100k` limits the capacity used by notesoup's budget to `min(model window, 100000)`. Existing reserves and warning margins are deducted from that capacity; 100k is not the used-token reset point. `/notesoup cap` shows the configured cap and `/notesoup cap off` removes it. Whole tokens and decimal `k`/`m` suffixes are accepted; caps too small for the host's reserves are refused. The cap applies only to the running session, survives notesoup resets and model changes, and is lost on reload/restart/session switch. It never writes host settings or environment variables, changes the provider's advertised model window, or enables disabled automatic resets.

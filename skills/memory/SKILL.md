@@ -38,15 +38,15 @@ Keep notes focused on what is true now; if a piece of past context still matters
 
 ## Finding things again
 
-For list/search, omit `glob` or use the collection alias `@default` for this session and current shared notebooks. Use `**` for all notebooks or `@sessions/*/**` for all sessions. Results carry readable note addresses; `@default` itself is not a read/write address.
+In `notes_list`, omit `glob` for this session and the current shared notebooks. Use `**` for all notebooks or `@sessions/*/**` for all sessions.
 
-- **A note**: `notes_list` with a `glob` when you know roughly where it lives, `notes_search` when you know a phrase; then `notes_read` the address.
-- **Something that happened**: `history_list` to browse or search this session's events; `history_read` the seq for the whole event.
-- **An earlier window**: use its seq range from the boot window tree with `history_list`'s `before_seq` / `after_seq` bounds, or search for a remembered phrase.
+- **A note**: add `glob` to narrow where `notes_list` looks, and `query` if you remember a phrase. Then use `notes_read` with the address and, for a match, its `offset_chars`.
+- **Something that happened**: `history_list` browses or searches this session's events. Add `context: 1` with a `query` to include neighboring events. Use `history_read` with the seq for the whole event.
+- **An earlier window**: use its seq range from the boot window tree with `history_list`'s exclusive `after` / `before` bounds, or search for a remembered phrase. With `after` you page forward; otherwise you page back from the newest eligible end.
 - **Another session**: pass `session: "<id-or-prefix>"` or `"pi:<id>"`, `"claude:<id>"`, `"codex:<id>"`, `"dsh:<id>"`. An unqualified selector checks this harness first. If ambiguous, use a longer ID or a harness prefix; never pick a candidate blindly.
-- **A phrase across sessions**: `history_list({ session: "*", query: "remembered phrase" })`, or restrict to a harness with `"pi:*"`. A wildcard cannot use `before_seq`/`after_seq` or `history_read`. Query results cover every role unless `roles` narrows them, are chronological, and have no paging cursors; narrow by time, role, query or session pattern instead. DSH sessions are discoverable only from DSH.
+- **A phrase across sessions**: `history_list({ session: "*", query: "remembered phrase" })`, or restrict to a harness with `"pi:*"`. A wildcard takes ISO 8601 times only in `after` / `before` and cannot use `history_read`. Hits cover every role unless `roles` narrows them. Results are chronological and have no paging cursors; narrow by time, role, query or session pattern instead. DSH sessions are discoverable only from DSH.
 
-- **Recent sessions, no remembered phrase**: `history_list({ session: "*" })` returns one representative event per session, preferring its first visible user prompt, up to `limit` (default 20). Sessions are chosen newest-modified first (`from: "oldest"` reverses that), then results are sorted chronologically. Empty queries also browse. Role/time filters apply before choosing representatives; with `roles`, the latest matching event represents each session. No paging cursors.
+- **Recent sessions, no remembered phrase**: `history_list({ session: "*" })` returns one representative event per session, preferring its first visible user prompt, up to `limit` (default 20). Sessions are chosen newest-modified first (oldest-modified first with `after`), then results are sorted chronologically. Empty queries also browse. Role/time filters apply before choosing representatives; with `roles`, the latest matching event represents each session. No paging cursors.
 
 Seqs are stable **within a session**. When a hit carries `session`, copy it together with `seq` into `history_read` and save both in your note. The paging/expand/neighborhood recipes already preserve the resolved session. Omit `session` only when you mean your current host session. A single unreadable or unsupported local transcript refuses explicitly; wildcards skip individual sessions that cannot load. An empty result is not proof the remembered event never happened.
 

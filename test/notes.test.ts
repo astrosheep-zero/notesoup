@@ -18,7 +18,7 @@ import { createNotesStore, projectKey } from "../src/notes/index.js";
 import { globToRegExp } from "../src/notes/address.js";
 import type { Scope } from "../src/notes/index.js";
 import { listNotes, physicalPath, scopeDir } from "./helpers/notes.js";
-import { notesList, notesSearch, type NotesListData, type NotesReadData, type NotesSearchData, type NotesUpdateData, type NotesWriteData } from "../src/tools/notes.js";
+import { notesList, type NotesListData, type NotesReadData, type NotesUpdateData, type NotesWriteData } from "../src/tools/notes.js";
 import { notesIdentityFromPi } from "../plugins/pi/notes/adapter.js";
 import { notesToolContext } from "../src/tools/notes-context.js";
 import { call, context, explicitBoot, makeExtension, manager, resultData, resultError, resultRead } from "./helpers/extension.js";
@@ -40,7 +40,7 @@ test("tools register their namespaces and sequential note mutations", () => {
 	assert.equal(captured.tools.get("notes_write")?.executionMode, "sequential");
 	assert.equal(captured.tools.get("notes_update")?.executionMode, "sequential");
 	assert.equal(captured.tools.get("notes_read")?.executionMode, undefined);
-	for (const name of ["notes_write", "notes_update", "notes_read", "notes_list", "notes_search"]) {
+	for (const name of ["notes_write", "notes_update", "notes_read", "notes_list"]) {
 		assert.equal(captured.tools.get(name)?.namespace?.name, "notes", `${name} is in notes`);
 	}
 	for (const name of ["history_list", "history_read"]) {
@@ -58,7 +58,7 @@ test("every notes tool declares a result schema that accepts its own structured 
 		["notes_update", await call(captured, "notes_update", { address: "schema.md", edits: [{ oldText: "again", newText: "once" }] }, ctx)],
 		["notes_read", await call(captured, "notes_read", { address: "schema.md" }, ctx)],
 		["notes_list", await call(captured, "notes_list", {}, ctx)],
-		["notes_search", await call(captured, "notes_search", { query: "needle" }, ctx)],
+		["notes_list", await call(captured, "notes_list", { query: "needle" }, ctx)],
 		["notes_read", await call(captured, "notes_read", { address: "absent.md" }, ctx)],
 	];
 	for (const [name, result] of delivered) {
@@ -75,7 +75,7 @@ test("note schemas accept their operations, reject unknown fields, and expose cr
 		["notes_update", { address: "a.md", crumpled: true }],
 		["notes_read", { address: "a.md" }],
 		["notes_list", { crumpled: true }],
-		["notes_search", { query: "x", crumpled: true }],
+		["notes_list", { query: "x", crumpled: true }],
 	] as const) {
 		const schema = captured.tools.get(name)!.parameters as TSchema;
 		assert.equal(Check(schema, params), true, name);
@@ -388,7 +388,7 @@ test("empty results distinguish hidden notes and unavailable notebooks", async (
 	assert.deepEqual(empty, { files: [], more: 0, namespaces_unavailable: [] });
 	await call(captured, "notes_write", { address: "@human/hidden.md", content: "needle" }, ctx);
 	await call(captured, "notes_update", { address: "@human/hidden.md", crumpled: true }, ctx);
-	const hidden = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle", glob: "@human/**" }, ctx));
+	const hidden = resultData<NotesListData>(await call(captured, "notes_list", { query: "needle", glob: "@human/**" }, ctx));
 	assert.deepEqual(hidden.files, [], "a crumpled note is hidden from search");
 	const identity = notesIdentityFromPi(ctx);
 	const broken = scopeDir("project", ctx);
@@ -400,7 +400,7 @@ test("empty results distinguish hidden notes and unavailable notebooks", async (
 	const partial = partialResult.data;
 	assert.deepEqual(partial.namespaces_unavailable, ["@project"]);
 	assert.deepEqual(partial.files, []);
-	const searchResult = await notesSearch.execute({ query: "needle", glob: "**" }, notesToolContext(identity, ctx.cwd));
+	const searchResult = await notesList.execute({ query: "needle", glob: "**" }, notesToolContext(identity, ctx.cwd));
 	assert.ok(searchResult.ok);
 	assert.deepEqual(searchResult.data.namespaces_unavailable, ["@project"]);
 	writeFileSync(join(process.env.NOTESOUP_HOME!, "agents"), "not a directory");
@@ -439,8 +439,8 @@ test("notes receipts report resolved identity across scopes", async () => {
 	assert.deepEqual(listed.files.map((file) => file.address).sort(), notes.map((note) => note.address).sort(), "notes_list returns each full address");
 	for (const row of listed.files) assertReceiptIdentity(row, row.address, notes.find((note) => note.address === row.address)!.scope, ctx);
 
-	const searched = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "match", glob: "**" }, ctx));
-	assert.deepEqual(searched.files.map((file) => file.address), notes.map((note) => note.address).sort(), "notes_search returns each full address");
+	const searched = resultData<NotesListData>(await call(captured, "notes_list", { query: "match", glob: "**" }, ctx));
+	assert.deepEqual(searched.files.map((file) => file.address), notes.map((note) => note.address).sort(), "search returns each full address");
 	for (const row of searched.files) assertReceiptIdentity(row, row.address, notes.find((note) => note.address === row.address)!.scope, ctx);
 });
 
@@ -460,12 +460,12 @@ test("list and search merge scopes and carry addresses; the path jail rejects es
 	const scoped = resultData<NotesListData>(await call(captured, "notes_list", { glob: "@human/**" }, ctx));
 	assert.deepEqual(scoped.files.map((file) => file.address), ["@human/three.md"], "an address glob filter narrows the set");
 
-	const searched = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle" }, ctx));
+	const searched = resultData<NotesListData>(await call(captured, "notes_list", { query: "needle" }, ctx));
 	assert.equal(searched.files.length, 3, "literal search finds matches in every scope");
 	assert.deepEqual([...searched.files].map((file) => file.address).sort(), ["@human/three.md", "@project/two.md", "one.md"]);
 	for (const row of [...listed.files, ...searched.files]) assert.equal("scope" in row, false, "scope is derivable from the address and never echoed");
-	assert.equal(searched.files.every((file) => file.matches.length === 1), true);
-	const hit = searched.files[0]!.matches[0]!;
+	assert.equal(searched.files.every((file) => file.matches?.length === 1), true);
+	const hit = searched.files[0]!.matches![0]!;
 	assert.equal(hit.line, 1);
 	assert.equal(hit.offset_chars, 0, "the offset counts into the note body, so it does not include serialized frontmatter");
 	assert.deepEqual(Object.keys(hit).sort(), ["line", "offset_chars", "text"]);
@@ -477,10 +477,8 @@ test("list and search merge scopes and carry addresses; the path jail rejects es
 			assert.equal(resultError(await call(captured, tool, { address: path, content: "x", edits: [{ oldText: "a", newText: "b" }] }, ctx)).code, "invalid_address");
 		}
 	}
-	assert.deepEqual(resultData<NotesSearchData>(await call(captured, "notes_search", { query: "" }, ctx)), resultData<NotesSearchData>(await call(captured, "notes_search", {}, ctx)));
 	assert.equal(resultError(await call(captured, "notes_read", { address: "one.md", offset_chars: 99999 }, ctx)).code, "invalid_offset");
 	assert.equal(resultError(await call(captured, "notes_list", { glob: "bad\\glob" }, ctx)).code, "invalid_pattern");
-	assert.equal(resultError(await call(captured, "notes_search", { query: "needle", glob: "bad\\glob" }, ctx)).code, "invalid_pattern");
 });
 
 test("a read offsets the body in code points, not bytes or frontmatter", async () => {
@@ -490,8 +488,8 @@ test("a read offsets the body in code points, not bytes or frontmatter", async (
 	const ctx = context(session);
 	await call(captured, "notes_write", { address: "emoji.md", content: "🐑字\nneedle tail" }, ctx);
 
-	const search = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle", glob: "emoji.md" }, ctx));
-	const match = search.files[0]!.matches[0]!;
+	const search = resultData<NotesListData>(await call(captured, "notes_list", { query: "needle", glob: "emoji.md" }, ctx));
+	const match = search.files[0]!.matches![0]!;
 	assert.equal(match.line, 2);
 	assert.equal(match.offset_chars, 3, "the emoji and CJK line above contribute two code points plus the newline, not their bytes");
 	const atMatch = resultRead(await call(captured, "notes_read", { address: "emoji.md", offset_chars: match.offset_chars }, ctx));
@@ -539,7 +537,7 @@ test("interior @ in a note path round-trips through write, list, search, read, u
 	assert.deepEqual(listed.files.map((row) => row.address).sort(), ["@project/mail/alice@example.com.md", "release@v1.md"], "both addresses list in canonical form");
 	const globbed = resultData<NotesListData>(await call(captured, "notes_list", { glob: "@project/**" }, ctx));
 	assert.deepEqual(globbed.files.map((row) => row.address), ["@project/mail/alice@example.com.md"], "a notebook glob still narrows to that notebook");
-	const searched = resultData<NotesSearchData>(await call(captured, "notes_search", { query: "needle" }, ctx));
+	const searched = resultData<NotesListData>(await call(captured, "notes_list", { query: "needle" }, ctx));
 	assert.deepEqual(searched.files.map((row) => row.address).sort(), ["@project/mail/alice@example.com.md", "release@v1.md"], "searched addresses carry the interior @ back out");
 	assert.match(resultRead(await call(captured, "notes_read", { address: "@project/mail/alice@example.com.md" }, ctx)).content, /mail needle$/);
 

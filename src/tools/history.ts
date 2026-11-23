@@ -4,9 +4,10 @@ import { HISTORY_PREVIEW_CHARS, MAX_READ_WINDOW_CHARS, TOOL_OUTPUT_LIMIT } from 
 import { failure, success, type Outcome } from "../result.js";
 import { fitsResult, resultSchema, readTextWindow, renderOutcome, renderTextWindow, TextWindowRequestSchema, TextWindowSchema, type Operation } from "./result.js";
 import { historyRoles, searchQuery } from "./schema.js";
-import { HistoryPageSchema, CorpusCollector, corpusSelection, isMultiPage, markMultiPage, selectPage, type HistoryPage, type HistoryPageResult } from "../history/query.js";
+import { InvalidQueryError, searchQueries } from "../text-match.js";
+import { HistoryPageSchema, CorpusCollector, isMultiPage, markMultiPage, selectPage, type HistoryPage, type HistoryPageResult, type HistorySelection } from "../history/query.js";
 import { currentHistory, loadHistoryRepresentative, loadHistorySession, matchesSession, parseSessionSelector, resolveSession, sessionIdentity, type HistoryContext } from "../history/corpus.js";
-import { allItems, eventDocument, nestedCallSummary, toolSummary, HistoryRoleSchema, NestedCallSummarySchema, ToolSummarySchema, type HistoryFoldedRow, type HistoryPageItem } from "../history/history.js";
+import { allItems, eventDocument, nestedCallSummary, toolSummary, HistoryRoleSchema, NestedCallSummarySchema, ToolSummarySchema, type HistoryBound, type HistoryFoldedRow, type HistoryPageItem } from "../history/history.js";
 
 /** One read: identity, tool summary and a flat document slice. */
 const HistoryReadDataSchema = Type.Object({
@@ -39,7 +40,7 @@ function toolHeader(item: { role: string; tool?: string; tool_status?: string; o
 
 function renderPageItem(item: HistoryPageItem): string {
 	const tool = toolHeader(item);
-	const lines = tool === undefined ? [header(item)] : [header(item), tool];
+	const lines = [header(item) + (item.context ? " | search context" : ""), ...(tool ? [tool] : [])];
 	if (item.truncated) lines.push(`[truncated; from offset ${item.offset_chars ?? 0}]`);
 	lines.push(item.content);
 	return lines.join("\n");
@@ -48,7 +49,7 @@ function renderPageItem(item: HistoryPageItem): string {
 function renderFoldedRow(row: HistoryFoldedRow): string {
 	const tools = Object.entries(row.tools).map(([name, count]) => `${name} ${count}`).join(", ");
 	const identity = row.session === undefined ? {} : { session: row.session };
-	const expand = `\n\t→ expand: ${JSON.stringify({ ...identity, after_seq: row.first_seq - 1, before_seq: row.last_seq + 1, roles: ["tool", "context"] })}`;
+	const expand = `\n\t→ expand: ${JSON.stringify({ ...identity, after: row.first_seq - 1, before: row.last_seq + 1, roles: ["tool", "context"] })}`;
 	return `${row.session === undefined ? "" : `session ${row.session} | `}seqs ${row.first_seq}-${row.last_seq} | folded ${row.count} events${tools ? ` | ${tools}` : ""}${expand}`;
 }
 
@@ -58,21 +59,21 @@ function renderPage(page: HistoryPage): string {
 	const body = [...page.items.flatMap((item) => [...(item.folded_before ? [renderFoldedRow(item.folded_before)] : []), renderPageItem(item)]), ...(page.folded_after ? [renderFoldedRow(page.folded_after)] : [])].join("\n\n");
 	if (isMultiPage(page)) {
 		const directions = [page.has_older && "older", page.has_newer && "newer"].filter(Boolean).join("|");
-		return (page.notice ?? "") + body + (directions ? `\n\n→ more ${directions} results: narrow with since/until, query, roles or the session pattern` : "");
+		return (page.notice ?? "") + body + (directions ? `\n\n→ more ${directions} results: narrow with time bounds (after/before), query, roles or the session pattern` : "");
 	}
-	const first = page.items[0]!;
-	const last = page.items.at(-1)!;
-
+	const hits = page.items.filter(item => !item.context);
+	const first = hits[0]!;
+	const last = hits.at(-1)!;
 	const cursors = [
-		page.has_older ? `→ older: ${JSON.stringify({ ...(first.session === undefined ? {} : { session: first.session }), before_seq: first.seq })}` : "",
-		page.has_newer ? `→ newer: ${JSON.stringify({ ...(last.session === undefined ? {} : { session: last.session }), after_seq: last.seq })}` : "",
+		page.has_older ? `→ older: ${JSON.stringify({ session: first.session, before: first.seq })}` : "",
+		page.has_newer ? `→ newer: ${JSON.stringify({ session: last.session, after: last.seq })}` : "",
 	].filter((line) => line !== "");
 	return (page.notice ?? "") + (cursors.length === 0 ? body : `${body}\n\n${cursors.join(" | ")}`);
 }
 
 function renderRead(data: HistoryReadData): string {
 	const tool = toolHeader(data);
-	const neighborhood = `neighborhood → \`history_list\`(${JSON.stringify({ ...(data.session === undefined ? {} : { session: data.session }), after_seq: Math.max(0, data.seq - 10), before_seq: data.seq + 10 })})`;
+	const neighborhood = `neighborhood → \`history_list\`(${JSON.stringify({ ...(data.session === undefined ? {} : { session: data.session }), after: Math.max(0, data.seq - 10), before: data.seq + 10 })})`;
 	return (data.notice ?? "") + [header(data), ...(tool ? [tool] : []), neighborhood, "", data.total_chars === 0 ? "No visible text recorded for this event." : renderTextWindow(data)].join("\n");
 }
 
@@ -86,24 +87,52 @@ const plainText: HistoryTextWrapper = (text) => text;
 function pageOutcome(result: HistoryPageResult): Outcome<HistoryPage> {
 	if (!("pageTooLarge" in result)) return result;
 	const { count, multi } = result.pageTooLarge;
-	const narrow = multi ? "narrow the session pattern, query, roles or `since`/`until`, or read one session/seq with `history_read`" : "narrow with `before_seq`/`after_seq` or `since`/`until`, pass `roles` to skip folding, or `history_read` one seq";
+	const narrow = multi ? "narrow the session pattern, query, roles or time bounds (`after`/`before`), or read one session/seq with `history_read`" : "narrow with `after`/`before`, pass `roles` to skip folding, or `history_read` one seq";
 	return failure("page_too_large", `Even trimmed to their shortest, these ${count} rows${multi ? "" : " and their folded runs"} fill the ${TOOL_OUTPUT_LIMIT} a call can carry; ${narrow}.`);
 }
 
 /* ------------------------------------------------------------------ history_list */
 
+const boundParameter = (description: string) => Type.Optional(Type.Union([Type.String(), Type.Number()], { description: `${description} Use a seq (number or digits) or ISO 8601 time (UTC without offset); wildcards take only times.` }));
 export const historyListParameters = Type.Object({
 	session: Type.Optional(Type.String({ minLength: 1, description: "Whose record: a session ID or prefix (pi:, claude:, codex:, dsh: allowed). Leave it out for this one. `*` means every recent session." })),
-	query: Type.Optional(searchQuery("Text to look for, or a list (any match). Searches what was said, tool arguments and output.")),
 	roles: historyRoles(),
-	before_seq: Type.Optional(Type.Integer({ minimum: 1, description: "Only entries before this seq." })),
-	after_seq: Type.Optional(Type.Integer({ minimum: 0, description: "Only entries after this seq; 0 starts from the first page." })),
-	since: Type.Optional(Type.String({ minLength: 1, description: "Only entries at or after this time (ISO 8601; UTC without an offset)." })),
-	until: Type.Optional(Type.String({ minLength: 1, description: "Only entries before this time (ISO 8601; UTC without an offset)." })),
-	from: Type.Optional(Type.Union([Type.Literal("newest"), Type.Literal("oldest")], { description: "Which end `limit` counts from: newest or oldest. Entries still read oldest first." })),
-	limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500, description: "How many entries per page; folded runs don't count." })),
+	query: Type.Optional(searchQuery("Text to look for, or a list (any match). Searches what was said, tool arguments and output.")),
+	after: boundParameter("Start strictly after this bound, paging forward; 0 starts at the oldest event."),
+	before: boundParameter("Stop strictly before this bound; without `after`, take the newest eligible events."),
+	context: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: "Neighboring events on each side of a hit in its own session; requires a query." })),
+	limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500, description: "How many events or hits per page; folds and search context don't count." })),
 	max_chars_per_item: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_READ_WINDOW_CHARS, description: "How much of each entry to show." })),
 }, { additionalProperties: false });
+
+const ISO_8601 = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+function parseBound(name: "after" | "before", value?: number | string): Outcome<HistoryBound | undefined> {
+	if (value === undefined) return success(undefined);
+	if (typeof value === "number" || /^\d+$/.test(value)) {
+		const seq = Number(value);
+		if (Number.isSafeInteger(seq) && seq >= 0) return success({ seq });
+	} else if (typeof value === "string") {
+		const match = ISO_8601.exec(value);
+		const at = match ? Date.parse(match[1] ? value : `${value}Z`) : NaN;
+		if (!Number.isNaN(at) && new Date(value.slice(0, 10)).toISOString().startsWith(value.slice(0, 10))) return success({ at });
+	}
+	return failure("invalid_bounds", `\`${name}\` must be a non-negative integer seq or an ISO 8601 time; got ${JSON.stringify(value)}.`);
+}
+
+function parseSelection(params: Static<typeof historyListParameters>): Outcome<HistorySelection> {
+	const after = parseBound("after", params.after);
+	if (!after.ok) return after;
+	const before = parseBound("before", params.before);
+	if (!before.ok) return before;
+	try {
+		const query = searchQueries(params.query);
+		if (!query.length && params.context !== undefined) return failure("invalid_params", "`context` requires a non-empty `query`.");
+		return success({ after: after.data, before: before.data, query: query.length ? query : undefined, roles: params.roles, context: params.context, limit: params.limit });
+	} catch (error) {
+		if (error instanceof InvalidQueryError) return failure("invalid_query", error.message);
+		throw error;
+	}
+}
 
 export const historyList: Operation<typeof historyListParameters, HistoryPage, [HistoryContext, HistoryTextWrapper?]> = {
 	name: "history_list",
@@ -112,33 +141,35 @@ export const historyList: Operation<typeof historyListParameters, HistoryPage, [
 	parameters: historyListParameters,
 	outputSchema: resultSchema(HistoryPageSchema),
 	async execute(params, context, wrapText = plainText) {
+		const selection = parseSelection(params);
+		if (!selection.ok) return selection;
+		const scoped = selection.data;
 		// Charge wrapped rendering, identities, notices and recipes, not only event previews.
 		const fits = (page: HistoryPage) => fitsResult(success(page), (result) => wrapText(renderOutcome(result, renderPage)));
 		const maxChars = params.max_chars_per_item ?? HISTORY_PREVIEW_CHARS;
-		if (params.session === undefined) return pageOutcome(selectPage(await currentHistory(context), params, fits, maxChars));
+		if (params.session === undefined) return pageOutcome(selectPage(await currentHistory(context), scoped, fits, maxChars));
 		const selector = parseSessionSelector(params.session);
 		if (!selector.ok) return selector;
 		const corpus = "corpus" in context ? context.corpus : undefined;
 		if (selector.data.wildcard) {
-			const scoped = corpusSelection(params);
-			if (!scoped.ok) return scoped;
+			const { after, before, query, roles } = scoped;
+			if ((after && "seq" in after) || (before && "seq" in before)) return failure("invalid_bounds", "Wildcard history requires times, not seqs, for `after` and `before`.");
 			if (corpus === undefined) return failure("unknown_session", "This host supplied no cross-session history corpus.");
 			const sessions = (await corpus.sessions(selector.data.harness)).filter((session) => matchesSession(session, selector.data));
-			const queries = Array.isArray(scoped.data.query) ? scoped.data.query : undefined;
-			if (!queries) sessions.sort((a, b) => (scoped.data.from === "oldest" ? a.modifiedAt - b.modifiedAt : b.modifiedAt - a.modifiedAt) || sessionIdentity(a).localeCompare(sessionIdentity(b)));
-			const representative = !queries && scoped.data.roles === undefined && scoped.data.since === undefined && scoped.data.until === undefined;
-			const collector = new CorpusCollector(scoped.data);
+			if (!query) sessions.sort((a, b) => (after ? a.modifiedAt - b.modifiedAt : b.modifiedAt - a.modifiedAt) || sessionIdentity(a).localeCompare(sessionIdentity(b)));
+			const representative = !query && !roles && !after && !before;
+			const collector = new CorpusCollector(scoped);
 			let qualifying = 0;
 			const notices: string[] = [];
 			let unvisited = false;
 			for (const [index, session] of sessions.entries()) {
-				const result = representative ? await loadHistoryRepresentative(session) : await loadHistorySession(session, queries);
+				const result = representative ? await loadHistoryRepresentative(session) : await loadHistorySession(session, query);
 				if (!result.ok || !result.data) continue;
 				const added = "projection" in result.data ? collector.add(sessionIdentity(session), result.data.projection) : collector.addRepresentative(sessionIdentity(session), result.data.event);
 				if (!added) continue;
 				qualifying++;
 				if (result.data.notice) notices.push(`session ${sessionIdentity(session)}: ${result.data.notice}`);
-				if (!queries && qualifying >= Math.min(500, Math.max(1, params.limit ?? 20))) {
+				if (!query && qualifying >= Math.min(500, Math.max(1, params.limit ?? 20))) {
 					unvisited = index + 1 < sessions.length;
 					break;
 				}
@@ -152,7 +183,7 @@ export const historyList: Operation<typeof historyListParameters, HistoryPage, [
 		const loaded = await loadHistorySession(target.data);
 		if (!loaded.ok) return loaded;
 		const notice = loaded.data.notice === undefined ? {} : { notice: loaded.data.notice };
-		const result = pageOutcome(selectPage(loaded.data.projection, { ...params, session: sessionIdentity(target.data) }, (page) => fits({ ...page, ...notice }), maxChars));
+		const result = pageOutcome(selectPage(loaded.data.projection, { ...scoped, session: sessionIdentity(target.data) }, (page) => fits({ ...page, ...notice }), maxChars));
 		return result.ok ? success({ ...result.data, ...notice }) : result;
 	},
 	render: (result) => renderOutcome(result, renderPage),

@@ -215,7 +215,7 @@ test("two native checkpoints retain old raw history; replacement_history is not 
 	assert.deepEqual(second.projection.windows.map((w) => [w.windowId, w.items[0]?.seq, w.items.at(-1)?.seq]), [
 		[`codex:${ROOT}:${W0}`, 2, 3], [`codex:${ROOT}:${W1}`, 4, 6], [`codex:${ROOT}:${W2}`, 7, 8],
 	]);
-	const earlier = await historyList.execute({ after_seq: 3, before_seq: 7, roles: ["user"] }, second.projection);
+	const earlier = await historyList.execute({ after: 3, before: 7, roles: ["user"] }, second.projection);
 	assert.ok(earlier.ok);
 	assert.deepEqual(earlier.data.items.map((item) => [item.seq, item.role, item.content]), [[6, "user", "middle text"]]);
 	const old = await historyRead.execute({ seq: 2 }, second.projection);

@@ -330,7 +330,7 @@ test("history paging bounds are the schema's, and a zero limit still pages one e
 	assert.equal(Check(historyList.parameters, { limit: 501 }), false, "the schema refuses a limit past its maximum");
 	assert.equal(Check(historyList.parameters, { max_chars_per_item: 0 }), false, "the schema refuses a zero preview budget");
 
-	const zero = data(await historyList.execute({ limit: 0, from: "oldest", roles: ["user"] }, projection));
+	const zero = data(await historyList.execute({ limit: 0, after: 0, roles: ["user"] }, projection));
 	assert.equal(zero.items.length, 1, "an unvalidated zero limit still returns one row instead of none");
 	const negative = data(await historyList.execute({ max_chars_per_item: -5, roles: ["user"] }, projection));
 	const row = negative.items[0]!;

@@ -118,18 +118,17 @@ test("all single-session recipes preserve the resolved identity, including folde
 		{ seq: 4, windowId: "w", role: "assistant", text: "last" },
 	] }], 4, new Set([1, 2, 3, 4]));
 	const ctx = context([descriptor("claude", "target-session", p)]);
-	const page = await historyList.execute({ session: "claude:target", limit: 1, after_seq: 1, before_seq: 5, from: "newest" }, ctx);
+	const page = await historyList.execute({ session: "claude:target", limit: 1, before: 5 }, ctx);
 	assert.equal(data(page).has_older, true);
-	assert.match(historyList.render(page), /→ older: \{"session":"claude:target-session","before_seq":4\}/);
-	const first = await historyList.execute({ session: "target", from: "oldest", limit: 1 }, ctx);
+	assert.match(historyList.render(page), /→ older: \{"session":"claude:target-session","before":4\}/);
+	const first = await historyList.execute({ session: "target", after: 0, limit: 1 }, ctx);
 	assert.equal(data(first).has_newer, true);
-	assert.match(historyList.render(first), /→ newer: \{"session":"claude:target-session","after_seq":1\}/);
+	assert.match(historyList.render(first), /→ newer: \{"session":"claude:target-session","after":1\}/);
 	const foldPage = await historyList.execute({ session: "target", limit: 3 }, ctx);
 	const expand = /→ expand: (\{[^\n]+\})/.exec(historyList.render(foldPage));
 	assert.ok(expand);
-	const recipe = JSON.parse(expand[1]!) as { session: string; after_seq: number; before_seq: number; roles: ["context"] };
+	const recipe = JSON.parse(expand[1]!);
 	assert.equal(recipe.session, "claude:target-session");
-	assert.equal("from" in recipe, false);
 	assert.deepEqual(data(await historyList.execute(recipe, ctx)).items.map((item) => item.seq), [2]);
 	assert.match(historyList.render(foldPage), /session claude:target-session \| seq 1 \| user/);
 	const read = await historyRead.execute({ session: "target", seq: 3 }, ctx);
@@ -151,31 +150,22 @@ test("recipes expand a fold at seq 1 and read its neighborhood from the start", 
 	const expand = /→ expand: (\{[^\n]+\})/.exec(historyList.render(folded));
 	assert.ok(expand);
 	const recipe = JSON.parse(expand[1]!);
-	assert.equal(recipe.after_seq, 0);
+	assert.equal(recipe.after, 0);
 	assert.ok(Check(historyList.parameters, recipe));
 	assert.deepEqual(data(await historyList.execute(recipe, ctx)).items.map((item) => item.seq), [1, 2]);
 	const read = await historyRead.execute({ session: "first-fold", seq: 3 }, ctx);
 	const neighborhood = /neighborhood → `history_list`\((\{[^\n]+\})\)/.exec(historyRead.render(read));
 	assert.ok(neighborhood);
 	const nearby = JSON.parse(neighborhood[1]!);
-	assert.equal(nearby.after_seq, 0);
+	assert.equal(nearby.after, 0);
 	assert.ok(Check(historyList.parameters, nearby));
 	assert.ok(data(await historyList.execute(nearby, ctx)).items.length > 0);
 });
 
 test("wildcard refusals precede discovery, and read accepts no wildcard selector", async () => {
 	const ctx: HistoryContext = { current: () => { throw new Error("must not load current"); }, corpus: { currentHarness: "pi", sessions: async () => { throw new Error("must not discover"); } } };
-	for (const session of ["*", "pi:*", "pre*fix"]) {
-		for (const query of [undefined, "", [], ["", ""], "needle"]) {
-			for (const bounds of [{ before_seq: 10 }, { after_seq: 0 }, { after_seq: 1 }, { before_seq: 10, after_seq: 1 }]) {
-				refusal(await historyList.execute({ session, query, ...bounds }, ctx), "invalid_bounds");
-			}
-		}
-	}
-	for (const session of ["*", "pi:*", "cl*", "dsh:pre*suffix"]) {
-		refusal(await historyRead.execute({ session, seq: 1 }, ctx), "invalid_session");
-	}
-	refusal(await historyList.execute({ session: "*", query: "needle", since: "not-a-date" }, ctx), "invalid_time");
+	assert.match(refusal(await historyList.execute({ session: "pi:*", query: "needle", after: "3" }, ctx), "invalid_bounds"), /requires times/);
+	refusal(await historyRead.execute({ session: "*", seq: 1 }, ctx), "invalid_session");
 });
 
 test("native filesystem discovery decodes three harnesses, compressed Codex, and keeps source bytes/mtime unchanged", async (t) => {
@@ -215,14 +205,12 @@ test("wildcard query merges every role chronologically, limits from either end, 
 	assert.deepEqual(newest.items, page.items.slice(-2));
 	assert.equal(newest.has_older, true);
 	assert.equal(newest.has_newer, false);
-	assert.doesNotMatch(historyList.render(newestResult), /before_seq|after_seq/);
-	const oldestResult = await historyList.execute({ session: "*", query: "needle", limit: 2, from: "oldest" }, ctx);
+	const oldestResult = await historyList.execute({ session: "*", query: "needle", limit: 2, after: "2026-10-06" }, ctx);
 	const oldest = data(oldestResult);
 	assert.deepEqual(oldest.items, page.items.slice(0, 2));
 	assert.equal(oldest.has_older, false);
 	assert.equal(oldest.has_newer, true);
-	assert.doesNotMatch(historyList.render(oldestResult), /before_seq|after_seq/);
-	const filtered = data(await historyList.execute({ session: "*", query: "needle", roles: ["tool", "context"], since: "2026-10-06T01:02:05", until: "2026-10-06T01:02:07Z" }, ctx));
+	const filtered = data(await historyList.execute({ session: "*", query: "needle", roles: ["tool", "context"], after: "2026-10-06T01:02:04", before: "2026-10-06T01:02:07Z" }, ctx));
 	assert.deepEqual(filtered.items.map((item) => item.role), ["tool"]);
 	const harness = data(await historyList.execute({ session: "claude:*", query: "needle" }, ctx));
 	assert.ok(harness.items.every((item) => "session" in item && item.session === "claude:claude-one"));
@@ -246,12 +234,11 @@ test("bounded wildcard search scans every session and orders untimed and tied ma
 	}));
 	const ctx = context(sessions);
 	const ids = (page: ReturnType<typeof data<import("../src/history/query.js").HistoryPage>>) => page.items.map((item) => "seq" in item ? [item.session, item.seq] : null);
-	assert.deepEqual(ids(data(await historyList.execute({ session: "*", query: "needle", from: "oldest", limit: 3 }, ctx))), [["pi:a", 1], ["pi:a", 2], ["pi:m", 1]]);
+	assert.deepEqual(ids(data(await historyList.execute({ session: "*", query: "needle", after: "2026-10-06", limit: 3 }, ctx))), [["pi:a", 3], ["pi:a", 4], ["pi:a", 5]]);
 	assert.deepEqual(seen, ["z", "a", "m"]);
 	seen.length = 0;
 	assert.deepEqual(ids(data(await historyList.execute({ session: "*", query: "needle", limit: 3 }, ctx))), [["pi:z", 198], ["pi:z", 199], ["pi:z", 200]]);
 	assert.deepEqual(seen, ["z", "a", "m"]);
-	assert.deepEqual(ids(data(await historyList.execute({ session: "*", query: "needle", from: "oldest", limit: 1, since: AT }, ctx))), [["pi:a", 3]]);
 });
 
 test("query-less wildcards browse recent sessions, normalize empty queries, and keep canonical IDs", async (t) => {
@@ -291,7 +278,7 @@ test("session overviews order discovery by mtime, stop at the session limit, the
 	assert.deepEqual(loaded, Array.from({ length: 20 }, (_, index) => 24 - index));
 	assert.deepEqual(recent.items.map((item) => item.session), loaded.map((index) => `pi:s-${index}`));
 	loaded.length = 0;
-	const oldest = data(await historyList.execute({ session: "*", from: "oldest", limit: 2 }, ctx));
+	const oldest = data(await historyList.execute({ session: "*", after: AT, limit: 2 }, ctx));
 	assert.equal(oldest.has_older, false);
 	assert.equal(oldest.has_newer, true);
 	assert.deepEqual(loaded, [0, 1]);
@@ -322,12 +309,11 @@ test("session representatives respect visibility, role/time filters, opening use
 	assert.deepEqual(await chosen({ roles: ["context", "tool"] }), [8]);
 	assert.deepEqual(await chosen({ roles: ["tool"] }), [6]);
 	assert.deepEqual(await chosen({ roles: [] }), []);
-	assert.deepEqual(await chosen({ since: at(2), until: at(3) }), [4]);
-	assert.deepEqual(await chosen({ since: at(3) }), [5]);
-	assert.deepEqual(await chosen({ until: at(1) }), [1]);
-	assert.deepEqual(await chosen({ since: at(4) }), [8]);
-	assert.deepEqual(await chosen({ since: at(4), roles: ["user"] }), []);
-	assert.deepEqual(await chosen({ since: at(7) }), []);
+	assert.deepEqual(await chosen({ after: at(1), before: at(3) }), [4]);
+	assert.deepEqual(await chosen({ after: at(2) }), [5]);
+	assert.deepEqual(await chosen({ before: at(1) }), [1]);
+	assert.deepEqual(await chosen({ after: at(4) }), [8]);
+	assert.deepEqual(await chosen({ after: at(4), roles: ["user"] }), []);
 	const noUsers = { ...p, windows: p.windows.map((window) => ({ ...window, items: window.items.filter((item) => item.role !== "user") })) };
 	const fallback = data(await historyList.execute({ session: "*" }, context([descriptor("pi", "assistant-topic", noUsers)])));
 	assert.deepEqual(fallback.items.map((item) => "seq" in item ? item.seq : null), [4]);
@@ -440,13 +426,12 @@ test("oversized cross-session reads/searches obey both wire budgets and retain c
 
 test("wildcard byte budgets report retained candidates beyond either end", async () => {
 	const ctx = context([descriptor("pi", "large", projection("needle " + "x".repeat(20_000)))]);
-	for (const from of ["newest", "oldest"] as const) {
-		const result = await historyList.execute({ session: "*", query: "needle", from, limit: 5, max_chars_per_item: 50_000 }, ctx);
+	for (const after of [undefined, AT]) {
+		const result = await historyList.execute({ session: "*", query: "needle", after, limit: 5, max_chars_per_item: 50_000 }, ctx);
 		const page = data(result);
 		assert.ok(page.items.length < 5);
-		assert.equal(page.has_older, from === "newest");
-		assert.equal(page.has_newer, from === "oldest");
-		assert.doesNotMatch(historyList.render(result), /before_seq|after_seq/);
+		assert.equal(page.has_older, after === undefined);
+		assert.equal(page.has_newer, after !== undefined);
 	}
 });
 

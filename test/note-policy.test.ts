@@ -6,7 +6,7 @@ import test from "node:test";
 import { Check } from "typebox/value";
 import { createNotesStore, effectiveNotePolicy, NoteError, type NoteErrorCode, type NotesIdentity } from "../src/notes/index.js";
 import { parseNote } from "../src/notes/frontmatter.js";
-import { DEFAULT_BOOT_TOOL_NAMES, loadNotesSnapshot, notesList, notesRead, notesSearch, notesToolContext, notesUpdate, notesWrite, renderBootBlock } from "../src/index.js";
+import { DEFAULT_BOOT_TOOL_NAMES, loadNotesSnapshot, notesList, notesRead, notesToolContext, notesUpdate, notesWrite, renderBootBlock } from "../src/index.js";
 import type { Outcome } from "../src/result.js";
 import { wireResult } from "../src/tools/result.js";
 
@@ -105,11 +105,11 @@ test("tools set policy, validate values, and visibly report effective policy and
 	assert.equal(data(list).files[0]!.pinned, true);
 	assert.match(notesList.render(list), /pinned true \| budget 2 \| readonly false/);
 	assert.match(notesList.render(list), /Warning: note body is 3/);
-	const search = await notesSearch.execute({ query: "😀", max_matches_per_file: 1 }, context);
-	assert.equal(Check(notesSearch.outputSchema, wireResult(search)), true);
+	const search = await notesList.execute({ query: "😀", max_matches_per_file: 1 }, context);
+	assert.equal(Check(notesList.outputSchema, wireResult(search)), true);
 	assert.equal(data(search).files[0]!.budget, 2);
-	assert.match(notesSearch.render(search), /pinned true \| budget 2 \| readonly false/);
-	assert.match(notesSearch.render(search), /Warning: note body is 3/);
+	assert.match(notesList.render(search), /pinned true \| budget 2 \| readonly false/);
+	assert.match(notesList.render(search), /Warning: note body is 3/);
 	const overflow = await notesWrite.execute({ address: "overflow", content: "😀".repeat(3), budget: 2 }, context);
 	for (const warnings of [data(overflow).warnings, data(read).warnings]) {
 		assert.ok(warnings.length > 0);

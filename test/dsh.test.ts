@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveProjectNamespace } from "../src/notes/project-namespace.js";
 import { NOTES_PROTOCOL_CLOSE_TAG, WINDOW_IDENTITY_CLOSE_TAG, WINDOW_IDENTITY_OPEN_TAG } from "../src/boot/text.js";
-import { notesList, notesRead, notesSearch, notesUpdate, notesWrite } from "../src/tools/notes.js";
+import { notesList, notesRead, notesUpdate, notesWrite } from "../src/tools/notes.js";
 import { historyList, historyRead } from "../src/tools/history.js";
 import { notesToolContext } from "../src/tools/notes-context.js";
 import { success } from "../src/result.js";
@@ -30,7 +30,7 @@ function code(expected: string) { return (error: unknown) => (error as { code?: 
 
 test("dsh preserves shared tool and parameter descriptions verbatim", async t => {
 	const { ctx } = await dshFixture(t);
-	for (const operation of [notesWrite, notesUpdate, notesRead, notesList, notesSearch, historyList, historyRead]) {
+	for (const operation of [notesWrite, notesUpdate, notesRead, notesList, historyList, historyRead]) {
 		const registered = ctx.tools.get(operation.name)!;
 		assert.equal(registered.description, operation.description);
 		const properties = registered.parameters.properties as Record<string, { description?: string }>;

@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url";
 import type { Static, TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { paramProblem } from "../../../src/tools/schema.js";
-import { notesList, notesRead, notesSearch, notesUpdate, notesWrite } from "../../../src/tools/notes.js";
+import { notesList, notesRead, notesUpdate, notesWrite } from "../../../src/tools/notes.js";
 import { historyList, historyRead, type HistoryTextWrapper } from "../../../src/tools/history.js";
 import { localHistoryCorpus, type LocalHistoryOptions } from "../../../src/history/local.js";
 import { readClaudeHistory, type ClaudeHistorySource } from "./history.js";
@@ -54,7 +54,6 @@ const OPERATIONS: Record<string, BoundOperation<[NotesToolContext]>> = {
 	notes_update: boundOperation(notesUpdate),
 	notes_read: boundOperation(notesRead),
 	notes_list: boundOperation(notesList),
-	notes_search: boundOperation(notesSearch),
 };
 
 const HISTORY_OPERATIONS = {

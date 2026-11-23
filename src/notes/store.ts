@@ -29,10 +29,8 @@ export type NoteSearchRow = { address: string; scope: Scope; path: string; meta:
 export type EditOperation = { oldText: string; newText: string };
 export type WriteOptions = NotePolicyFields & { origin?: Origin };
 export type EditOptions = NotePolicyFields & { origin?: Origin; crumpled?: boolean; replaceAll?: boolean; renameTo?: string };
-/** Omitted/null/empty glob or bare @default selects current notebooks; explicit globs match full addresses.
- * A pattern without `@` or `/` matches filenames at any depth; relative paths with `/` match the current session.
- */
-export type NotesQuery = { glob?: string | null; crumpled?: boolean };
+/** Omit glob for current notebooks. A pattern without `@` or `/` matches filenames at any depth. */
+export type NotesQuery = { glob?: string; crumpled?: boolean };
 /** A read exposes metadata and the pure body; the serialized frontmatter is never part of the body. */
 export type NoteReadResult = { meta: NoteMeta; body: string; resolvedScope: Scope };
 export type NoteWriteResult = { meta: NoteMeta; warnings: string[]; outcome: "created" | "overwrote" | "uncrumpled" };
@@ -480,8 +478,7 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 	}
 
 	async function* scan(options: NotesQuery, status?: NoteQueryStatus): AsyncGenerator<Omit<NoteRow, "sizeBytes">> {
-		const glob = assertGlobPattern(options.glob);
-		const pattern = glob === "@default" ? undefined : glob;
+		const pattern = assertGlobPattern(options.glob);
 		const normalized = normalizePattern(pattern, identity);
 		const matcher = normalized === undefined ? undefined : globToRegExp(normalized);
 		const namespaces = await namespacesForPattern(pattern, identity, status);

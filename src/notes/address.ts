@@ -48,8 +48,8 @@ export function globToRegExp(pattern: string): RegExp {
 
 /** Glob patterns are not virtual paths (`*` is legal), so they get their own guard. */
 export function assertGlobPattern(value: unknown): string | undefined {
-	if (value === undefined || value === null || value === "") return undefined;
-	if (typeof value !== "string") throw new NoteError("invalid_pattern", `glob ${shown(value)} must be a string.`);
+	if (value === undefined) return undefined;
+	if (typeof value !== "string" || !value) throw new NoteError("invalid_pattern", `glob ${shown(value)} must be a non-empty string; omit it for the current notebooks.`);
 	if (value.includes("\0") || value.includes("\\")) throw new NoteError("invalid_pattern", `glob ${shown(value)} can't contain "\\" or NUL.`);
 	return value;
 }
