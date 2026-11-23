@@ -3,6 +3,8 @@ import type { EngineInterface, On, ProcessRunResult, ToolCallInput, ToolCallResu
 const PREFIX = "mcp__notesoup__"
 const HELPER = `${import.meta.dir}/../dist/claude/helper.js`
 const TIMEOUT_MS = 10_000
+// A cold history query can scan gigabytes of transcripts; notes and reset plumbing should fail fast.
+const HISTORY_TIMEOUT_MS = 120_000
 const OUTPUT_LIMIT = 1024 * 1024
 
 type Identity = { home: string; sessionId: string; cwd: string; agent: string; model: string }
@@ -322,10 +324,10 @@ function decode(result: ProcessRunResult): { ok: true; result: unknown } | { ok:
     return { ok: false, error: typeof value.error === "string" ? value.error : "helper returned an invalid error" }
   } catch { return { ok: false, error: "helper returned invalid JSON" } }
 }
-async function run($: { process: { run: (argv: readonly string[], init?: { cwd?: string; stdin?: string; timeoutMs?: number }) => Promise<ProcessRunResult> } }, request: unknown) {
+async function run($: { process: { run: (argv: readonly string[], init?: { cwd?: string; stdin?: string; timeoutMs?: number }) => Promise<ProcessRunResult> } }, request: unknown, timeoutMs = TIMEOUT_MS) {
   // A session may still name a removed worktree. Project identity travels in stdin;
   // launch from the plugin directory so removing that worktree cannot prevent spawn.
-  try { return decode(await $.process.run(["node", HELPER], { cwd: import.meta.dir, stdin: `${JSON.stringify(request)}\n`, timeoutMs: TIMEOUT_MS })) }
+  try { return decode(await $.process.run(["node", HELPER], { cwd: import.meta.dir, stdin: `${JSON.stringify(request)}\n`, timeoutMs })) }
   // The host's rejection is the only diagnosis there is: it carries the spawn failure's own
   // reason (`timed out after …`), which a bare phrase would throw away.
   catch (error) { return { ok: false as const, error: `helper execution failed: ${describeFailure(error)}` } }
@@ -618,8 +620,9 @@ async function callNotesTool($: Engine, state: ResetState, e: ToolCallInput): Pr
     if (state.flow.requestReset({ lastWord, terminate: terminate === true })) state.continuation = undefined
     return { result: `Brain reset requested. This tool batch will finish, then the turn stops before its next model request unless it has new user input to handle. Your notes and sticky note survive the reset.${state.flow.request!.resume ? " You will continue in a fresh window after the reset." : " No automatic continuation will be submitted."}` }
   }
-  if (name.startsWith("history_") && agentId !== undefined) return errorResult("history is unavailable for subagents; main-session history is not their transcript")
-  const result = await run($, { op: "tool", tool: name, params, identity, history: state.history })
+  const history = name === "history_list" || name === "history_read"
+  if (history && agentId !== undefined) return errorResult("history is unavailable for subagents; main-session history is not their transcript")
+  const result = await run($, { op: "tool", tool: name, params, identity, history: state.history }, history ? HISTORY_TIMEOUT_MS : TIMEOUT_MS)
   if (!result.ok) return errorResult(result.error)
   const outcome = toolResultOf(result.result)
   if (!outcome) return errorResult("helper returned an invalid tool result")

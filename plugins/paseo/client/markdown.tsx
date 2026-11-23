@@ -1,160 +1,63 @@
-import { Lexer, lexer, type Token, type Tokens } from "marked";
-import type { ReactNode } from "react";
+import { useMemo } from "react";
+import { Lexer, lexer } from "marked";
+import { renderBlocks, renderInlines, type MarkdownStyles } from "./markdown-core.tsx";
 import { StyleSheet, Text, View, type TextStyle, type ViewStyle } from "react-native";
-import { MONO } from "./paper-card.tsx";
 import type { PaperPalette } from "./paper-palette.ts";
+import type { Typography } from "./typography.ts";
 
-type Styles = {
-  block: ViewStyle;
-  text: TextStyle; muted: TextStyle; strong: TextStyle; em: TextStyle; del: TextStyle;
-  codespan: TextStyle; link: TextStyle; heading: TextStyle; quoteText: TextStyle;
-  code: TextStyle; marker: TextStyle; tableCell: TextStyle;
-  quote: ViewStyle; hr: ViewStyle; list: ViewStyle; listItem: ViewStyle;
-  table: ViewStyle; tableRow: ViewStyle;
-};
+type Styles = MarkdownStyles & { block: ViewStyle; muted: TextStyle };
 
-function markdownStyles(paper: PaperPalette): Styles {
+function markdownStyles(paper: PaperPalette, type: Typography): Styles {
+  const hairline = { borderWidth: StyleSheet.hairlineWidth, borderColor: paper.edge };
   return {
     block: { gap: 8 },
-    text: { color: paper.ink, fontSize: 12, lineHeight: 19 },
-    muted: { color: paper.inkMuted, fontSize: 12, lineHeight: 19 },
+    text: { ...type.body, color: paper.ink },
+    muted: { ...type.body, color: paper.inkMuted },
     strong: { fontWeight: "600" },
-    em: { color: paper.inkMuted, fontStyle: "italic" },
+    em: { fontStyle: "italic" },
     del: { color: paper.inkMuted, textDecorationLine: "line-through" },
-    codespan: { fontFamily: MONO, fontSize: 12, backgroundColor: paper.crumpled },
+    // No borderRadius here: nested rounded Text backgrounds paint a wrapped slab on iOS Fabric.
+    // A faint ink wash keeps flush glyph edges gentle and stays visible on crumpled paper too.
+    inlineCode: { ...type.inlineCode, backgroundColor: `${paper.ink}10` },
     link: { color: paper.added, textDecorationLine: "underline" },
-    heading: { fontWeight: "600" },
-    quote: { borderLeftWidth: 2, borderLeftColor: paper.edge, paddingLeft: 10, gap: 4, marginTop: 4 },
-    quoteText: { color: paper.inkMuted, fontSize: 12, lineHeight: 19 },
-    code: {
-      fontFamily: MONO, fontSize: 12, lineHeight: 18, color: paper.ink,
-      backgroundColor: paper.crumpled, borderRadius: 3, paddingVertical: 6, paddingHorizontal: 8,
-    },
-    hr: { height: StyleSheet.hairlineWidth, backgroundColor: paper.edge },
-    list: { gap: 8 },
-    listItem: { flexDirection: "row" },
-    marker: { color: paper.inkMuted, minWidth: 14, paddingRight: 4 },
-    table: { gap: 2 },
-    tableRow: { flexDirection: "row", gap: 8 },
-    tableCell: { flex: 1 },
+    heading: { ...type.base, fontWeight: "600", color: paper.ink, letterSpacing: -0.1 },
+    quote: { borderLeftWidth: 2, borderLeftColor: paper.edge, paddingLeft: 10, gap: 4 },
+    quoteText: { color: paper.inkMuted },
+    codeBlock: { ...hairline, backgroundColor: paper.crumpled, borderRadius: 4 },
+    codeContent: { paddingVertical: 6, paddingHorizontal: 8 },
+    codeText: { ...type.code, color: paper.ink },
+    separator: { height: StyleSheet.hairlineWidth, backgroundColor: paper.edge, marginVertical: 2 },
+    list: { gap: 4 },
+    listRow: { flexDirection: "row" },
+    listItem: { flex: 1, gap: 4 },
+    bullet: { ...type.body, color: paper.inkMuted, minWidth: 18, paddingRight: 6,
+      textAlign: "right", fontVariant: ["tabular-nums"] },
+    table: { ...hairline, borderRadius: 4, overflow: "hidden" },
+    tableHead: { backgroundColor: paper.crumpled },
+    tableRow: { flexDirection: "row", borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: paper.edge },
+    tableCell: { paddingVertical: 4, paddingHorizontal: 8 },
   };
 }
 
-/** Inline tokens keep their nesting: strong/em/del/link hold the tokens they wrap. */
-function renderInlines(tokens: Token[] | undefined, styles: Styles, keyPrefix: string): ReactNode[] {
-  if (!tokens) return [];
-  return tokens.map((token, index) => {
-    const key = `${keyPrefix}.${index}`;
-    switch (token.type) {
-      case "strong":
-        return <Text key={key} style={styles.strong}>{renderInlines(token.tokens, styles, key)}</Text>;
-      case "em":
-        return <Text key={key} style={styles.em}>{renderInlines(token.tokens, styles, key)}</Text>;
-      case "del":
-        return <Text key={key} style={styles.del}>{renderInlines(token.tokens, styles, key)}</Text>;
-      case "codespan":
-        return <Text key={key} style={styles.codespan}>{token.text}</Text>;
-      case "link":
-        return <Text key={key} style={styles.link}>{renderInlines(token.tokens, styles, key)}</Text>;
-      case "br":
-        return "\n";
-      case "image":
-        return <Text key={key} style={styles.link}>{token.text}</Text>;
-      default: {
-        const nested = (token as Tokens.Generic).tokens;
-        if (nested?.length) return <Text key={key}>{renderInlines(nested, styles, key)}</Text>;
-        const { text } = token as Tokens.Text;
-        return text ?? token.raw;
-      }
-    }
-  });
-}
-
-function renderListItem(item: Tokens.ListItem, marker: string, key: string, styles: Styles, textStyle: TextStyle): ReactNode {
-  return (
-    <View key={key} style={styles.listItem}>
-      <Text style={[styles.marker, textStyle]}>{item.task ? (item.checked ? "☑" : "☐") : marker}</Text>
-      <View style={{ flex: 1, gap: 4 }}>{renderBlocks(item.tokens, styles, key, textStyle)}</View>
-    </View>
-  );
-}
-
-function renderBlocks(tokens: Token[] | undefined, styles: Styles, keyPrefix: string, textStyle: TextStyle): ReactNode[] {
-  if (!tokens) return [];
-  return tokens.map((token, index) => {
-    const key = `${keyPrefix}.${index}`;
-    switch (token.type) {
-      case "space":
-      case "checkbox":
-      case "def":
-        return null;
-      case "hr":
-        return <View key={key} style={styles.hr} />;
-      case "code":
-        return <Text key={key} selectable style={styles.code}>{token.text}</Text>;
-      case "heading":
-        return <Text key={key} selectable style={[textStyle, styles.heading,
-          { marginTop: index === 0 ? 2 : token.depth === 1 ? 2 : 6 }]}>{renderInlines(token.tokens, styles, key)}</Text>;
-      case "blockquote":
-        return <View key={key} style={styles.quote}>{renderBlocks(token.tokens, styles, key, styles.quoteText)}</View>;
-      case "list": {
-        const list = token as Tokens.List;
-        const start = typeof list.start === "number" ? list.start : 1;
-        return (
-          <View key={key} style={styles.list}>
-            {list.items.map((item, itemIndex) =>
-              renderListItem(item, list.ordered ? `${start + itemIndex}.` : "•", `${key}.${itemIndex}`, styles, textStyle))}
-          </View>
-        );
-      }
-      case "table": {
-        const table = token as Tokens.Table;
-        return (
-          <View key={key} style={styles.table}>
-            {[table.header, ...table.rows].map((row, rowIndex) => (
-              <View key={`${key}.${rowIndex}`} style={styles.tableRow}>
-                {row.map((cell, cellIndex) => (
-                  <Text
-                    key={`${key}.${rowIndex}.${cellIndex}`}
-                    selectable
-                    style={[textStyle, styles.tableCell, { textAlign: cell.align ?? "left" }, cell.header && styles.strong]}
-                  >
-                    {renderInlines(cell.tokens, styles, `${key}.${rowIndex}.${cellIndex}`)}
-                  </Text>
-                ))}
-              </View>
-            ))}
-          </View>
-        );
-      }
-      default: {
-        const generic = token as Tokens.Generic;
-        return (
-          <Text key={key} selectable style={textStyle}>
-            {generic.tokens?.length ? renderInlines(generic.tokens, styles, key) : generic.text ?? generic.raw}
-          </Text>
-        );
-      }
-    }
-  });
-}
-
-export function NoteInline({ text, paper, color, numberOfLines }: {
+export function NoteInline({ text, paper, type, color, numberOfLines }: {
   text: string;
   paper: PaperPalette;
+  type: Typography;
   color?: string;
   numberOfLines?: number;
 }) {
-  const styles = markdownStyles(paper);
+  const styles = useMemo(() => markdownStyles(paper, type), [paper, type]);
+  const tokens = useMemo(() => Lexer.lexInline(text), [text]);
   return (
     <Text numberOfLines={numberOfLines} style={{ ...styles.text, color: color ?? paper.ink }}>
-      {renderInlines(Lexer.lexInline(text), styles, "inline")}
+      {renderInlines(tokens, styles, "inline")}
     </Text>
   );
 }
 
-export function NoteMarkdown({ text, paper, muted = false }: { text: string; paper: PaperPalette; muted?: boolean }) {
-  const styles = markdownStyles(paper);
+export function NoteMarkdown({ text, paper, type, muted = false }: { text: string; paper: PaperPalette; type: Typography; muted?: boolean }) {
+  const styles = useMemo(() => markdownStyles(paper, type), [paper, type]);
+  const tokens = useMemo(() => lexer(text), [text]);
   const textStyle = muted ? styles.muted : styles.text;
-  return <View style={styles.block}>{renderBlocks(lexer(text), styles, "block", textStyle)}</View>;
+  return <View style={styles.block}>{renderBlocks(tokens, styles, "block", textStyle)}</View>;
 }

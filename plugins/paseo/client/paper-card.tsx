@@ -1,8 +1,6 @@
 import type { ReactNode } from "react";
-import { Platform, StyleSheet, View } from "react-native";
+import { StyleSheet, View } from "react-native";
 import type { PaperPalette } from "./paper-palette.ts";
-
-export const MONO = Platform.select({ ios: "Menlo", android: "monospace", default: "ui-monospace, Menlo, monospace" });
 
 function Tape({ paper }: { paper: PaperPalette }) {
   return (

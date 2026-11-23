@@ -60,7 +60,7 @@ type HookEngine = {
   prompt: { submit: (input: { text: string }) => Promise<{ text: string } | { drop: string }> };
   tool: { register: (spec: HookToolSpec) => Promise<{ tool: string }> };
   ui?: { toast?: (text: string, options?: { title?: string }) => Promise<unknown>; log?: (text: string) => void };
-  process: { run: (argv: readonly string[], init?: { cwd?: string; stdin?: string }) => Promise<{ exitCode: number; stdout: string }> };
+  process: { run: (argv: readonly string[], init?: { cwd?: string; stdin?: string; timeoutMs?: number }) => Promise<{ exitCode: number; stdout: string }> };
 };
 
 // Let the unit fixture's pending Promise jobs settle. These tests exercise
@@ -1942,6 +1942,13 @@ test("Claude history keeps classic transcript_path across startup, confirms appe
   const handlers = new Map<string, HookHandler>();
   (await loadHookModule(t)).register((event, handler) => handlers.set(event, handler));
   const invoke = (name: string, event: Record<string, unknown> = {}, result: unknown = {}) => handlers.get(name)!(host, event, async () => result);
+  const budgets = new Map<string, number | undefined>();
+  const run = host.process.run;
+  host.process.run = (argv, init) => {
+    const request = JSON.parse(init!.stdin!);
+    budgets.set(request.tool ?? request.op, init?.timeoutMs);
+    return run(argv, init);
+  };
   const transcriptPath = join(home, "transcript.jsonl");
   const root = { type: "user", uuid: "root", parentUuid: null, sessionId: "hook-session", message: { role: "user", content: "old request" } };
   const attachment = { type: "attachment", uuid: "startup", parentUuid: "root", sessionId: "hook-session", rendered: [{ content: [{ type: "text", text: "startup injection" }] }] };
@@ -1976,6 +1983,11 @@ test("Claude history keeps classic transcript_path across startup, confirms appe
   const switched = await call("history_list");
   assert.match(switched.result, /another branch/);
   assert.doesNotMatch(switched.result, /startup injection/);
+  await call("notes_list");
+  assert.equal(budgets.get("history_list"), 120_000);
+  assert.equal(budgets.get("history_read"), 120_000);
+  assert.equal(budgets.get("notes_list"), 10_000);
+  assert.equal(budgets.get("history_state"), 10_000);
 });
 
 test("Claude history without a documented path refuses honestly and keeps notes usable", async (t) => {

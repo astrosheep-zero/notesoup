@@ -3,6 +3,7 @@ import { Modal } from "@getpaseo/plugin/client/react-native";
 import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import type { BrainEmpty } from "../shared/brain-empty.ts";
+import { typography } from "./typography.ts";
 
 function label(data: BrainEmpty): string {
   if (data.status === "running") return "✂ emptying brain …";
@@ -27,6 +28,7 @@ function CutLine({ color }: { color: string }) {
 export function BrainEmptyDivider({ item, theme }: PluginTimelineItemProps<BrainEmpty>) {
   const [lastWordOpen, setLastWordOpen] = useState(false);
   const data = item.data;
+  const type = typography(theme);
   const refused = data.error !== undefined || data.status === "failed";
   const color = refused ? theme.colors.statusDanger : theme.colors.foregroundMuted;
   const hasLastWord = data.outcome === "rollover_requested" && data.lastWord !== undefined;
@@ -41,17 +43,17 @@ export function BrainEmptyDivider({ item, theme }: PluginTimelineItemProps<Brain
       >
         <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
           <CutLine color={color} />
-          <Text style={{ color, fontSize: 11.5, letterSpacing: 0.3 }}>{label(data)}</Text>
+          <Text style={{ ...type.sm, color, letterSpacing: 0.3 }}>{label(data)}</Text>
           <CutLine color={color} />
         </View>
         {data.error !== undefined && (
-          <Text selectable style={{ color: theme.colors.statusDanger, fontSize: 12, textAlign: "center" }}>{data.error}</Text>
+          <Text selectable style={{ ...type.sm, color: theme.colors.statusDanger, textAlign: "center" }}>{data.error}</Text>
         )}
       </Pressable>
       {hasLastWord && (
         <Modal title="Last word" open={lastWordOpen} onOpenChange={setLastWordOpen}>
           <Modal.Content style={{ backgroundColor: theme.colors.surface2 }}>
-            <Text selectable style={{ color: theme.colors.foreground, fontSize: 14, lineHeight: 21 }}>{data.lastWord}</Text>
+            <Text selectable style={{ ...type.body, color: theme.colors.foreground }}>{data.lastWord}</Text>
           </Modal.Content>
         </Modal>
       )}

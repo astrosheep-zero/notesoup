@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { setTimeout as sleep } from "node:timers/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -53,6 +54,28 @@ test("Claude helper resolves foreign history without requiring a current append 
 	const invalid = await invoke("history_read", { session: "*", seq: 1 });
 	assert.equal(invalid.ok, false);
 	assert.match(invalid.text, /invalid_session/);
+});
+
+test("Claude history tools wait for the confirmed append, never substitute a persisted sibling", async (t) => {
+	const home = mkdtempSync(join(tmpdir(), "claude-history-lag-"));
+	t.after(() => rmSync(home, { recursive: true, force: true }));
+	const transcriptPath = join(home, "transcript.jsonl");
+	const rows = [user("root", null, "start"), assistant("sibling", "root", "sibling-only text")];
+	writeFileSync(transcriptPath, jsonl(rows));
+	const identity = { home, sessionId, cwd: home, agent: "claude", model: "claude" };
+	const history = { sessionId, transcriptPath, headUuid: "active" };
+	const options = { roots: { pi: null, claude: null, codex: null }, env: {} };
+	const invoke = (tool: string, params: unknown) => dispatch({ op: "tool", tool, params, identity, history }, options) as Promise<ClaudeToolResult>;
+	await assert.rejects(dispatch({ op: "history_state", identity, history }), /active head is not persisted/);
+	const delayedWrite = sleep(120).then(() => writeFileSync(transcriptPath, jsonl([...rows, assistant("active", "root", "confirmed active text")])));
+	const [list, read] = await Promise.all([invoke("history_list", {}), invoke("history_read", { session: `claude:${sessionId}`, seq: 3 }), delayedWrite]);
+	for (const outcome of [list, read]) {
+		assert.ok(outcome.ok, outcome.text);
+		assert.match(outcome.text, /confirmed active text/);
+		assert.doesNotMatch(outcome.text, /sibling-only text/);
+	}
+	history.headUuid = "never-written";
+	await assert.rejects(invoke("history_list", {}), /active head is not persisted/);
 });
 
 test("Claude append and result arrival preserve call addresses and use the shared paired read", async () => {

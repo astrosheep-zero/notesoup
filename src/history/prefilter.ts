@@ -13,7 +13,7 @@ const PRESENTATION = `Codex unknown arguments not recorded output nested calls c
 	FunctionCallOutput display without raw output encrypted content unavailable world_state snapshot patch omitted from
 	the text projection not a newly spoken message native structured retained context not newly spoken dialogue`;
 const HISTORY_BASE = '"history_base"';
-export type HistoryPrefilter = (chunks: AsyncIterable<Uint8Array>, codex?: boolean) => Promise<boolean>;
+export type HistoryPrefilter = (chunks: AsyncIterable<Uint8Array>, codex?: boolean, stopOnHit?: boolean) => Promise<boolean>;
 
 /** Compile literal Unicode case matching once, then keep only per-file token bits and a bounded tail. */
 export function createHistoryPrefilter(queries: readonly string[]): HistoryPrefilter {
@@ -27,7 +27,7 @@ export function createHistoryPrefilter(queries: readonly string[]): HistoryPrefi
 	}));
 	// No safe tokens (or generated text alone) cannot prove a miss.
 	const fallback = !alternatives.length || alternatives.some((tokens) => tokens.length === 0);
-	return async (chunks, codex = false) => {
+	return async (chunks, codex = false, stopOnHit = false) => {
 		const decoder = new StringDecoder("utf8");
 		const seen = alternatives.map((tokens) => tokens.map(() => false));
 		let rawTail = "", normalizedTail = "", pending = "", possible = fallback;
@@ -55,7 +55,10 @@ export function createHistoryPrefilter(queries: readonly string[]): HistoryPrefi
 			rawTail = raw.slice(-overlap);
 			normalizedTail = normalized.slice(-overlap);
 		};
-		for await (const chunk of chunks) if (!possible) scan(decoder.write(chunk));
+		for await (const chunk of chunks) {
+			if (!possible) scan(decoder.write(chunk));
+			if (possible && stopOnHit) return true;
+		}
 		if (!possible) scan(decoder.end(), true);
 		return possible;
 	};
@@ -63,12 +66,13 @@ export function createHistoryPrefilter(queries: readonly string[]): HistoryPrefi
 
 /** The byte budget comes from the strict Codex reader; Pi/Claude have no such native limit. */
 export async function historyFileMayMatch(path: string, prefilter: HistoryPrefilter, codex = false, maxBytes = codex ? CODEX_TRANSCRIPT_MAX_BYTES : Infinity): Promise<boolean> {
-	if (codex) {
-		const info = await stat(path);
-		if (!info.isFile() || info.size > maxBytes) throw new Error("Unavailable Codex transcript: read size limit exceeded or not a regular file");
-	}
-	// Native Codex compression is zstd; no decoded file or full Buffer is materialized.
-	const compressed = codex && path.endsWith(".jsonl.zst");
+	// Plain Pi/Claude files will be read and validated by the strict decoder on a possible
+	// hit. Don't drain a potentially huge file just to read it from the beginning again.
+	if (!codex) return prefilter(createReadStream(path), false, true);
+	const info = await stat(path);
+	if (!info.isFile() || info.size > maxBytes) throw new Error("Unavailable Codex transcript: read size limit exceeded or not a regular file");
+	// Native Codex compression is zstd; scan through EOF to enforce the decoded size limit.
+	const compressed = path.endsWith(".jsonl.zst");
 	if (compressed && typeof zlib.createZstdDecompress !== "function") throw new Error("Compressed Codex rollouts require Node >=22.15 (createZstdDecompress)");
 	const input = createReadStream(path);
 	const consume = async (chunks: AsyncIterable<Buffer>) => {

@@ -101,8 +101,8 @@ export async function dispatch(request: unknown, historyOptions: Pick<LocalHisto
 		const id = identity(value.identity as ClaudeIdentityInput);
 		if (Object.hasOwn(HISTORY_OPERATIONS, value.tool)) {
 			const tool = value.tool as keyof typeof HISTORY_OPERATIONS;
+			const current = () => readClaudeHistory(historySource(value.history, id.sessionId), { waitForHead: true });
 			if ((value.params as { session?: string }).session !== undefined) {
-				const current = () => readClaudeHistory(historySource(value.history, id.sessionId));
 				const corpus = localHistoryCorpus({ ...historyOptions, current: { harness: "claude", id: id.sessionId, async load() {
 					const projection = await current();
 					const notice = claudeHistoryGapNotice(projection.missingAncestors);
@@ -110,7 +110,7 @@ export async function dispatch(request: unknown, historyOptions: Pick<LocalHisto
 				} } });
 				return HISTORY_OPERATIONS[tool].call(value.params, { current, corpus });
 			}
-			const projection = await readClaudeHistory(historySource(value.history, id.sessionId));
+			const projection = await current();
 			const notice = claudeHistoryGapNotice(projection.missingAncestors);
 			const wrapText: HistoryTextWrapper = (text) => notice + text;
 			const params = value.params;

@@ -36,6 +36,11 @@ test("only EOF proves a miss, while errors after tokens or a fallback still prop
 	}
 	assert.equal(await createHistoryPrefilter(["needle"])(late()), true);
 	assert.equal(finished, true);
+	finished = false;
+	assert.equal(await createHistoryPrefilter(["needle"])(late(), false, true), true);
+	assert.equal(finished, false, "a plain-file hit leaves the rest to the strict decoder");
+	assert.equal(await createHistoryPrefilter(["absentword"])(late(), false, true), false);
+	assert.equal(finished, true, "even the early-hit path must read to EOF to prove a miss");
 	async function* broken() { yield Buffer.from("needle"); throw new Error("read failed"); }
 	for (const queries of [["absentword"], ["needle"], ["😀"]]) await assert.rejects(createHistoryPrefilter(queries)(broken()), /read failed/);
 });

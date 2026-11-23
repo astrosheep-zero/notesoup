@@ -1,7 +1,12 @@
 /** Claude's persisted main transcript -> the shared history projection. No inference-context API. */
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
+import { setTimeout as sleep } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { contentText, projectHistory, type DecodedHistoryItem, type DecodedHistoryWindow, type HistoryProjection } from "./history.js";
+
+class UnpersistedClaudeHead extends Error {
+	constructor() { super("Claude history active head is not persisted yet; retry after the transcript write"); }
+}
 
 type Row = Record<string, unknown>;
 type WindowPosition = { ordinal: number } | { unknownAncestor: string };
@@ -180,7 +185,7 @@ function claudeHistoryFromRows(rows: Row[], source: Omit<ClaudeHistorySource, "t
 		return version.position!;
 	}
 	if (!source.headUuid) throw new Error("Claude history has no confirmed active head yet; wait for a main-session append after startup/resume");
-	if (!nodes.has(source.headUuid)) throw new Error("Claude history active head is not persisted yet; retry after the transcript write");
+	if (!nodes.has(source.headUuid)) throw new UnpersistedClaudeHead();
 
 	// The inference tree uses the latest rewritten parents. At a compact boundary the logical
 	// parent and preserved segments use ORIGINAL ancestry: the old context is still history.
@@ -299,7 +304,29 @@ export function offlineClaudeHistoryFromJsonl(text: string, sessionId: string): 
 	return claudeHistoryFromRows(rows, { sessionId, headUuid: offlineClaudeHeadFromRows(rows) });
 }
 
-export async function readClaudeHistory(source: ClaudeHistorySource): Promise<ClaudeHistoryProjection> {
+export async function readClaudeHistory(source: ClaudeHistorySource, { waitForHead = false } = {}): Promise<ClaudeHistoryProjection> {
 	if (!source || typeof source.transcriptPath !== "string" || !source.transcriptPath || typeof source.sessionId !== "string") throw new Error("Claude history transcript_path is unavailable");
-	return claudeHistoryFromJsonl(await readFile(source.transcriptPath, "utf8"), source);
+	const snapshot = { ...source };
+	const read = async () => claudeHistoryFromJsonl(await readFile(snapshot.transcriptPath, "utf8"), snapshot);
+	if (!waitForHead || !snapshot.headUuid) return read();
+	const revision = async () => {
+		const { dev, ino, size, mtimeNs, ctimeNs } = await stat(snapshot.transcriptPath, { bigint: true });
+		return `${dev}:${ino}:${size}:${mtimeNs}:${ctimeNs}`;
+	};
+	let seen = await revision();
+	try { return await read(); }
+	catch (error) {
+		if (!(error instanceof UnpersistedClaudeHead)) throw error;
+		// A kept append can reach the tool before its disk write. Only retry that same
+		// head, and only reparse on file changes. Never fall back to an offline leaf.
+		for (const delay of [50, 100, 200, 300, 350]) {
+			await sleep(delay);
+			const current = await revision();
+			if (current === seen) continue;
+			seen = current;
+			try { return await read(); }
+			catch (retry) { if (!(retry instanceof UnpersistedClaudeHead)) throw retry; }
+		}
+		throw error;
+	}
 }
