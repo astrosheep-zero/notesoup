@@ -1,5 +1,3 @@
-/** Each shelf shows this many of its own freshest pages beneath its pinned pages. */
-export const SHELF_FRESH_LIMIT = 3;
 export const WINDOW_IDENTITY_OPEN_TAG = "<notesoup:window_identity>";
 export const WINDOW_IDENTITY_CLOSE_TAG = "</notesoup:window_identity>";
 export const NOTES_PROTOCOL_OPEN_TAG = "<notesoup:notes_protocol>";
@@ -58,24 +56,25 @@ ${NOTES_PROTOCOL_CLOSE_TAG}`;
  * Default pinned pages and per-note policy are taught between the protocol and the notes index.
  */
 export const MAPS_BLOCK = `<notesoup:maps>
-Every notebook's root has two default pins: \`CHEATSHEET.md\` and \`MAP.md\`.
-Pinned pages get jammed straight into your brain the moment you wake up. Whoever wakes up next
-reads them, and next is you. So keep them short, and keep them true.
+Each notebook has one default pin: \`CHEATSHEET.md\`. Pinned pages get jammed straight into your
+brain the moment you wake up. Whoever wakes up next reads them, and next is you. So keep them
+short, and keep them true.
 
-Up to five pages per notebook can be taped inside the cover, these two included. Every page gets
+Up to five pages per notebook can be taped inside the cover, CHEATSHEET included. Every page gets
 a paper budget; when a page outgrows it, boil it down — stale lines out, repeats merged, the rest
 said shorter — instead of giving it more paper.
 
 - **\`CHEATSHEET.md\`** holds what you'll want next time — a rule, a warning, a grudge, a name,
   a phone number you'll regret losing. Nobody grades it. Keep it to five lines, or it grows fat
   and everybody pays for it.
-- **\`MAP.md\`** is only the note index. One line per durable note: the address, then a gist short
-  enough to tell whether the thing is worth opening. Rules belong in \`CHEATSHEET.md\`, and note
-  contents belong in their own notes — *taps the sign* not inline here.
+- **\`description\`** is one line saying what's inside a note and when to open it — max 160
+  characters, set through your notes tools. Boot indexes every shelf from these,
+  newest first, address and age beside them. No hand-written map to keep in sync: a stale
+  description lies to the next window, so keep it true or crumple the page.
 
 Each notebook keeps its own: \`@project\`, \`@human\`, \`@self\`, \`@model\`. Missing pages are skipped;
-no need to create empty ones. New note, new MAP line. New rule worth remembering, new Cheatsheet
-line. And when a line goes wrong, stale, or useless, kill it — tomorrow's you reads that page as fact.
+no need to create empty ones. New rule worth remembering, new Cheatsheet line. And when a line
+goes wrong, stale, or useless, kill it — tomorrow's you reads that page as fact.
 </notesoup:maps>`;
 
 /** Logical tool names are supplied by the composing host, not discovered here. */

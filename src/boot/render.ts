@@ -1,6 +1,8 @@
 import type { NotesNamespace, NotesSnapshot } from "./snapshot.js";
 import { effectiveNotePolicy, MAX_PINNED_NOTES, noteBudgetWarnings, pinnedPageOrder } from "../notes/policy.js";
-import { WINDOW_IDENTITY_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG, MAPS_BLOCK, NAMELESS_AGENT, SHELF_FRESH_LIMIT, renderProtocolBlock, type BootToolNames } from "./text.js";
+import { collapseDescription, MAX_DESCRIPTION_CHARS } from "../notes/frontmatter.js";
+import type { NoteRow } from "../notes/index.js";
+import { WINDOW_IDENTITY_OPEN_TAG, WINDOW_IDENTITY_CLOSE_TAG, MAPS_BLOCK, NAMELESS_AGENT, renderProtocolBlock, type BootToolNames } from "./text.js";
 
 function relativeTime(timestamp: number, now: number): string {
 	const seconds = Math.trunc((timestamp - now) / 1000);
@@ -11,16 +13,38 @@ function relativeTime(timestamp: number, now: number): string {
 	return seconds > 0 ? `in ${amount}` : `${amount} ago`;
 }
 
-/** A feed entry is announced in the note's own words: its first heading, else its first line, cut short. */
-const FEED_TITLE_MAX_CHARS = 40;
+/** The shelf index is bounded: enough to find a page, never the whole drawer. */
+export const SHELF_INDEX_MAX_ENTRIES = 25;
+export const SHELF_INDEX_MAX_CHARS = 4096;
+/** A fallback title is the note's own first heading or line, cut short. */
+export const FALLBACK_TITLE_MAX_CHARS = 80;
+
+function truncated(text: string, max: number): string {
+	const chars = Array.from(text);
+	return chars.length > max ? `${chars.slice(0, max).join("")}…` : chars.join("");
+}
 
 function feedTitle(body: string): string | undefined {
 	const lines = body.split("\n");
 	const heading = lines.find((line) => /^#+\s+\S/.test(line));
 	const raw = (heading ? heading.replace(/^#+\s+/, "") : lines.find((line) => line.trim().length > 0) ?? "").trim();
-	if (raw.length === 0) return undefined;
-	const chars = Array.from(raw);
-	return chars.length > FEED_TITLE_MAX_CHARS ? `${chars.slice(0, FEED_TITLE_MAX_CHARS).join("")}…` : chars.join("");
+	return raw.length === 0 ? undefined : truncated(raw, FALLBACK_TITLE_MAX_CHARS);
+}
+
+/** A stale hand-edited description is cut for display; the authored value was already refused at write time. */
+function summaryOf(row: NoteRow): string | undefined {
+	if (typeof row.meta.description === "string") {
+		const collapsed = collapseDescription(row.meta.description);
+		return collapsed === undefined ? undefined : truncated(collapsed, MAX_DESCRIPTION_CHARS);
+	}
+	return feedTitle(row.body);
+}
+
+/** One index entry: where the page sits, how fresh it is, and one line saying whether to open it. */
+function indexLine(row: NoteRow, openedAt: number): string {
+	const locator = `${row.address} · ${relativeTime(row.meta.updatedAt, openedAt)}`;
+	const summary = summaryOf(row);
+	return summary === undefined ? `  ${locator}` : `  ${locator} — ${summary}`;
 }
 
 /** Two spaces of indent say "shelved content" without any furniture. */
@@ -33,7 +57,7 @@ function section(label: string, body: string): string {
 	return `${label}\n${"─".repeat(Array.from(label).length)}\n\n${body}`;
 }
 
-/** One closed boot snapshot: five tabbed shelves, current hands first, durable last; each shelf keeps its pinned pages and its own freshest pages. */
+/** One closed boot snapshot: five tabbed shelves, current hands first, durable last; each shelf keeps its pinned pages and an auto-indexed glimpse of the rest. */
 function notesIndex(snapshot: NotesSnapshot, tools: BootToolNames, agentName: string, modelName: string): string {
 	const namespaces: ReadonlyArray<{ scope: NotesNamespace["scope"]; label: string }> = [
 		{ scope: "session", label: "no @ — this session" },
@@ -53,21 +77,28 @@ function notesIndex(snapshot: NotesSnapshot, tools: BootToolNames, agentName: st
 		const pins = rows.filter(row => effectiveNotePolicy(row.meta, row.path).pinned)
 			.sort((a, b) => pinnedPageOrder(a.path) - pinnedPageOrder(b.path) || a.path.localeCompare(b.path));
 		const pinned = pins.slice(0, MAX_PINNED_NOTES);
-		const fresh = rows
-			.filter(row => !effectiveNotePolicy(row.meta, row.path).pinned)
-			.slice(0, SHELF_FRESH_LIMIT)
-			.map((row) => {
-				const locator = `${row.address} · ${relativeTime(row.meta.updatedAt, snapshot.openedAt)}`;
-				const title = feedTitle(row.body);
-				return title === undefined ? `  ${locator}` : `  ${title}\n  ${locator}`;
-			});
-		if (pinned.length === 0 && fresh.length === 0) continue;
+		const unpinned = rows.filter(row => !effectiveNotePolicy(row.meta, row.path).pinned);
+		// Both caps count joined lines; the first entry is always admitted, so a huge shelf still
+		// shows its freshest page plus an honest count of what was left behind.
+		const index: string[] = [];
+		let usedChars = 0;
+		for (const row of unpinned) {
+			if (index.length >= SHELF_INDEX_MAX_ENTRIES) break;
+			const line = indexLine(row, snapshot.openedAt);
+			const nextChars = usedChars + (index.length > 0 ? 1 : 0) + line.length;
+			if (index.length > 0 && nextChars > SHELF_INDEX_MAX_CHARS) break;
+			index.push(line);
+			usedChars = nextChars;
+		}
+		const omitted = unpinned.length - index.length;
+		if (omitted > 0) index.push(`  … and ${omitted} more (use ${tools.notesList})`);
+		if (pinned.length === 0 && index.length === 0) continue;
 		const parts = pinned.map(row => {
 			const warnings = noteBudgetWarnings(row.body, effectiveNotePolicy(row.meta, row.path));
 			return `${row.address}\n\n${indent([...warnings, row.body].join("\n"))}`;
 		});
 		if (pins.length > MAX_PINNED_NOTES) parts.push(indent(`Warning: only ${MAX_PINNED_NOTES} pinned notes per notebook are injected; omitted pins: ${pins.slice(MAX_PINNED_NOTES).map(row => row.address).join(", ")}. Unpin some notes or read the omitted pages with ${tools.notes}.`));
-		if (fresh.length > 0) parts.push(`recent\n\n${fresh.join("\n\n")}`);
+		if (index.length > 0) parts.push(pinned.length > 0 ? `notes\n\n${index.join("\n")}` : index.join("\n"));
 		shelves.push(section(namespace.label, parts.join("\n\n")));
 	}
 

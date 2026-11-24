@@ -25,7 +25,7 @@ const refused = (code: NoteErrorCode) => (error: unknown) => error instanceof No
 
 async function fillPins(notes: ReturnType<typeof createNotesStore>, prefix = "") {
 	for (const name of ["CHEATSHEET.md", "MAP.md", "one.md", "two.md", "three.md"]) {
-		await notes.write(`${prefix}${name}`, `body ${name}`, ["CHEATSHEET.md", "MAP.md"].includes(name) ? {} : { pinned: true });
+		await notes.write(`${prefix}${name}`, `body ${name}`, { pinned: true });
 	}
 }
 
@@ -42,7 +42,8 @@ test("frontmatter policy round-trips without materializing defaults; arbitrary e
 	await notes.write("MAP", "index");
 	const defaults = (await notes.read("MAP"))!.meta;
 	assert.equal(defaults.pinned, undefined);
-	assert.deepEqual(effectiveNotePolicy(defaults, "MAP.md"), { pinned: true, budget: 2048, readonly: false });
+	assert.deepEqual(effectiveNotePolicy(defaults, "MAP.md"), { pinned: false, budget: 4096, readonly: false });
+	assert.deepEqual(effectiveNotePolicy(defaults, "CHEATSHEET.md"), { pinned: true, budget: 2048, readonly: false });
 	assert.equal(effectiveNotePolicy(defaults, "nested/MAP.md").pinned, false);
 	writeFileSync(file("MAP.md"), readFileSync(file("MAP.md"), "utf8").replace("\n---\n\n", "\npinned: false\nbudget: 3000\nreadonly: true\ncustom: {\"nested\":[1,\"two\"]}\n---\n\n"));
 	const meta = (await notes.read("MAP"))!.meta;
@@ -59,7 +60,7 @@ test("frontmatter policy round-trips without materializing defaults; arbitrary e
 test("default budgets distinguish root index pages from ordinary notes, independently of pinning", async t => {
 	const { context, notes } = fixture(t);
 	for (const [address, budget, pinned] of [
-		["MAP", 2048, false],
+		["MAP", 4096, undefined],
 		["CHEATSHEET", 2048, undefined],
 		["ordinary", 4096, undefined],
 		["custom-pin", 4096, true],
@@ -217,8 +218,8 @@ test("pin admission serializes across store instances without blocking reads or 
 
 test("moves resolve absent policy at the new path, preserving explicit false/true", async t => {
 	const { notes, file } = fixture(t);
-	await notes.write("MAP", "default");
-	await notes.rename("MAP", "ordinary");
+	await notes.write("CHEATSHEET", "default");
+	await notes.rename("CHEATSHEET", "ordinary");
 	assert.deepEqual(effectiveNotePolicy((await notes.read("ordinary"))!.meta, "ordinary.md"), { pinned: false, budget: 4096, readonly: false });
 	await notes.rename("ordinary", "CHEATSHEET");
 	assert.equal(effectiveNotePolicy((await notes.read("CHEATSHEET"))!.meta, "CHEATSHEET.md").pinned, true);
@@ -229,10 +230,10 @@ test("moves resolve absent policy at the new path, preserving explicit false/tru
 	assert.equal(effectiveNotePolicy((await notes.read("explicit"))!.meta, "explicit.md").pinned, true);
 	for (let n = 0; n < 4; n++) await notes.write(`extra-${n}`, "pin", { pinned: true });
 	await notes.write("candidate", "candidate");
-	await assert.rejects(() => notes.rename("candidate", "MAP"), refused("pin_limit"));
+	await assert.rejects(() => notes.rename("candidate", "CHEATSHEET"), refused("pin_limit"));
 	assert.equal((await notes.read("candidate"))!.body, "candidate");
-	await notes.update("candidate", undefined, { renameTo: "MAP", pinned: false });
-	assert.equal(effectiveNotePolicy((await notes.read("MAP"))!.meta, "MAP.md").pinned, false);
+	await notes.update("candidate", undefined, { renameTo: "CHEATSHEET", pinned: false });
+	assert.equal(effectiveNotePolicy((await notes.read("CHEATSHEET"))!.meta, "CHEATSHEET.md").pinned, false);
 });
 
 test("boot uses metadata pins, full bodies, explicit false and visible legacy over-cap omissions", async t => {
@@ -259,4 +260,125 @@ test("boot uses metadata pins, full bodies, explicit false and visible legacy ov
 	assert.match(rendered, /Warning: only 5 pinned notes per notebook are injected; omitted pins: z.md/);
 	assert.equal(rendered.includes("OMITTED_PIN_BODY"), false);
 	assert.ok(rendered.includes("TAIL_IS_HERE"));
+});
+
+test("MAP.md is an ordinary note by default while CHEATSHEET.md stays the one default pin", async t => {
+	const { notes, context } = fixture(t);
+	await notes.write("MAP", "legacy hand-written index");
+	await notes.write("CHEATSHEET", "rules");
+	const map = (await notes.read("MAP"))!.meta;
+	const cheatsheet = (await notes.read("CHEATSHEET"))!.meta;
+	assert.deepEqual(effectiveNotePolicy(map, "MAP.md"), { pinned: false, budget: 4096, readonly: false });
+	assert.deepEqual(effectiveNotePolicy(cheatsheet, "CHEATSHEET.md"), { pinned: true, budget: 2048, readonly: false });
+	await notes.rename("MAP", "moved-map");
+	assert.deepEqual(effectiveNotePolicy((await notes.read("moved-map"))!.meta, "moved-map.md"), { pinned: false, budget: 4096, readonly: false });
+	const listed = data(await notesList.execute({}, context));
+	assert.equal(listed.files.find(file => file.address === "CHEATSHEET.md")?.pinned, true);
+	assert.equal(listed.files.find(file => file.address === "moved-map.md")?.pinned, false, "MAP.md keeps no special role after a move");
+});
+
+test("description normalizes to one line, persists, renders in read and list, and clears on empty", async t => {
+	const { notes, file, context } = fixture(t);
+	const written = await notesWrite.execute({ address: "described", content: "body", description: "  first\n\tsecond   third  " }, context);
+	assert.equal(written.ok, true);
+	assert.equal((await notes.read("described"))!.meta.description, "first second third");
+	assert.match(readFileSync(file("described.md"), "utf8"), /^description: "first second third"$/m);
+	const read = data(await notesRead.execute({ address: "described" }, context));
+	assert.equal(read.metadata.description, "first second third");
+	assert.equal("description" in read.metadata.extra, false, "description is normalized metadata, not an extra");
+	assert.match(notesRead.render(await notesRead.execute({ address: "described" }, context)), /description first second third/);
+	const listed = data(await notesList.execute({}, context));
+	assert.equal(listed.files.find(file => file.address === "described.md")?.description, "first second third");
+	assert.match(notesList.render(await notesList.execute({}, context)), /described\.md — first second third/);
+
+	// Omitting description on an edit keeps it; providing the same one is a valid no-op.
+	await notes.update("described", [{ oldText: "body", newText: "body two" }]);
+	assert.equal((await notes.read("described"))!.meta.description, "first second third");
+	const unchanged = data(await notesUpdate.execute({ address: "described", description: "first second third" }, context));
+	assert.equal(unchanged.change_kind, "none");
+	const changed = data(await notesUpdate.execute({ address: "described", description: "now this" }, context));
+	assert.equal(changed.change_kind, "metadata", "description alone is an operation");
+	assert.equal((await notes.read("described"))!.meta.description, "now this");
+
+	// An empty value clears the key; a whitespace-only value is empty too.
+	await notesUpdate.execute({ address: "described", description: "  \n\t " }, context);
+	assert.equal((await notes.read("described"))!.meta.description, undefined);
+	assert.equal(/^description:/m.test(readFileSync(file("described.md"), "utf8")), false);
+
+	// Exactly 160 code points is accepted; 161 is refused naming the count and the limit.
+	await notes.write("max", "body", { description: "😀".repeat(160) });
+	assert.equal((await notes.read("max"))!.meta.description, "😀".repeat(160), "160 astral code points fit");
+	const tooLong = "😀".repeat(161);
+	for (const attempt of [
+		() => notesWrite.execute({ address: "too-long", content: "body", description: tooLong }, context),
+		() => notesUpdate.execute({ address: "described", description: tooLong }, context),
+	]) {
+		const refusal = await attempt();
+		assert.equal(refusal.ok, false);
+		if (!refusal.ok) {
+			assert.equal(refusal.error.code, "invalid_description");
+			assert.match(refusal.error.message, /161 characters; limit is 160/);
+		}
+	}
+	assert.equal((await notes.read("too-long")), undefined, "a refused write saves nothing");
+	assert.equal((await notes.read("described"))!.meta.description, undefined, "a refused update leaves the note alone");
+});
+
+test("boot auto-indexes unpinned notes newest first with description, fallback title, and pinned/crumpled omissions", async t => {
+	const { identity, notes } = fixture(t);
+	await notes.write("CHEATSHEET", "rules");
+	await notes.write("described", "body", { description: "when to open this" });
+	await notes.write("heading", "# Heading title\nbody");
+	await notes.write("plain", "first line only\nsecond line");
+	await notes.write("hidden", "PINNED_BODY", { pinned: true });
+	await notes.write("gone", "CRUMPLED_BODY");
+	await notes.update("gone", undefined, { crumpled: true });
+	const rendered = await boot(identity);
+	assert.equal(rendered.includes("recent"), false, "the old recent label is gone");
+	assert.match(rendered, /^notes$/m, "the index follows pinned pages under one subheader");
+	assert.match(rendered, / {2}plain\.md · just now — first line only/);
+	assert.match(rendered, / {2}heading\.md · just now — Heading title/);
+	assert.match(rendered, / {2}described\.md · just now — when to open this/);
+	assert.ok(rendered.indexOf("plain.md ·") < rendered.indexOf("heading.md ·"), "newest unpinned note leads");
+	assert.ok(rendered.indexOf("heading.md ·") < rendered.indexOf("described.md ·"));
+	assert.equal(rendered.includes("hidden.md ·"), false, "pinned pages do not repeat in the index");
+	assert.equal(rendered.includes("gone.md ·"), false, "crumpled pages do not index");
+	assert.equal(rendered.includes("PINNED_BODY"), true, "pinned pages still load whole");
+	assert.equal(rendered.includes("CRUMPLED_BODY"), false);
+
+	// A shelf with no pinned pages drops the redundant subheader and still indexes.
+	await notes.update("CHEATSHEET", undefined, { pinned: false, crumpled: true });
+	await notes.update("hidden", undefined, { crumpled: true });
+	const bare = await boot(identity);
+	assert.equal(/^notes$/m.test(bare), false);
+	assert.match(bare, / {2}plain\.md · just now — first line only/);
+});
+
+test("boot shelf index enforces entry and character caps with an explicit omission marker", async t => {
+	const { identity, notes } = fixture(t);
+	for (let index = 0; index < 26; index++) await notes.write(`bulk-${index}`, "body", { description: "d" });
+	const entries = await boot(identity);
+	assert.equal(entries.split(" · just now — d").length - 1, 25, "only 25 entries fit");
+	assert.match(entries, / {2}… and 1 more \(use notes_list\)/);
+	assert.equal(entries.includes("bulk-0.md ·"), false, "the oldest entry is the one left out");
+
+	const wide = fixture(t);
+	for (let index = 0; index < 25; index++) await wide.notes.write(`big-${index}`, "body", { description: `${index}`.padStart(2, "0") + "x".repeat(158) });
+	const capped = await boot(wide.identity);
+	const shown = capped.split("big-").length - 1;
+	assert.ok(shown > 0 && shown < 25, `the character cap cuts the list (${shown} shown)`);
+	assert.match(capped, /… and \d+ more \(use notes_list\)/);
+	assert.equal(capped.includes("big-00.md ·"), false, "the oldest page falls past the character cap");
+});
+
+test("a hand-edited oversized description never breaks boot and is cut for display", async t => {
+	const { identity, notes, file } = fixture(t);
+	await notes.write("long", "body");
+	const oversized = "z".repeat(200);
+	writeFileSync(file("long.md"), readFileSync(file("long.md"), "utf8").replace("\n---\n\n", `\ndescription: ${oversized}\n---\n\n`));
+	const snapshot = await loadNotesSnapshot(identity, Date.now());
+	assert.equal(snapshot.namespaces.get("session")?.find(row => row.path === "long.md")?.meta.description, oversized, "reads tolerate a hand-edited oversize value");
+	const rendered = await boot(identity);
+	assert.ok(rendered.includes(`${"z".repeat(160)}…`), "display truncates at 160 code points");
+	assert.equal(rendered.includes(oversized), false);
 });

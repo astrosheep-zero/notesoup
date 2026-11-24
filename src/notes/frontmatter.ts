@@ -23,6 +23,8 @@ export type NoteMeta = NotePolicyFields & {
 	recurrenceWindows?: string[];
 	/** Project ownership on newly-created session notes; legacy/invalid values are preserved as-is. */
 	project?: unknown;
+	/** One-line index entry: what the note holds and when to open it. */
+	description?: string;
 	[key: string]: unknown;
 };
 
@@ -30,7 +32,16 @@ const SCOPES: readonly Scope[] = ["session", "project", "human", "agent", "model
 const ORIGINS: readonly Origin[] = ["user", "self", "external"];
 const TIMESTAMP_KEYS = ["createdAt", "updatedAt", "lastAccessed"] as const;
 /** Emission order, exactly the Design's key list. */
-const KNOWN_KEYS = ["pinned", "budget", "readonly", "origin", "crumpledAt", "createdAt", "updatedAt", "lastAccessed", "accessCount", "sourceWindow", "supersedes", "recurrenceCount", "recurrenceWindows"] as const;
+const KNOWN_KEYS = ["pinned", "budget", "readonly", "description", "origin", "crumpledAt", "createdAt", "updatedAt", "lastAccessed", "accessCount", "sourceWindow", "supersedes", "recurrenceCount", "recurrenceWindows"] as const;
+
+/** A note description is one line; longer is not a description, it is prose in the wrong place. */
+export const MAX_DESCRIPTION_CHARS = 160;
+
+/** Collapse any whitespace run to one space and trim; an empty result is no description. */
+export function collapseDescription(value: string): string | undefined {
+	const collapsed = value.replace(/\s+/g, " ").trim();
+	return collapsed.length === 0 ? undefined : collapsed;
+}
 
 const pad2 = (value: number) => String(value).padStart(2, "0");
 
@@ -131,6 +142,13 @@ export function parseNote(raw: string, now = Date.now()): { meta: NoteMeta; body
 	meta.origin = isOrigin(meta.origin) ? meta.origin : "self";
 	for (const key of TIMESTAMP_KEYS) meta[key] = toEpoch(meta[key], now);
 	meta.accessCount = typeof meta.accessCount === "number" && Number.isFinite(meta.accessCount) ? meta.accessCount : 0;
+	// A hand-edited description is never allowed to break a boot: non-strings are absent, empty
+	// ones are dropped, and an oversized one is cut only when rendered.
+	if (meta.description !== undefined) {
+		const description = typeof meta.description === "string" ? collapseDescription(meta.description) : undefined;
+		if (description === undefined) delete meta.description;
+		else meta.description = description;
+	}
 	return { meta: meta as NoteMeta, body };
 }
 

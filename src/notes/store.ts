@@ -8,7 +8,7 @@ import { isFilesystemError } from "./fs-error.js";
 import { snapshotNotesIdentity, type NotesIdentity } from "./identity.js";
 import { NoteError } from "./errors.js";
 import { MAX_NOTE_BYTES, MAX_NOTE_PATH_BYTES } from "./constants.js";
-import { isOrigin, localIso, parseNote, serializeNote, stripLeadingFrontmatter, type NoteMeta, type Origin } from "./frontmatter.js";
+import { collapseDescription, isOrigin, localIso, MAX_DESCRIPTION_CHARS, parseNote, serializeNote, stripLeadingFrontmatter, type NoteMeta, type Origin } from "./frontmatter.js";
 import { namespaceSlugs, noteFileName, physicalPath, scopeDir, isSessionId, SLUG_PATTERN, type Scope } from "./paths.js";
 import { projectReceipt, type ProjectReceipt } from "./project-namespace.js";
 import { applyNotePolicy, assertNoteUnlocked, effectiveNotePolicy, MAX_PINNED_NOTES, noteBudgetWarnings, validateNotePolicy, type NotePolicyFields } from "./policy.js";
@@ -27,8 +27,8 @@ function writeStamp(): number {
 export type NoteMatch = { line: number; text: string; /** Code-point offset into the note body, not into the serialized file. */ offsetChars: number };
 export type NoteSearchRow = { address: string; scope: Scope; path: string; meta: NoteMeta; warnings: string[]; matches: NoteMatch[] };
 export type EditOperation = { oldText: string; newText: string };
-export type WriteOptions = NotePolicyFields & { origin?: Origin };
-export type EditOptions = NotePolicyFields & { origin?: Origin; crumpled?: boolean; replaceAll?: boolean; renameTo?: string };
+export type WriteOptions = NotePolicyFields & { origin?: Origin; description?: string };
+export type EditOptions = NotePolicyFields & { origin?: Origin; description?: string; crumpled?: boolean; replaceAll?: boolean; renameTo?: string };
 /** Omit glob for current notebooks. A pattern without `@` or `/` matches filenames at any depth. */
 export type NotesQuery = { glob?: string; crumpled?: boolean };
 /** A read exposes metadata and the pure body; the serialized frontmatter is never part of the body. */
@@ -188,6 +188,15 @@ function assertOrigin(value: unknown): Origin {
 	return value;
 }
 
+/** A description is one normalized line; empty clears it. Only the authored value is refused, never read. */
+function normalizeDescription(value: string): string | undefined {
+	const collapsed = collapseDescription(value);
+	if (collapsed === undefined) return undefined;
+	const count = Array.from(collapsed).length;
+	if (count > MAX_DESCRIPTION_CHARS) throw new NoteError("invalid_description", `description is ${count} characters; limit is ${MAX_DESCRIPTION_CHARS}.`);
+	return collapsed;
+}
+
 function assertWho(value: unknown, scope: Scope): string {
 	if (typeof value !== "string" || !(scope === "session" ? isSessionId(value) : SLUG_PATTERN.test(value))) {
 		throw new NoteError("invalid_scope", scope === "session" ? "session id must be a safe single directory component" : "who must be a canonical lowercase slug");
@@ -310,6 +319,7 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 	async function write(address: string, content: string, options: WriteOptions = {}): Promise<NoteWriteResult> {
 		const stableOptions = { ...options };
 		validateNotePolicy(stableOptions);
+		const description = stableOptions.description === undefined ? undefined : normalizeDescription(stableOptions.description);
 		const destination = assertAddress(address);
 		assertWritablePath(destination.path);
 		const scope = destination.scope;
@@ -339,6 +349,9 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 			};
 			meta.scope = scope;
 			applyNotePolicy(meta, stableOptions);
+			if (description === undefined) {
+				if (stableOptions.description !== undefined) delete meta.description;
+			} else meta.description = description;
 			if (origin !== undefined) meta.origin = origin;
 			delete meta.crumpledAt;
 			meta.updatedAt = now;
@@ -372,14 +385,15 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 		const operations = edits === undefined ? [] : edits.map((operation) => ({ ...operation }));
 		const stableOptions = { ...options };
 		validateNotePolicy(stableOptions);
+		const description = stableOptions.description === undefined ? undefined : normalizeDescription(stableOptions.description);
 		const from = assertAddress(address);
 		const destination = stableOptions.renameTo === undefined ? from : assertAddress(stableOptions.renameTo);
 		assertWritablePath(destination.path);
 		const scope = destination.scope;
 		assertWritableNamespace(from.scope, from.who, identity);
 		assertWritableNamespace(scope, destination.who, identity);
-		if (operations.length === 0 && stableOptions.origin === undefined && stableOptions.crumpled === undefined && stableOptions.renameTo === undefined && stableOptions.pinned === undefined && stableOptions.budget === undefined && stableOptions.readonly === undefined) {
-			throw new NoteError("nothing_to_do", "Nothing to change: provide edits, policy, an origin, a crumpled state, or a new address.");
+		if (operations.length === 0 && stableOptions.origin === undefined && stableOptions.description === undefined && stableOptions.crumpled === undefined && stableOptions.renameTo === undefined && stableOptions.pinned === undefined && stableOptions.budget === undefined && stableOptions.readonly === undefined) {
+			throw new NoteError("nothing_to_do", "Nothing to change: provide edits, a description, policy, an origin, a crumpled state, or a new address.");
 		}
 		const fromPath = physicalPath(from.scope, from.path, identity, from.who);
 		const path = physicalPath(scope, destination.path, identity, destination.who);
@@ -405,6 +419,9 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 			if (moved && targetRaw !== undefined) assertNoteUnlocked(parseNote(targetRaw).meta, stableOptions.readonly);
 			const beforeMeta: NoteMeta = { ...meta };
 			applyNotePolicy(meta, stableOptions);
+			if (description === undefined) {
+				if (stableOptions.description !== undefined) delete meta.description;
+			} else meta.description = description;
 			meta.scope = scope;
 			if (from.scope !== "session" && scope === "session") meta.project = identity.projectKey;
 			if (from.scope === "session" && scope !== "session") delete meta.project;
@@ -434,10 +451,11 @@ export function createNotesStore(input: NotesIdentity): NotesStore {
 			const bodyChanged = body !== next;
 			const originChanged = beforeMeta.origin !== meta.origin;
 			const policyChanged = beforeMeta.pinned !== meta.pinned || beforeMeta.budget !== meta.budget || beforeMeta.readonly !== meta.readonly;
-			if (bodyChanged || originChanged || policyChanged || moved) meta.updatedAt = writeStamp();
+			const descriptionChanged = beforeMeta.description !== meta.description;
+			if (bodyChanged || originChanged || policyChanged || descriptionChanged || moved) meta.updatedAt = writeStamp();
 			const serialized = serializeNote(meta, next);
 			assertSerializedSize(serialized);
-			const metadataChanged = originChanged || policyChanged || beforeMeta.crumpledAt !== meta.crumpledAt;
+			const metadataChanged = originChanged || policyChanged || descriptionChanged || beforeMeta.crumpledAt !== meta.crumpledAt;
 			let change: NoteChange;
 			// A body edit that also rewrites frontmatter is still a body change; its diff inputs span the
 			// whole serialized file, so the frontmatter part stays visible in the diff.

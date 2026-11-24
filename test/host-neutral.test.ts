@@ -68,7 +68,7 @@ test("shared boot uses only explicit identity, loader, captured time and logical
 	const block = { agentName: notesIdentity.agent, modelName: notesIdentity.model, tree: { trunk: "test", windows: [{ shortName: "root", isCurrent: false }, { shortName: "next", isCurrent: true }] }, notes: snapshot, tools };
 	const rendered = renderBootBlock(block);
 	assert.equal(renderBootBlock(block), rendered);
-	assert.ok(rendered.includes("😀\n  checkpoint.md · 1m ago"), "a feed entry is the note's own first line over its locator");
+	assert.ok(rendered.includes("  checkpoint.md · 1m ago — 😀"), "an index entry is the locator plus the note's own first line");
 	assert.ok(rendered.includes("Try `memo_list` again"));
 	assert.equal(/notes_\*|notes_list|history_\*|history_list|history_read|get_context_remaining|empty_brain/.test(rendered), false);
 });

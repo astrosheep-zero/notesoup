@@ -5,7 +5,7 @@ export type NotePolicy = Required<NotePolicyFields>;
 export const DEFAULT_NOTE_BUDGET = 4096;
 export const MAX_PINNED_NOTES = 5;
 /** Defaults and ordering live here; no other layer assigns behavior by page name. */
-const DEFAULT_PINNED_PAGES = ["CHEATSHEET.md", "MAP.md"] as const;
+const DEFAULT_PINNED_PAGES = ["CHEATSHEET.md"] as const;
 
 export function validateNotePolicy(fields: NotePolicyFields): void {
 	for (const key of ["pinned", "readonly"] as const) {

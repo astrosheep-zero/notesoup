@@ -17,8 +17,9 @@ const ORIGIN_VALUES = [Type.Literal("user"), Type.Literal("self"), Type.Literal(
 const ORIGIN = Type.Optional(Type.Union([...ORIGIN_VALUES], {
 	description: "Whose handwriting: user, self, or external. Leave it out to keep what's there.",
 }));
+const DESCRIPTION_PARAMETER = Type.Optional(Type.String({ description: "One-line summary of what's inside and when to open it (max 160 chars). Empty string clears it." }));
 const POLICY_PARAMETERS = {
-	pinned: Type.Optional(Type.Boolean({ description: "Tape the page inside the cover: read whole at every wake-up. Five per notebook, CHEATSHEET and MAP included." })),
+	pinned: Type.Optional(Type.Boolean({ description: "Tape the page inside the cover: read whole at every wake-up. Five per notebook, CHEATSHEET included." })),
 	budget: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: "How much paper the page gets. Writing past it still saves, with a warning. A page over budget gets boiled down: stale lines out, repeats merged, the rest said shorter. More paper is for a page already boiled down that still needs the room." })),
 	readonly: Type.Optional(Type.Boolean({ description: "A paperclip that keeps your own hands off. `false` takes it off — same call is fine." })),
 };
@@ -39,7 +40,7 @@ function withWarnings(text: string, data: { warnings: string[] }): string {
 const CRUMPLED_PARAMETER = Type.Optional(Type.Boolean({ description: "`true` balls the page up: gone from list and search, still readable. `false` smooths it flat again." }));
 const CRUMPLED_LIST_PARAMETER = Type.Optional(Type.Boolean({ description: "Only the crumpled balls." }));
 const FILE_LIMIT_PARAMETER = Type.Optional(Type.Integer({ minimum: 1, description: "How many pages at most." }));
-const GLOB_PARAMETER = Type.Optional(Type.String({ minLength: 1, description: "Which drawers to open. Leave it out for this session and your current notebooks. `@project/**` one shelf · `MAP.md` that page in every notebook · `**` everything · `@sessions/*/**` every session." }));
+const GLOB_PARAMETER = Type.Optional(Type.String({ minLength: 1, description: "Which drawers to open. Leave it out for this session and your current notebooks. `@project/**` one shelf · `CHEATSHEET.md` that page in every notebook · `**` everything · `@sessions/*/**` every session." }));
 const CWD_PARAMETER = Type.Optional(Type.String({ minLength: 1, description: "Treat this directory's project as `@project/`." }));
 const ADDRESS_PARAMETER = Type.String({ description: "Which drawer the page sits in. `plan.md` — this session's desk, cleared when it ends. `@project/` this project's shelf · `@human/` your human's file · `@self/` your own notebook · `@model/` your brain's. `@projects/<name>/`, `@sessions/<id>/`, `@agents/<name>/`, `@models/<name>/` — someone else's shelf: read only. Paper, not files: hand one to read/write/edit/bash and a real `@project` folder is born." });
 
@@ -56,7 +57,7 @@ export function failureOf(error: unknown): Outcome<never> {
 }
 
 /** Metadata keys this layer normalizes; everything else is exposed verbatim under `extra`. */
-const NORMALIZED_META_KEYS = new Set(["scope", "origin", "createdAt", "updatedAt", "lastAccessed", "accessCount", "crumpledAt", "project", "pinned", "budget", "readonly"]);
+const NORMALIZED_META_KEYS = new Set(["scope", "origin", "createdAt", "updatedAt", "lastAccessed", "accessCount", "crumpledAt", "project", "pinned", "budget", "readonly", "description"]);
 /** One unrecognized entry, and the verbatim extras together, are bounded so `extra` cannot outgrow the read. */
 const MAX_METADATA_ENTRY_BYTES = 1024;
 const MAX_METADATA_VERBATIM_BYTES = 2048;
@@ -70,6 +71,7 @@ export const NoteMetadataSchema = Type.Object({
 	updated_at: Type.String(),
 	crumpled_at: Type.Optional(Type.String()),
 	project: Type.Optional(Type.String()),
+	description: Type.Optional(Type.String()),
 	extra: Type.Record(Type.String(), Type.Unknown()),
 }, { additionalProperties: false });
 export type NoteMetadata = Static<typeof NoteMetadataSchema>;
@@ -102,6 +104,7 @@ function noteMetadata(meta: NoteMeta, address: string): NoteMetadata {
 		updated_at: localIso(meta.updatedAt),
 		...(typeof meta.crumpledAt === "string" ? { crumpled_at: meta.crumpledAt } : {}),
 		...(typeof meta.project === "string" ? { project: meta.project } : {}),
+		...(typeof meta.description === "string" ? { description: meta.description } : {}),
 		extra,
 	};
 }
@@ -114,6 +117,7 @@ function renderMetadata(metadata: NoteMetadata): string {
 		`updated ${metadata.updated_at}`,
 		...(metadata.crumpled_at === undefined ? [] : [`crumpled ${metadata.crumpled_at}`]),
 		...(metadata.project === undefined ? [] : [`project ${metadata.project}`]),
+		...(metadata.description === undefined ? [] : [`description ${metadata.description}`]),
 	];
 	const extra = Object.keys(metadata.extra);
 	if (extra.length > 0) fields.push(`extra ${JSON.stringify(metadata.extra)}`);
@@ -147,6 +151,7 @@ export const ListedFileSchema = Type.Object({
 	...WarningsSchema,
 	updated_at: Type.String(),
 	crumpled_at: Type.Optional(Type.String()),
+	description: Type.Optional(Type.String()),
 }, { additionalProperties: false });
 
 const MatchSchema = Type.Object({
@@ -228,10 +233,10 @@ export function snapshot<T extends { address: string }>(
 
 export function listedFile(row: Pick<NoteRow, "address" | "meta"> & { body?: string; warnings?: string[] }, identity: NotesIdentity): ListedFile {
 	const policy = policyAt(row.meta, row.address);
-	return { ...noteIdentity(identity, row.address), ...policy, warnings: row.warnings ?? (row.body === undefined ? [] : noteBudgetWarnings(row.body, policy)), updated_at: localIso(row.meta.updatedAt), ...(row.meta.crumpledAt === undefined ? {} : { crumpled_at: row.meta.crumpledAt }) };
+	return { ...noteIdentity(identity, row.address), ...policy, warnings: row.warnings ?? (row.body === undefined ? [] : noteBudgetWarnings(row.body, policy)), updated_at: localIso(row.meta.updatedAt), ...(row.meta.crumpledAt === undefined ? {} : { crumpled_at: row.meta.crumpledAt }), ...(typeof row.meta.description === "string" ? { description: row.meta.description } : {}) };
 }
 
-export const notesWriteParameters = Type.Object({ address: ADDRESS_PARAMETER, content: Type.String({ description: "The whole page." }), origin: ORIGIN, ...POLICY_PARAMETERS, cwd: CWD_PARAMETER }, { additionalProperties: false });
+export const notesWriteParameters = Type.Object({ address: ADDRESS_PARAMETER, content: Type.String({ description: "The whole page." }), origin: ORIGIN, description: DESCRIPTION_PARAMETER, ...POLICY_PARAMETERS, cwd: CWD_PARAMETER }, { additionalProperties: false });
 
 function renderWriteData(data: NotesWriteData): string {
 	return withWarnings(`${data.outcome} ${renderIdentity(data)} | ${renderPolicy(data)}`, data);
@@ -244,7 +249,7 @@ export const notesWrite = {
 	async execute(params: Static<typeof notesWriteParameters>, context: NotesToolContext): Promise<Outcome<NotesWriteData>> {
 		try {
 			const identity = notesIdentityForCall(context, params.cwd);
-			const { outcome, meta, warnings } = await createNotesStore(identity).write(params.address, params.content, { origin: params.origin, pinned: params.pinned, budget: params.budget, readonly: params.readonly });
+			const { outcome, meta, warnings } = await createNotesStore(identity).write(params.address, params.content, { origin: params.origin, description: params.description, pinned: params.pinned, budget: params.budget, readonly: params.readonly });
 			return success({ ...noteIdentity(identity, params.address), outcome, ...policyAt(meta, params.address), warnings });
 		} catch (error) { return failureOf(error); }
 	},
@@ -255,6 +260,7 @@ export const notesUpdateParameters = Type.Object({
 	address: ADDRESS_PARAMETER,
 	edits: Type.Optional(Type.Array(Type.Object({ oldText: Type.String({ description: "The passage as it stands on the page." }), newText: Type.String({ description: "What goes in its place." }) }, { additionalProperties: false }), { description: "Pen strokes, in order. Each `oldText` is the exact passage — same case, found once — and `newText` is what goes in its place." })),
 	origin: ORIGIN,
+	description: DESCRIPTION_PARAMETER,
 	...POLICY_PARAMETERS,
 	crumpled: CRUMPLED_PARAMETER,
 	replace_all: Type.Optional(Type.Boolean({ description: "Strike every copy of `oldText`, not just one." })),
@@ -279,7 +285,7 @@ export const notesUpdate = {
 			const store = createNotesStore(identity);
 			// Empty filler is not a request: models that pass every parameter get the edit path.
 			const renameTo = params.rename_to === "" ? undefined : params.rename_to;
-			const { change, moved, meta, warnings } = await store.update(params.address, params.edits, { origin: params.origin, pinned: params.pinned, budget: params.budget, readonly: params.readonly, crumpled: params.crumpled, replaceAll: params.replace_all, renameTo });
+			const { change, moved, meta, warnings } = await store.update(params.address, params.edits, { origin: params.origin, description: params.description, pinned: params.pinned, budget: params.budget, readonly: params.readonly, crumpled: params.crumpled, replaceAll: params.replace_all, renameTo });
 			onChange?.(change);
 			const from = noteIdentity(identity, params.address).address;
 			const to = noteIdentity(identity, renameTo ?? params.address);
@@ -327,7 +333,7 @@ export const notesListParameters = Type.Object({
 export function renderListData(data: Snapshot<NotesListData["files"][number] & { last_accessed?: string }>): string {
 	const lines = [`${data.files.length} ${data.files.length === 1 ? "note" : "notes"}`];
 	for (const file of data.files) {
-		const fields = [`- ${renderIdentity(file)}`, renderPolicy(file), `updated ${file.updated_at}`];
+		const fields = [file.description === undefined ? `- ${renderIdentity(file)}` : `- ${renderIdentity(file)} — ${file.description}`, renderPolicy(file), `updated ${file.updated_at}`];
 		if (file.last_accessed !== undefined) fields.push(`accessed ${file.last_accessed}`);
 		if (file.crumpled_at !== undefined) fields.push(`crumpled ${file.crumpled_at}`);
 		if (file.matches) fields.push(`${file.matches.length} ${file.matches.length === 1 ? "match" : "matches"}${file.more_matches ? `, ${file.more_matches} more lines` : ""}`);
