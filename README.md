@@ -40,14 +40,15 @@ pi -e npm:notesoup
 
 ## Per-note policy
 
-Notes have optional `pinned`, `budget`, and `readonly` frontmatter fields, also settable through `notes_write` and `notes_update`:
+Notes have optional `pinned`, `budget`, `readonly`, and `description` frontmatter fields, also settable through `notes_write` and `notes_update`:
 
 ```json
-{ "address": "@project/decisions.md", "pinned": true, "budget": 3000, "readonly": false }
+{ "address": "@project/decisions.md", "pinned": true, "budget": 3000, "readonly": false, "description": "Architecture choices and why they stand." }
 ```
 
-- **Pinned** notes are injected **in full** at boot. Root `CHEATSHEET.md` and `MAP.md` default to pinned; every other page defaults to unpinned. Explicit `pinned: false` overrides even a default page. Each notebook allows **five live pins**, including its existing default pages; crumpled notes do not count. A sixth pin, restore or move that exceeds the cap refuses without changing either note. Manually over-cap notebooks get a boot warning naming the omitted pins, with default pages shown first.
-- **Budget** defaults to **4096 Unicode code points for ordinary pages**, and **2048 for root CHEATSHEET.md and MAP.md**. Any positive safe integer is allowed. Over-budget writes and updates succeed with a visible warning; pinned bodies are never truncated to their budget. This advisory budget is separate from the existing hard serialized-file byte limit. Tool results/read metadata/list/search expose effective policy and budget warnings.
+- **Pinned** notes are injected **in full** at boot. Root `CHEATSHEET.md` defaults to pinned; every other page defaults to unpinned. Explicit `pinned: false` overrides even a default page. Each notebook allows **five live pins**, including its default `CHEATSHEET.md`; crumpled notes do not count. A sixth pin, restore or move that exceeds the cap refuses without changing either note. Manually over-cap notebooks get a boot warning naming the omitted pins, with default pages shown first. Unpinned live notes appear in a bounded auto-generated per-shelf index at boot (sorted by recency, up to 25 entries / 4096 chars per shelf).
+- **Budget** defaults to **4096 Unicode code points for ordinary pages**, and **2048 for root `CHEATSHEET.md`**. Any positive safe integer is allowed. Over-budget writes and updates succeed with a visible warning; pinned bodies are never truncated to their budget. This advisory budget is separate from the existing hard serialized-file byte limit. Tool results/read metadata/list/search expose effective policy and budget warnings.
+- **Description** is an optional single-line summary (up to **160 Unicode code points**; whitespace is collapsed and an empty string clears it). It is rendered in the boot shelf index (falling back to the first heading/line when absent) as well as `notes_read` metadata and `notes_list` rows.
 - **Readonly** defaults to false. `readonly: true` is a **soft lock**, not security: mutations refuse until explicitly unlocked with `readonly: false`, either by itself or in the same call as the requested changes. A write can create and lock a note together. Reads still record access metadata; direct filesystem edits can bypass the lock.
 
 Absent fields stay absent on disk. On move/rename, implicit pin defaults follow the new root path; explicit true/false values travel with the note. The original origin, other metadata, and unknown frontmatter are preserved. See the [library API](docs/notes-library.md#per-note-policy) for details.
